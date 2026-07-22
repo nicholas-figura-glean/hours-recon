@@ -1,0 +1,22 @@
+{
+  "outcome_tiers": {
+    "starter": 20,
+    "standard": 50,
+    "select": 100,
+    "advanced": 200,
+    "strategic": 300
+  },
+  "outcome_list_prices": {
+    "10000": 20,
+    "25000": 50,
+    "50000": 100,
+    "100000": 200,
+    "150000": 300
+  },
+  "growth_hours": [20, 50, 100, 300],
+  "overrides": {
+    "opportunities": {},
+    "line_items": {},
+    "product_names": {}
+  }
+}

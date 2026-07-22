@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hours Recon</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --artifact-bg: #f4f6f8;
+      --artifact-surface: #ffffff;
+      --artifact-surface-subtle: #eef1f4;
+      --artifact-text: #14212b;
+      --artifact-muted: #60717e;
+      --artifact-border: #d6dde3;
+      --artifact-accent: #0b6b62;
+      --artifact-accent-soft: #dcefeb;
+      --artifact-danger: #a93737;
+      --artifact-danger-soft: #f7e5e3;
+      --artifact-warning: #8b5a13;
+      --artifact-warning-soft: #f7ecd7;
+      --artifact-medium: #765f15;
+      --artifact-medium-soft: #f1eccd;
+      --artifact-healthy: #39704c;
+      --artifact-healthy-soft: #e1f0e5;
+      --artifact-info: #315f8a;
+      --artifact-info-soft: #e2edf7;
+      --artifact-radius: 10px;
+      --artifact-space-1: 4px;
+      --artifact-space-2: 8px;
+      --artifact-space-3: 12px;
+      --artifact-space-4: 16px;
+      --artifact-space-5: 24px;
+      --artifact-space-6: 32px;
+      --artifact-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --artifact-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --artifact-bg: #11171b;
+        --artifact-surface: #182126;
+        --artifact-surface-subtle: #202b31;
+        --artifact-text: #edf2f4;
+        --artifact-muted: #a5b3bb;
+        --artifact-border: #35434b;
+        --artifact-accent: #62c4b4;
+        --artifact-accent-soft: #1c413d;
+        --artifact-danger: #f08a84;
+        --artifact-danger-soft: #482826;
+        --artifact-warning: #e2ae5e;
+        --artifact-warning-soft: #45361e;
+        --artifact-medium: #d0bd59;
+        --artifact-medium-soft: #403b21;
+        --artifact-healthy: #79bf8d;
+        --artifact-healthy-soft: #233c2a;
+        --artifact-info: #80b4e2;
+        --artifact-info-soft: #20394f;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--artifact-bg); color: var(--artifact-text); font-family: var(--artifact-font); font-size: 14px; line-height: 1.45; }
+    button, input, select { font: inherit; }
+    button, input, select, [tabindex] { outline: none; }
+    button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 3px solid color-mix(in srgb, var(--artifact-accent) 45%, transparent); outline-offset: 2px; }
+    button { cursor: pointer; }
+    button:disabled { cursor: wait; opacity: .65; }
+    .shell { max-width: 1540px; margin: 0 auto; padding: var(--artifact-space-5); }
+    .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--artifact-space-5); margin-bottom: var(--artifact-space-5); }
+    .eyebrow { color: var(--artifact-accent); font-size: 12px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
+    h1 { font-size: clamp(24px, 4vw, 36px); letter-spacing: -.035em; line-height: 1.1; margin: 3px 0 6px; }
+    h2 { font-size: 18px; letter-spacing: -.015em; margin: 0; }
+    h3 { font-size: 15px; margin: 0; }
+    p { margin: 0; }
+    .subtitle { color: var(--artifact-muted); max-width: 780px; }
+    .actions { display: flex; align-items: center; gap: var(--artifact-space-3); flex-wrap: wrap; justify-content: flex-end; }
+    .button { min-height: 40px; border: 1px solid var(--artifact-accent); border-radius: 8px; padding: 8px 14px; color: #fff; background: #0b6b62; font-weight: 700; }
+    @media (prefers-color-scheme: dark) { .button { color: #10201d; background: var(--artifact-accent); } }
+    .button.secondary { color: var(--artifact-text); background: var(--artifact-surface); border-color: var(--artifact-border); }
+    .pill { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--artifact-border); background: var(--artifact-surface); color: var(--artifact-muted); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+    .pill.live, .pill.mcp { color: var(--artifact-healthy); background: var(--artifact-healthy-soft); border-color: color-mix(in srgb, var(--artifact-healthy) 35%, var(--artifact-border)); }
+    .pill.demo { color: var(--artifact-warning); background: var(--artifact-warning-soft); border-color: color-mix(in srgb, var(--artifact-warning) 35%, var(--artifact-border)); }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .notice, .error { display: none; border: 1px solid var(--artifact-border); border-radius: var(--artifact-radius); padding: 12px 14px; margin-bottom: var(--artifact-space-4); }
+    .notice.show, .error.show { display: flex; gap: 10px; align-items: flex-start; }
+    .notice { color: var(--artifact-warning); background: var(--artifact-warning-soft); }
+    .error { color: var(--artifact-danger); background: var(--artifact-danger-soft); }
+    .metrics { display: grid; grid-template-columns: repeat(6, minmax(145px, 1fr)); gap: 1px; background: var(--artifact-border); border: 1px solid var(--artifact-border); border-radius: var(--artifact-radius); overflow: hidden; margin-bottom: var(--artifact-space-5); }
+    .metric { min-height: 112px; padding: var(--artifact-space-4); background: var(--artifact-surface); display: flex; flex-direction: column; justify-content: space-between; }
+    .metric.primary { background: var(--artifact-accent-soft); }
+    .metric-label { color: var(--artifact-muted); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .055em; }
+    .metric-value { font-size: clamp(24px, 3vw, 34px); font-variant-numeric: tabular-nums; font-weight: 760; letter-spacing: -.04em; line-height: 1; }
+    .metric-note { color: var(--artifact-muted); font-size: 12px; }
+    .overview-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(300px, .75fr); gap: var(--artifact-space-4); margin-bottom: var(--artifact-space-5); }
+    .panel { background: var(--artifact-surface); border: 1px solid var(--artifact-border); border-radius: var(--artifact-radius); }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: var(--artifact-space-3); padding: var(--artifact-space-4); border-bottom: 1px solid var(--artifact-border); }
+    .panel-body { padding: var(--artifact-space-4); }
+    .source-note { color: var(--artifact-muted); font-size: 12px; }
+    .risk-bars { display: grid; gap: 10px; }
+    .risk-row { display: grid; grid-template-columns: 80px minmax(80px, 1fr) 110px; align-items: center; gap: 10px; }
+    .bar-track { height: 10px; background: var(--artifact-surface-subtle); border-radius: 999px; overflow: hidden; }
+    .bar-fill { height: 100%; min-width: 2px; border-radius: inherit; background: var(--artifact-info); }
+    .bar-fill.overage, .bar-fill.expired, .bar-fill.critical { background: var(--artifact-danger); }
+    .bar-fill.high { background: var(--artifact-warning); }
+    .bar-fill.medium { background: var(--artifact-medium); }
+    .bar-fill.healthy { background: var(--artifact-healthy); }
+    .bar-value { text-align: right; color: var(--artifact-muted); font-variant-numeric: tabular-nums; }
+    .weekly-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--artifact-space-3); }
+    .weekly-stat { background: var(--artifact-surface-subtle); border-radius: 8px; padding: 14px; }
+    .weekly-stat strong { display: block; font-size: 26px; font-variant-numeric: tabular-nums; }
+    .weekly-stat span { color: var(--artifact-muted); font-size: 12px; }
+    .section { margin-bottom: var(--artifact-space-5); }
+    .section-title { display: flex; align-items: end; justify-content: space-between; gap: var(--artifact-space-4); margin-bottom: var(--artifact-space-3); }
+    .controls { display: grid; grid-template-columns: minmax(220px, 1fr) 180px 180px auto; gap: var(--artifact-space-3); padding: var(--artifact-space-4); border-bottom: 1px solid var(--artifact-border); }
+    .field { display: grid; gap: 5px; }
+    .field label { color: var(--artifact-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .055em; }
+    input, select { width: 100%; min-height: 38px; padding: 7px 10px; color: var(--artifact-text); background: var(--artifact-surface); border: 1px solid var(--artifact-border); border-radius: 7px; }
+    .checkbox { display: flex; align-items: end; padding-bottom: 8px; gap: 8px; color: var(--artifact-muted); white-space: nowrap; }
+    .checkbox input { width: 16px; min-height: 16px; height: 16px; accent-color: var(--artifact-accent); }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 11px 12px; border-bottom: 1px solid var(--artifact-border); text-align: left; vertical-align: middle; }
+    th { color: var(--artifact-muted); background: var(--artifact-surface-subtle); font-size: 11px; font-weight: 750; letter-spacing: .045em; text-transform: uppercase; white-space: nowrap; }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr[data-account-id] { cursor: pointer; }
+    tbody tr[data-account-id]:hover, tbody tr[data-account-id].selected { background: var(--artifact-accent-soft); }
+    .number { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .account-name { font-weight: 720; min-width: 190px; }
+    .account-meta { display: block; color: var(--artifact-muted); font-size: 12px; font-weight: 400; }
+    .risk-badge, .activity-badge { display: inline-flex; align-items: center; min-height: 24px; border-radius: 999px; padding: 3px 8px; font-size: 11px; font-weight: 750; text-transform: uppercase; letter-spacing: .035em; white-space: nowrap; }
+    .risk-badge.overage, .risk-badge.expired, .risk-badge.critical, .activity-badge.missing { color: var(--artifact-danger); background: var(--artifact-danger-soft); }
+    .risk-badge.high { color: var(--artifact-warning); background: var(--artifact-warning-soft); }
+    .risk-badge.medium { color: var(--artifact-medium); background: var(--artifact-medium-soft); }
+    .risk-badge.healthy, .activity-badge.active { color: var(--artifact-healthy); background: var(--artifact-healthy-soft); }
+    .risk-badge.exhausted, .risk-badge.none { color: var(--artifact-muted); background: var(--artifact-surface-subtle); }
+    .activity-stack { display: grid; gap: 4px; justify-items: start; }
+    .detail { display: none; margin-top: var(--artifact-space-4); }
+    .detail.show { display: block; }
+    .detail-header { display: flex; justify-content: space-between; gap: var(--artifact-space-4); padding: var(--artifact-space-5); border-bottom: 1px solid var(--artifact-border); }
+    .detail-title h2 { font-size: 22px; margin-bottom: 4px; }
+    .detail-kpis { display: flex; flex-wrap: wrap; gap: 18px; color: var(--artifact-muted); }
+    .detail-kpis strong { color: var(--artifact-text); font-variant-numeric: tabular-nums; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--artifact-space-4); padding: var(--artifact-space-4); }
+    .subpanel { border: 1px solid var(--artifact-border); border-radius: 8px; overflow: hidden; }
+    .subpanel h3 { padding: 12px; background: var(--artifact-surface-subtle); border-bottom: 1px solid var(--artifact-border); }
+    .empty { padding: var(--artifact-space-5); color: var(--artifact-muted); text-align: center; }
+    .exception-list { display: grid; gap: 1px; background: var(--artifact-border); }
+    .exception { background: var(--artifact-surface); padding: 13px 15px; display: grid; grid-template-columns: 150px minmax(180px, 1fr) 2fr; gap: var(--artifact-space-3); }
+    .exception-type { color: var(--artifact-warning); font-family: var(--artifact-mono); font-size: 12px; }
+    .exception strong { font-weight: 700; }
+    .exception p { color: var(--artifact-muted); }
+    .footer { padding: var(--artifact-space-5) 0; color: var(--artifact-muted); font-size: 12px; text-align: center; }
+    .loading { animation: pulse 1.2s ease-in-out infinite; }
+    @keyframes pulse { 50% { opacity: .55; } }
+    @media (prefers-reduced-motion: reduce) { .loading { animation: none; } }
+    @media (max-width: 1100px) {
+      .metrics { grid-template-columns: repeat(3, 1fr); }
+      .overview-grid { grid-template-columns: 1fr; }
+      .controls { grid-template-columns: 1fr 1fr; }
+      .detail-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 680px) {
+      .shell { padding: var(--artifact-space-4); }
+      .topbar { flex-direction: column; }
+      .actions { justify-content: flex-start; }
+      .metrics { grid-template-columns: 1fr 1fr; }
+      .controls { grid-template-columns: 1fr; }
+      .checkbox { align-items: center; padding: 0; }
+      .risk-row { grid-template-columns: 68px minmax(60px, 1fr) 84px; }
+      .exception { grid-template-columns: 1fr; }
+      .detail-header { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">AI Outcomes Operations</div>
+        <h1>Hours Recon</h1>
+        <p class="subtitle" id="subtitle">Salesforce entitlements reconciled against billable Rocketlane time.</p>
+      </div>
+      <div class="actions">
+        <span class="pill" id="modePill"><span class="status-dot"></span><span>Loading</span></span>
+        <button class="button" id="refreshButton" type="button">Refresh data</button>
+      </div>
+    </header>
+
+    <div class="notice" id="notice" role="status"></div>
+    <div class="error" id="error" role="alert"></div>
+
+    <section class="metrics" aria-label="Portfolio metrics" id="metrics"></section>
+
+    <section class="overview-grid">
+      <article class="panel">
+        <div class="panel-head">
+          <div><h2>Exposure by account risk</h2><p class="source-note">Remaining usable hours, grouped by the account's highest-risk package</p></div>
+          <span class="source-note" id="asOf"></span>
+        </div>
+        <div class="panel-body"><div class="risk-bars" id="riskBars"></div></div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><div><h2>Weekly compliance</h2><p class="source-note">Current Monday-to-today period</p></div></div>
+        <div class="panel-body"><div class="weekly-grid" id="weeklyStats"></div></div>
+      </article>
+    </section>
+
+    <section class="section">
+      <div class="section-title"><div><h2>Assigned accounts</h2><p class="source-note" id="resultCount"></p></div></div>
+      <div class="panel">
+        <div class="controls">
+          <div class="field"><label for="search">Search accounts</label><input id="search" type="search" placeholder="Account or project name"></div>
+          <div class="field"><label for="riskFilter">Risk</label><select id="riskFilter"><option value="all">All risk levels</option><option value="overage">Overage</option><option value="expired">Expired</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="healthy">Healthy</option><option value="exhausted">Exhausted</option><option value="none">No package</option></select></div>
+          <div class="field"><label for="sort">Sort</label><select id="sort"><option value="risk">Risk priority</option><option value="expiration">Expiration soonest</option><option value="remaining">Remaining hours</option><option value="name">Account name</option></select></div>
+          <label class="checkbox"><input id="weeklyOnly" type="checkbox"> Weekly gaps only</label>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Account</th><th>Risk</th><th class="number">Sold</th><th class="number">Billed</th><th class="number">Remaining</th><th class="number">At risk</th><th class="number">Expired</th><th>Current week</th></tr></thead>
+            <tbody id="accountRows"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="accountEmpty" hidden>No accounts match these filters.</div>
+      </div>
+      <article class="panel detail" id="detail" aria-live="polite"></article>
+    </section>
+
+    <section class="section">
+      <div class="section-title"><div><h2>Data quality review</h2><p class="source-note">Unmatched customers, ambiguous names, and packages that need explicit hours</p></div><span class="pill" id="exceptionCount">0 items</span></div>
+      <div class="panel"><div class="exception-list" id="exceptions"></div><div class="empty" id="exceptionEmpty" hidden>No unresolved data-quality items.</div></div>
+    </section>
+
+    <footer class="footer" id="footer"></footer>
+  </main>
+
+  <script>
+    const state = { data: null, selectedId: null, filters: { search: '', risk: 'all', weeklyOnly: false, sort: 'risk' } };
+    const riskOrder = { overage: 0, expired: 1, critical: 2, high: 3, medium: 4, healthy: 5, exhausted: 6, none: 7 };
+    const $ = selector => document.querySelector(selector);
+    const fmt = value => new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(Number(value || 0));
+    const fmtDate = value => value ? new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${value}T00:00:00Z`)) : '—';
+    const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
+    const titleCase = value => String(value || '').replaceAll('_', ' ').replace(/\b\w/g, letter => letter.toUpperCase());
+
+    async function loadData() {
+      setError('');
+      const response = await fetch('/api/data', { cache: 'no-store' });
+      if (!response.ok) throw new Error(`Could not load data (${response.status})`);
+      state.data = await response.json();
+      render();
+    }
+
+    async function refreshData() {
+      const button = $('#refreshButton');
+      button.disabled = true;
+      button.textContent = 'Refreshing…';
+      $('#modePill').classList.add('loading');
+      setError('');
+      try {
+        const response = await fetch('/api/refresh', { method: 'POST' });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `Refresh failed (${response.status})`);
+        state.data = result;
+        render();
+      } catch (error) {
+        setError(`${error.message} The last successful dataset is still displayed.`);
+      } finally {
+        button.disabled = false;
+        button.textContent = state.data?.meta?.mode === 'mcp' ? 'Reload MCP snapshot' : 'Refresh data';
+        $('#modePill').classList.remove('loading');
+      }
+    }
+
+    function setError(message) {
+      const element = $('#error');
+      element.textContent = message;
+      element.classList.toggle('show', Boolean(message));
+    }
+
+    function render() {
+      if (!state.data) return;
+      const { meta, metrics } = state.data;
+      const mode = meta.mode || 'unknown';
+      $('#modePill').className = `pill ${mode}`;
+      $('#modePill').innerHTML = `<span class="status-dot"></span><span>${escapeHtml(mode)} data</span>`;
+      $('#refreshButton').textContent = mode === 'mcp' ? 'Reload MCP snapshot' : 'Refresh data';
+      const requester = meta.requester || {};
+      $('#subtitle').textContent = `${requester.name || requester.email || 'Requesting AIOM'} · Salesforce entitlements reconciled against billable Rocketlane time.`;
+      $('#asOf').textContent = `As of ${fmtDate(meta.as_of)}`;
+      const notice = $('#notice');
+      const noticeText = meta.notice || (mode === 'demo' ? 'Demo mode is active. Configure .env and switch HOURS_RECON_MODE to live before using these numbers operationally.' : '');
+      notice.textContent = noticeText;
+      notice.classList.toggle('show', Boolean(noticeText));
+      renderMetrics(metrics);
+      renderRiskBars();
+      renderWeekly(metrics);
+      renderAccounts();
+      renderExceptions();
+      const refreshed = meta.refreshed_at ? new Date(meta.refreshed_at).toLocaleString() : 'not yet refreshed';
+      $('#footer').textContent = `${meta.allocation_method} · ${meta.expiration_rule} · Last successful refresh: ${refreshed}`;
+    }
+
+    function renderMetrics(metrics) {
+      const cards = [
+        ['Hours remaining', metrics.remaining_hours, 'Usable, unexpired entitlement', true],
+        ['Hours at risk', metrics.at_risk_hours, 'Expire within 90 days', false],
+        ['Expired unused', metrics.expired_unused_hours, 'Past expiration with balance', false],
+        ['Hours sold', metrics.sold_hours, `${metrics.account_count} assigned accounts`, false],
+        ['Hours billed', metrics.billed_hours, 'All billable contributors', false],
+        ['Overage', metrics.overage_hours, 'No active entitlement on entry date', false],
+      ];
+      $('#metrics').innerHTML = cards.map(([label, value, note, primary]) => `<article class="metric ${primary ? 'primary' : ''}"><span class="metric-label">${label}</span><strong class="metric-value">${fmt(value)}</strong><span class="metric-note">${note}</span></article>`).join('');
+    }
+
+    function renderRiskBars() {
+      const rows = state.data.risk_distribution.filter(row => row.accounts > 0);
+      const max = Math.max(...rows.map(row => row.remaining_hours), 1);
+      $('#riskBars').innerHTML = rows.map(row => `<div class="risk-row"><span class="risk-badge ${row.risk}">${titleCase(row.risk)}</span><div class="bar-track" aria-label="${escapeHtml(row.risk)}: ${fmt(row.remaining_hours)} remaining hours"><div class="bar-fill ${row.risk}" style="width:${Math.max(2, row.remaining_hours / max * 100)}%"></div></div><span class="bar-value">${row.accounts} acct · ${fmt(row.remaining_hours)}h</span></div>`).join('') || '<div class="empty">No account risk data.</div>';
+    }
+
+    function renderWeekly(metrics) {
+      $('#weeklyStats').innerHTML = `<div class="weekly-stat"><strong>${fmt(metrics.weekly_account_gaps)}</strong><span>accounts with no billable activity</span></div><div class="weekly-stat"><strong>${fmt(metrics.weekly_aiom_gaps)}</strong><span>accounts with no requesting-AIOM entry</span></div>`;
+    }
+
+    function filteredAccounts() {
+      const needle = state.filters.search.trim().toLowerCase();
+      const rows = state.data.accounts.filter(account => {
+        const projectNames = (account.projects || []).map(project => `${project.name} ${project.customer_name}`).join(' ');
+        const searchable = `${account.name} ${projectNames}`.toLowerCase();
+        if (needle && !searchable.includes(needle)) return false;
+        if (state.filters.risk !== 'all' && account.risk !== state.filters.risk) return false;
+        if (state.filters.weeklyOnly && account.weekly.account_active_current && account.weekly.aiom_active_current) return false;
+        return true;
+      });
+      rows.sort((a, b) => {
+        if (state.filters.sort === 'name') return a.name.localeCompare(b.name);
+        if (state.filters.sort === 'remaining') return b.remaining_hours - a.remaining_hours || a.name.localeCompare(b.name);
+        if (state.filters.sort === 'expiration') {
+          const expiry = account => Math.min(...account.packages.filter(pkg => pkg.remaining_hours > 0).map(pkg => pkg.days_to_expiration), Number.MAX_SAFE_INTEGER);
+          return expiry(a) - expiry(b) || a.name.localeCompare(b.name);
+        }
+        return (riskOrder[a.risk] ?? 99) - (riskOrder[b.risk] ?? 99) || b.at_risk_hours - a.at_risk_hours || a.name.localeCompare(b.name);
+      });
+      return rows;
+    }
+
+    function renderAccounts() {
+      const rows = filteredAccounts();
+      $('#resultCount').textContent = `${rows.length} of ${state.data.accounts.length} accounts`;
+      $('#accountEmpty').hidden = rows.length > 0;
+      $('#accountRows').innerHTML = rows.map(account => {
+        const weekly = account.weekly;
+        const projects = `${account.project_count} project${account.project_count === 1 ? '' : 's'} · ${account.entry_count} entries`;
+        return `<tr data-account-id="${escapeHtml(account.id)}" tabindex="0" class="${state.selectedId === account.id ? 'selected' : ''}">
+          <td class="account-name">${escapeHtml(account.name)}<span class="account-meta">${projects}</span></td>
+          <td><span class="risk-badge ${account.risk}">${titleCase(account.risk)}</span></td>
+          <td class="number">${fmt(account.sold_hours)}</td><td class="number">${fmt(account.billed_hours)}</td><td class="number">${fmt(account.remaining_hours)}</td><td class="number">${fmt(account.at_risk_hours)}</td><td class="number">${fmt(account.expired_unused_hours)}</td>
+          <td><div class="activity-stack"><span class="activity-badge ${weekly.account_active_current ? 'active' : 'missing'}">Account ${weekly.account_active_current ? 'active' : 'gap'}</span><span class="activity-badge ${weekly.aiom_active_current ? 'active' : 'missing'}">AIOM ${weekly.aiom_active_current ? 'active' : 'gap'}</span></div></td>
+        </tr>`;
+      }).join('');
+      document.querySelectorAll('tr[data-account-id]').forEach(row => {
+        const open = () => selectAccount(row.dataset.accountId);
+        row.addEventListener('click', open);
+        row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); } });
+      });
+      if (state.selectedId) renderDetail(state.selectedId);
+    }
+
+    function selectAccount(id) {
+      state.selectedId = id;
+      renderAccounts();
+      $('#detail').scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+    }
+
+    function renderDetail(id) {
+      const account = state.data.accounts.find(item => item.id === id);
+      const detail = $('#detail');
+      if (!account) { detail.classList.remove('show'); return; }
+      const packageRows = account.packages.map(pkg => `<tr><td>${escapeHtml(pkg.opportunity_name)}<span class="account-meta">${escapeHtml(pkg.tier)} · ${titleCase(pkg.inference_source)}</span></td><td>${fmtDate(pkg.close_date)}</td><td>${fmtDate(pkg.expiration_date)}<span class="account-meta">${pkg.days_to_expiration} days</span></td><td class="number">${fmt(pkg.sold_hours)}</td><td class="number">${fmt(pkg.consumed_hours)}</td><td class="number">${fmt(pkg.remaining_hours)}</td><td><span class="risk-badge ${pkg.risk}">${titleCase(pkg.risk)}</span></td></tr>`).join('');
+      const entryRows = [...account.entries].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 100).map(entry => `<tr><td>${fmtDate(entry.date)}</td><td>${escapeHtml(entry.project_name || account.projects.find(project => project.id === entry.project_id)?.name || 'Rocketlane project')}</td><td>${escapeHtml(entry.user_name || entry.user_email || 'Unknown user')}<span class="account-meta">${escapeHtml(entry.approval_status || '')}</span></td><td class="number">${fmt(entry.hours)}</td></tr>`).join('');
+      detail.innerHTML = `<div class="detail-header"><div class="detail-title"><h2>${escapeHtml(account.name)}</h2><div class="detail-kpis"><span><strong>${fmt(account.remaining_hours)}</strong> remaining</span><span><strong>${fmt(account.at_risk_hours)}</strong> at risk</span><span><strong>${fmt(account.expired_unused_hours)}</strong> expired</span><span><strong>${fmt(account.overage_hours)}</strong> overage</span></div></div><button class="button secondary" id="closeDetail" type="button">Close detail</button></div>
+        <div class="detail-grid">
+          <section class="subpanel"><h3>Entitlement tranches · FIFO by expiration</h3>${packageRows ? `<div class="table-wrap"><table><thead><tr><th>Package</th><th>Closed</th><th>Expires</th><th class="number">Sold</th><th class="number">Used</th><th class="number">Left</th><th>Risk</th></tr></thead><tbody>${packageRows}</tbody></table></div>` : '<div class="empty">No recognized sold-hours package.</div>'}</section>
+          <section class="subpanel"><h3>Billable Rocketlane entries · latest 100</h3>${entryRows ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Project</th><th>Contributor</th><th class="number">Hours</th></tr></thead><tbody>${entryRows}</tbody></table></div>` : '<div class="empty">No matched billable entries.</div>'}</section>
+        </div>`;
+      detail.classList.add('show');
+      $('#closeDetail').addEventListener('click', () => { state.selectedId = null; detail.classList.remove('show'); renderAccounts(); });
+    }
+
+    function renderExceptions() {
+      const rows = state.data.exceptions || [];
+      $('#exceptionCount').textContent = `${rows.length} item${rows.length === 1 ? '' : 's'}`;
+      $('#exceptionEmpty').hidden = rows.length > 0;
+      $('#exceptions').innerHTML = rows.map(item => {
+        const subject = item.account_name || item.rocketlane_customer || item.opportunity_name || 'Unknown record';
+        const suggestion = item.suggested_account ? ` Suggested match: ${item.suggested_account} (${Math.round(item.suggestion_score * 100)}%).` : '';
+        return `<article class="exception"><span class="exception-type">${escapeHtml(item.type)}</span><strong>${escapeHtml(subject)}</strong><p>${escapeHtml(item.message || '')}${escapeHtml(suggestion)}</p></article>`;
+      }).join('');
+    }
+
+    $('#refreshButton').addEventListener('click', refreshData);
+    $('#search').addEventListener('input', event => { state.filters.search = event.target.value; renderAccounts(); });
+    $('#riskFilter').addEventListener('change', event => { state.filters.risk = event.target.value; renderAccounts(); });
+    $('#sort').addEventListener('change', event => { state.filters.sort = event.target.value; renderAccounts(); });
+    $('#weeklyOnly').addEventListener('change', event => { state.filters.weeklyOnly = event.target.checked; renderAccounts(); });
+
+    loadData().catch(error => setError(error.message));
+  </script>
+</body>
+</html>
