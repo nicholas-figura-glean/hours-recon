@@ -8,9 +8,9 @@ A local, read-only AIOM dashboard that reconciles hours sold in Salesforce with 
 - Includes only `Closed Won` opportunities.
 - Infers sold hours from opportunity products and legacy opportunity names.
 - Supports multiple packages per account and multiplies package hours by line-item quantity.
-- Allocates Rocketlane hours FIFO against the earliest-expiring active package.
+- Allocates Rocketlane hours FIFO against the earliest-expiring active package, then applies pre-entitlement activity to the earliest later package that has closed by the report date.
 - Expires each package one year after its Salesforce close date; the expiration date is inclusive.
-- Separates usable remaining hours, 90-day at-risk hours, expired-unused hours, and overage.
+- Separates usable remaining hours, 90-day at-risk hours, expired-unused hours, and true overage beyond eligible sold capacity.
 - Flags weekly account inactivity and missing requesting-AIOM time separately.
 - Includes archived Rocketlane projects so historical billable entries are not omitted.
 - Excludes future-dated entries and not-yet-active entitlement from the as-of balance.
@@ -145,7 +145,7 @@ For each billable time entry, packages are eligible when:
 close_date <= entry_date <= close_date + 1 year
 ```
 
-Eligible capacity is consumed by earliest expiration, then close date, then stable package ID. Time without active capacity is overage. Negative Rocketlane corrections reduce overage first and then reverse the latest consumed package capacity; corrections larger than prior usage are surfaced for review. The configured `HOURS_RECON_TIMEZONE` controls the report date and Monday-based weekly boundaries.
+Eligible capacity is consumed by earliest expiration, then close date, then stable package ID. Packages active on the time-entry date are used first. Historical entries that predate an entitlement consume the earliest later package that has closed by the report date and are surfaced as `pre_entitlement_activity` timing warnings. Packages still in the future remain unavailable. Time beyond all eligible sold capacity, or after expiration without a later entitlement, is overage. Negative Rocketlane corrections reduce overage first and then reverse the latest consumed package capacity; corrections larger than prior usage are surfaced for review. The configured `HOURS_RECON_TIMEZONE` controls the report date and Monday-based weekly boundaries.
 
 Risk bands for unused hours:
 
@@ -161,7 +161,7 @@ Risk bands for unused hours:
 python3 -m unittest discover -v
 ```
 
-The suite covers package inference, real Salesforce product naming, custom-package fallbacks, aliases, collision safety, fuzzy suggestions, FIFO allocation, inclusive expiration, overage, billable filtering, weekly activity, risk boundaries, deterministic ordering, JSON output, and total rollups.
+The suite covers package inference, real Salesforce product naming, custom-package fallbacks, aliases, collision safety, fuzzy suggestions, FIFO allocation, pre-entitlement timing, future-entitlement isolation, inclusive expiration, overage, billable filtering, weekly activity, risk boundaries, deterministic ordering, JSON output, and total rollups.
 
 ## Repository layout
 

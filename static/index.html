@@ -226,7 +226,7 @@
     </section>
 
     <section class="section">
-      <div class="section-title"><div><h2>Data quality review</h2><p class="source-note">Unmatched customers, ambiguous names, and packages that need explicit hours</p></div><span class="pill" id="exceptionCount">0 items</span></div>
+      <div class="section-title"><div><h2>Data quality review</h2><p class="source-note">Matching, package, correction, and entitlement-timing warnings</p></div><span class="pill" id="exceptionCount">0 items</span></div>
       <div class="panel"><div class="exception-list" id="exceptions"></div><div class="empty" id="exceptionEmpty" hidden>No unresolved data-quality items.</div></div>
     </section>
 
@@ -307,7 +307,7 @@
         ['Expired unused', metrics.expired_unused_hours, 'Past expiration with balance', false],
         ['Hours sold', metrics.sold_hours, `${metrics.account_count} assigned accounts`, false],
         ['Hours billed', metrics.billed_hours, 'All billable contributors', false],
-        ['Overage', metrics.overage_hours, 'No active entitlement on entry date', false],
+        ['Overage', metrics.overage_hours, 'Billable hours beyond eligible sold capacity', false],
       ];
       $('#metrics').innerHTML = cards.map(([label, value, note, primary]) => `<article class="metric ${primary ? 'primary' : ''}"><span class="metric-label">${label}</span><strong class="metric-value">${fmt(value)}</strong><span class="metric-note">${note}</span></article>`).join('');
     }
@@ -377,8 +377,8 @@
       const detail = $('#detail');
       if (!account) { detail.classList.remove('show'); return; }
       const packageRows = account.packages.map(pkg => `<tr><td>${escapeHtml(pkg.opportunity_name)}<span class="account-meta">${escapeHtml(pkg.tier)} · ${titleCase(pkg.inference_source)}</span></td><td>${fmtDate(pkg.close_date)}</td><td>${fmtDate(pkg.expiration_date)}<span class="account-meta">${pkg.days_to_expiration} days</span></td><td class="number">${fmt(pkg.sold_hours)}</td><td class="number">${fmt(pkg.consumed_hours)}</td><td class="number">${fmt(pkg.remaining_hours)}</td><td><span class="risk-badge ${pkg.risk}">${titleCase(pkg.risk)}</span></td></tr>`).join('');
-      const entryRows = [...account.entries].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 100).map(entry => `<tr><td>${fmtDate(entry.date)}</td><td>${escapeHtml(entry.project_name || account.projects.find(project => project.id === entry.project_id)?.name || 'Rocketlane project')}</td><td>${escapeHtml(entry.user_name || entry.user_email || 'Unknown user')}<span class="account-meta">${escapeHtml(entry.approval_status || '')}</span></td><td class="number">${fmt(entry.hours)}</td></tr>`).join('');
-      detail.innerHTML = `<div class="detail-header"><div class="detail-title"><h2>${escapeHtml(account.name)}</h2><div class="detail-kpis"><span><strong>${fmt(account.remaining_hours)}</strong> remaining</span><span><strong>${fmt(account.at_risk_hours)}</strong> at risk</span><span><strong>${fmt(account.expired_unused_hours)}</strong> expired</span><span><strong>${fmt(account.overage_hours)}</strong> overage</span></div></div><button class="button secondary" id="closeDetail" type="button">Close detail</button></div>
+      const entryRows = [...account.entries].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 100).map(entry => `<tr><td>${fmtDate(entry.date)}${entry.pre_entitlement_hours ? `<span class="account-meta">Pre-entitlement: ${fmt(entry.pre_entitlement_hours)}h</span>` : ''}</td><td>${escapeHtml(entry.project_name || account.projects.find(project => project.id === entry.project_id)?.name || 'Rocketlane project')}</td><td>${escapeHtml(entry.user_name || entry.user_email || 'Unknown user')}<span class="account-meta">${escapeHtml(entry.approval_status || '')}</span></td><td class="number">${fmt(entry.hours)}</td></tr>`).join('');
+      detail.innerHTML = `<div class="detail-header"><div class="detail-title"><h2>${escapeHtml(account.name)}</h2><div class="detail-kpis"><span><strong>${fmt(account.remaining_hours)}</strong> remaining</span><span><strong>${fmt(account.at_risk_hours)}</strong> at risk</span><span><strong>${fmt(account.expired_unused_hours)}</strong> expired</span><span><strong>${fmt(account.overage_hours)}</strong> overage</span>${account.pre_entitlement_hours ? `<span><strong>${fmt(account.pre_entitlement_hours)}</strong> pre-entitlement</span>` : ''}</div></div><button class="button secondary" id="closeDetail" type="button">Close detail</button></div>
         <div class="detail-grid">
           <section class="subpanel"><h3>Entitlement tranches · FIFO by expiration</h3>${packageRows ? `<div class="table-wrap"><table><thead><tr><th>Package</th><th>Closed</th><th>Expires</th><th class="number">Sold</th><th class="number">Used</th><th class="number">Left</th><th>Risk</th></tr></thead><tbody>${packageRows}</tbody></table></div>` : '<div class="empty">No recognized sold-hours package.</div>'}</section>
           <section class="subpanel"><h3>Billable Rocketlane entries · latest 100</h3>${entryRows ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Project</th><th>Contributor</th><th class="number">Hours</th></tr></thead><tbody>${entryRows}</tbody></table></div>` : '<div class="empty">No matched billable entries.</div>'}</section>

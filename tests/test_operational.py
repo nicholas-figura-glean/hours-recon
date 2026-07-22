@@ -43,10 +43,14 @@ class OperationalCorrectnessTests(unittest.TestCase):
         self.assertTrue(any(item["type"] == "future_entries_excluded" for item in result["exceptions"]))
 
     def test_future_entitlement_is_not_usable_remaining(self):
-        sf, rl = base_sources([], close_date="2026-03-01")
+        sf, rl = base_sources([
+            {"id": "T1", "project_id": "P1", "date": "2026-02-01", "minutes": 60, "billable": True},
+        ], close_date="2026-03-01")
         account = reconcile(sf, rl, package_config=PACKAGES, account_aliases=ALIASES, as_of=date(2026, 2, 1))["accounts"][0]
         self.assertEqual(0.0, account["remaining_hours"])
         self.assertEqual(20.0, account["future_entitlement_hours"])
+        self.assertEqual(1.0, account["overage_hours"])
+        self.assertEqual(0.0, account["pre_entitlement_hours"])
 
     def test_excess_negative_correction_is_auditable(self):
         sf, rl = base_sources([

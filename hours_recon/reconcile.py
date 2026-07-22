@@ -114,6 +114,19 @@ def reconcile(
 
     for account in account_results.values():
         _allocate_account(account, report_date)
+        if account.get("pre_entitlement_hours", 0) > 0:
+            exceptions.append({
+                "type": "pre_entitlement_activity",
+                "account_id": account["id"],
+                "account_name": account["name"],
+                "hours": account["pre_entitlement_hours"],
+                "count": account["pre_entitlement_entry_count"],
+                "message": (
+                    f"{account['pre_entitlement_hours']} billable hours across "
+                    f"{account['pre_entitlement_entry_count']} entries occurred before their allocated package closed. "
+                    "They consume sold capacity but are retained as a timing warning."
+                ),
+            })
         if account.get("unapplied_correction_hours", 0) > 0:
             exceptions.append({
                 "type": "unapplied_negative_correction",
@@ -149,7 +162,7 @@ def reconcile(
             "generated_at": report_date.isoformat(),
             "mode": mode,
             "requester": requester,
-            "allocation_method": "FIFO by package expiration, evaluated on each time-entry date",
+            "allocation_method": "FIFO by package expiration; pre-entitlement activity uses the earliest later package active by the report date",
             "expiration_rule": "Close date + 1 year; expiration date is inclusive",
             "risk_thresholds": {"critical_days": 30, "high_days": 60, "medium_days": 90},
         },
@@ -168,6 +181,8 @@ def _allocate_account(account: MutableMapping[str, Any], as_of: date) -> None:
     balances: Dict[str, Decimal] = {item["id"]: _d(item["sold_hours"]) for item in packages}
     consumed: Dict[str, Decimal] = {item["id"]: Decimal("0") for item in packages}
     overage = Decimal("0")
+    pre_entitlement_hours = Decimal("0")
+    pre_entitlement_entry_ids = set()
     allocations: List[Dict[str, Any]] = []
 
     entries = sorted(account["entries"], key=lambda item: (item.get("date", ""), str(item.get("id", ""))))
@@ -189,9 +204,37 @@ def _allocate_account(account: MutableMapping[str, Any], as_of: date) -> None:
                 consumed[package_id] += applied
                 remaining -= applied
                 allocations.append({"entry_id": str(entry.get("id", "")), "package_id": package_id, "hours": _round(applied)})
+            # If no package was active on the entry date, allow historical
+            # activity to consume the earliest later package that has actually
+            # closed by the report date. This keeps overage tied to total
+            # eligible sold capacity while preserving the timing issue.
+            if remaining > 0:
+                for package in packages:
+                    if remaining <= 0:
+                        break
+                    package_id = package["id"]
+                    close_date = parse_date(package["close_date"])
+                    if not (entry_date < close_date <= as_of):
+                        continue
+                    applied = min(remaining, balances[package_id])
+                    if applied <= 0:
+                        continue
+                    balances[package_id] -= applied
+                    consumed[package_id] += applied
+                    remaining -= applied
+                    pre_entitlement_hours += applied
+                    pre_entitlement_entry_ids.add(str(entry.get("id", "")))
+                    entry["pre_entitlement_hours"] = _round(_d(entry.get("pre_entitlement_hours")) + applied)
+                    allocations.append({
+                        "entry_id": str(entry.get("id", "")),
+                        "package_id": package_id,
+                        "hours": _round(applied),
+                        "reason": "Pre-entitlement activity allocated to earliest later package",
+                        "pre_entitlement": True,
+                    })
             if remaining > 0:
                 overage += remaining
-                allocations.append({"entry_id": str(entry.get("id", "")), "package_id": None, "hours": _round(remaining), "reason": "No active package capacity on entry date"})
+                allocations.append({"entry_id": str(entry.get("id", "")), "package_id": None, "hours": _round(remaining), "reason": "No eligible package capacity"})
         elif amount < 0:
             credit = -amount
             reduce_overage = min(credit, overage)
@@ -258,6 +301,8 @@ def _allocate_account(account: MutableMapping[str, Any], as_of: date) -> None:
     account["future_entitlement_hours"] = _round(future_entitlement)
     account["at_risk_hours"] = _round(at_risk)
     account["overage_hours"] = _round(max(overage, Decimal("0")))
+    account["pre_entitlement_hours"] = _round(pre_entitlement_hours)
+    account["pre_entitlement_entry_count"] = len(pre_entitlement_entry_ids)
     account["unapplied_correction_hours"] = _round(unapplied_correction)
 
 

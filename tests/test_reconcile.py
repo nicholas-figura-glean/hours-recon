@@ -149,6 +149,24 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(30.0, account["billed_hours"])
         self.assertEqual(account["billed_hours"], account["consumed_hours"] + account["overage_hours"])
 
+    def test_pre_entitlement_activity_consumes_later_closed_package(self):
+        opportunities = [{"id": "O1", "account_id": "A1", "account_name": "Acme", "name": "Growth Package 20 hours", "close_date": "2025-11-11", "line_items": []}]
+        entries = [
+            {"id": "T1", "project_id": "P1", "date": "2025-11-10", "minutes": 30, "billable": True, "user_email": "alex@example.com"},
+            {"id": "T2", "project_id": "P1", "date": "2025-11-12", "minutes": 240, "billable": True, "user_email": "alex@example.com"},
+        ]
+        sf, rl = sources(opportunities, entries)
+        result = reconcile(sf, rl, package_config=PACKAGE_CONFIG, account_aliases={"aliases": {}}, as_of=date(2026, 1, 1))
+        account = result["accounts"][0]
+        self.assertEqual(4.5, account["billed_hours"])
+        self.assertEqual(4.5, account["consumed_hours"])
+        self.assertEqual(15.5, account["remaining_hours"])
+        self.assertEqual(0.0, account["overage_hours"])
+        self.assertEqual(0.5, account["pre_entitlement_hours"])
+        self.assertEqual(1, account["pre_entitlement_entry_count"])
+        self.assertTrue(account["entries"][0]["pre_entitlement_hours"] > 0)
+        self.assertTrue(any(item["type"] == "pre_entitlement_activity" for item in result["exceptions"]))
+
     def test_entry_after_expiration_becomes_overage(self):
         opportunities = [{"id": "O1", "account_id": "A1", "account_name": "Acme", "name": "Growth Package 20 hours", "close_date": "2025-01-01", "line_items": []}]
         entries = [{"id": "T1", "project_id": "P1", "date": "2026-01-02", "minutes": 5 * 60, "billable": True, "user_email": "alex@example.com"}]
