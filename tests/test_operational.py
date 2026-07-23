@@ -83,6 +83,14 @@ class ConnectorSafetyTests(unittest.TestCase):
         self.assertEqual("true", captured["includeArchive.eq"])
 
 
+class DashboardMarkupTests(unittest.TestCase):
+    def test_account_detail_renders_matched_projects(self):
+        html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("const projectRows = (account.projects || []).map", html)
+        self.assertIn("Matched Rocketlane projects", html)
+        self.assertIn("No matched Rocketlane projects.", html)
+
+
 class CacheSafetyTests(unittest.TestCase):
     def test_cache_permissions_are_private(self):
         with tempfile.TemporaryDirectory() as temporary:

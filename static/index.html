@@ -142,6 +142,7 @@
     .detail-kpis strong { color: var(--artifact-text); font-variant-numeric: tabular-nums; }
     .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--artifact-space-4); padding: var(--artifact-space-4); }
     .subpanel { border: 1px solid var(--artifact-border); border-radius: 8px; overflow: hidden; }
+    .subpanel.projects { grid-column: 1 / -1; }
     .subpanel h3 { padding: 12px; background: var(--artifact-surface-subtle); border-bottom: 1px solid var(--artifact-border); }
     .empty { padding: var(--artifact-space-5); color: var(--artifact-muted); text-align: center; }
     .exception-list { display: grid; gap: 1px; background: var(--artifact-border); }
@@ -376,10 +377,25 @@
       const account = state.data.accounts.find(item => item.id === id);
       const detail = $('#detail');
       if (!account) { detail.classList.remove('show'); return; }
-      const packageRows = account.packages.map(pkg => `<tr><td>${escapeHtml(pkg.opportunity_name)}<span class="account-meta">${escapeHtml(pkg.tier)} · ${titleCase(pkg.inference_source)}</span></td><td>${fmtDate(pkg.close_date)}</td><td>${fmtDate(pkg.expiration_date)}<span class="account-meta">${pkg.days_to_expiration} days</span></td><td class="number">${fmt(pkg.sold_hours)}</td><td class="number">${fmt(pkg.consumed_hours)}</td><td class="number">${fmt(pkg.remaining_hours)}</td><td><span class="risk-badge ${pkg.risk}">${titleCase(pkg.risk)}</span></td></tr>`).join('');
-      const entryRows = [...account.entries].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 100).map(entry => `<tr><td>${fmtDate(entry.date)}${entry.pre_entitlement_hours ? `<span class="account-meta">Pre-entitlement: ${fmt(entry.pre_entitlement_hours)}h</span>` : ''}</td><td>${escapeHtml(entry.project_name || account.projects.find(project => project.id === entry.project_id)?.name || 'Rocketlane project')}</td><td>${escapeHtml(entry.user_name || entry.user_email || 'Unknown user')}<span class="account-meta">${escapeHtml(entry.approval_status || '')}</span></td><td class="number">${fmt(entry.hours)}</td></tr>`).join('');
+      const entries = account.entries || [];
+      const projectStats = entries.reduce((stats, entry) => {
+        const projectId = String(entry.project_id ?? '');
+        const current = stats[projectId] || { count: 0, hours: 0 };
+        current.count += 1;
+        current.hours += Number(entry.hours || 0);
+        stats[projectId] = current;
+        return stats;
+      }, {});
+      const projectRows = (account.projects || []).map(project => {
+        const stats = projectStats[String(project.id)] || { count: 0, hours: 0 };
+        const status = [project.status, project.archived ? 'Archived' : ''].filter(Boolean).join(' · ') || '—';
+        return `<tr><td>${escapeHtml(project.name || 'Unnamed project')}<span class="account-meta">Rocketlane #${escapeHtml(project.id)}</span></td><td>${escapeHtml(project.customer_name || '—')}</td><td>${escapeHtml(status)}</td><td>${fmtDate(project.start_date)}</td><td>${fmtDate(project.due_date)}</td><td class="number">${fmt(stats.count)}</td><td class="number">${fmt(stats.hours)}</td></tr>`;
+      }).join('');
+      const packageRows = (account.packages || []).map(pkg => `<tr><td>${escapeHtml(pkg.opportunity_name)}<span class="account-meta">${escapeHtml(pkg.tier)} · ${titleCase(pkg.inference_source)}</span></td><td>${fmtDate(pkg.close_date)}</td><td>${fmtDate(pkg.expiration_date)}<span class="account-meta">${pkg.days_to_expiration} days</span></td><td class="number">${fmt(pkg.sold_hours)}</td><td class="number">${fmt(pkg.consumed_hours)}</td><td class="number">${fmt(pkg.remaining_hours)}</td><td><span class="risk-badge ${pkg.risk}">${titleCase(pkg.risk)}</span></td></tr>`).join('');
+      const entryRows = [...entries].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 100).map(entry => `<tr><td>${fmtDate(entry.date)}${entry.pre_entitlement_hours ? `<span class="account-meta">Pre-entitlement: ${fmt(entry.pre_entitlement_hours)}h</span>` : ''}</td><td>${escapeHtml(entry.project_name || (account.projects || []).find(project => String(project.id) === String(entry.project_id))?.name || 'Rocketlane project')}</td><td>${escapeHtml(entry.user_name || entry.user_email || 'Unknown user')}<span class="account-meta">${escapeHtml(entry.approval_status || '')}</span></td><td class="number">${fmt(entry.hours)}</td></tr>`).join('');
       detail.innerHTML = `<div class="detail-header"><div class="detail-title"><h2>${escapeHtml(account.name)}</h2><div class="detail-kpis"><span><strong>${fmt(account.remaining_hours)}</strong> remaining</span><span><strong>${fmt(account.at_risk_hours)}</strong> at risk</span><span><strong>${fmt(account.expired_unused_hours)}</strong> expired</span><span><strong>${fmt(account.overage_hours)}</strong> overage</span>${account.pre_entitlement_hours ? `<span><strong>${fmt(account.pre_entitlement_hours)}</strong> pre-entitlement</span>` : ''}</div></div><button class="button secondary" id="closeDetail" type="button">Close detail</button></div>
         <div class="detail-grid">
+          <section class="subpanel projects"><h3>Matched Rocketlane projects · ${fmt(account.project_count)}</h3>${projectRows ? `<div class="table-wrap"><table><thead><tr><th>Project</th><th>Customer</th><th>Status</th><th>Start</th><th>Due</th><th class="number">Entries</th><th class="number">Billed</th></tr></thead><tbody>${projectRows}</tbody></table></div>` : '<div class="empty">No matched Rocketlane projects.</div>'}</section>
           <section class="subpanel"><h3>Entitlement tranches · FIFO by expiration</h3>${packageRows ? `<div class="table-wrap"><table><thead><tr><th>Package</th><th>Closed</th><th>Expires</th><th class="number">Sold</th><th class="number">Used</th><th class="number">Left</th><th>Risk</th></tr></thead><tbody>${packageRows}</tbody></table></div>` : '<div class="empty">No recognized sold-hours package.</div>'}</section>
           <section class="subpanel"><h3>Billable Rocketlane entries · latest 100</h3>${entryRows ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Project</th><th>Contributor</th><th class="number">Hours</th></tr></thead><tbody>${entryRows}</tbody></table></div>` : '<div class="empty">No matched billable entries.</div>'}</section>
         </div>`;
