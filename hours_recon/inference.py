@@ -145,6 +145,8 @@ def _package(
         "opportunity_name": opportunity.get("name"),
         "line_item_id": str(line_item.get("id")) if line_item else None,
         "line_item_name": line_item.get("name") if line_item else None,
+        "line_item_source": str(line_item.get("source") or "opportunity_line_item") if line_item else None,
+        "quote_id": str(line_item.get("quote_id")) if line_item and line_item.get("quote_id") else None,
         "family": family,
         "tier": tier,
         "quantity": float(quantity),
@@ -164,5 +166,7 @@ def _package_exception(opportunity: Mapping[str, Any], line_item: Optional[Mappi
         "opportunity_name": opportunity.get("name"),
         "line_item_id": str(line_item.get("id")) if line_item else None,
         "line_item_name": line_item.get("name") if line_item else None,
+        "line_item_source": str(line_item.get("source") or "opportunity_line_item") if line_item else None,
+        "quote_id": str(line_item.get("quote_id")) if line_item and line_item.get("quote_id") else None,
         "message": message,
     }

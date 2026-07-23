@@ -6,7 +6,7 @@ A local, read-only AIOM dashboard that reconciles hours sold in Salesforce with 
 
 - Resolves the requesting AIOM and finds Salesforce accounts assigned through the Account AIOM field.
 - Includes only `Closed Won` opportunities.
-- Infers sold hours from opportunity products and legacy opportunity names.
+- Infers sold hours from Opportunity Products, approved/primary Quote Lines when Opportunity Products are absent, and legacy opportunity names.
 - Supports multiple packages per account and multiplies package hours by line-item quantity.
 - Allocates Rocketlane hours FIFO against the earliest-expiring active package, then applies pre-entitlement activity to the earliest later package that has closed by the report date.
 - Expires each package one year after its Salesforce close date; the expiration date is inclusive.
@@ -87,6 +87,8 @@ Supported Outcome tiers:
 - Strategic: 300 hours
 
 Supported Growth tiers are 20, 50, 100, and 300 hours. Explicit wording such as `Growth Package (10 hours)` or `Custom 300 PS hours` is honored even when it is outside the standard tier list.
+
+For MCP refreshes, Opportunity Products are the primary product source. If an Opportunity has none, its approved Quote Lines (or primary Quote Lines when no approved Quote is set) are normalized as line items; the two sources are never combined for one Opportunity.
 
 Inference order:
 

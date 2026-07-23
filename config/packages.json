@@ -17,6 +17,8 @@
   "overrides": {
     "opportunities": {},
     "line_items": {},
-    "product_names": {}
+    "product_names": {
+      "Retained Solution Architect Hours": 1
+    }
   }
 }

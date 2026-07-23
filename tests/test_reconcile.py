@@ -54,6 +54,24 @@ class InferenceTests(unittest.TestCase):
         self.assertEqual(1, len(packages))
         self.assertEqual(20.0, packages[0]["sold_hours"])
 
+    def test_normalized_approved_quote_line_is_package_evidence(self):
+        opportunity = {
+            "id": "006PZ00000Jk36PYAR", "account_id": "A1", "account_name": "Integrate",
+            "name": "Integrate - IT", "close_date": "2025-10-17", "line_items": [
+                {
+                    "id": "0QLPZ0000054xt54AA", "quote_id": "0Q0PZ0000018ABJ0A2",
+                    "source": "approved_quote", "name": "Glean Outcomes Packages: Starter",
+                    "product_code": "Glean-Outcomes-Packages-Starter", "quantity": 1,
+                    "unit_price": 10000, "list_price": 10000,
+                },
+            ],
+        }
+        packages, exceptions = infer_packages(opportunity, PACKAGE_CONFIG)
+        self.assertEqual([], exceptions)
+        self.assertEqual(20.0, packages[0]["sold_hours"])
+        self.assertEqual("approved_quote", packages[0]["line_item_source"])
+        self.assertEqual("0Q0PZ0000018ABJ0A2", packages[0]["quote_id"])
+
     def test_opportunity_hint_does_not_multiply_across_unrelated_lines(self):
         opportunity = {
             "id": "O1", "account_id": "A1", "account_name": "Acme", "name": "Acme Growth Package 100 hours",
@@ -98,6 +116,20 @@ class InferenceTests(unittest.TestCase):
         self.assertEqual([], exceptions)
         self.assertEqual(300.0, packages[0]["sold_hours"])
         self.assertEqual("opportunity_explicit_hours", packages[0]["inference_source"])
+
+    def test_hour_unit_product_override_multiplies_quantity(self):
+        config = copy.deepcopy(PACKAGE_CONFIG)
+        config["overrides"]["product_names"]["Retained Solution Architect Hours"] = 1
+        opportunity = {
+            "id": "O1", "account_id": "A1", "account_name": "Acme", "name": "Acme renewal",
+            "close_date": "2026-01-01", "line_items": [{
+                "id": "L1", "name": "Retained Solution Architect Hours", "quantity": 10,
+            }],
+        }
+        packages, exceptions = infer_packages(opportunity, config)
+        self.assertEqual([], exceptions)
+        self.assertEqual(10.0, packages[0]["sold_hours"])
+        self.assertEqual("line_item_override", packages[0]["inference_source"])
 
     def test_override_precedes_inference(self):
         config = copy.deepcopy(PACKAGE_CONFIG)
