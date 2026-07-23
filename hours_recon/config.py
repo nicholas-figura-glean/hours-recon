@@ -41,4 +41,8 @@ def settings() -> Dict[str, Any]:
         "account_aliases": load_json(ROOT / "config" / "account_aliases.json"),
         "cache_path": ROOT / "var" / "reconciliation.json",
         "mcp_snapshot_path": ROOT / os.getenv("HOURS_RECON_MCP_SNAPSHOT_PATH", "var/mcp_snapshot.json"),
+        "governance_mode": os.getenv("HOURS_RECON_GOVERNANCE_MODE", "observe_only").lower(),
+        "remediation_mode": os.getenv("HOURS_RECON_REMEDIATION_MODE", "observe_only").lower(),
+        "remediation_db_path": ROOT / os.getenv("HOURS_RECON_REMEDIATION_DB_PATH", "var/remediation.sqlite3"),
+        "remediation_scope_id": os.getenv("HOURS_RECON_REMEDIATION_SCOPE_ID", "").strip(),
     }

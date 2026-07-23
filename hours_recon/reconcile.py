@@ -7,8 +7,9 @@ from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple
 
 from .dates import monday_of, parse_date
+from .evidence import attach_governance
 from .inference import infer_packages
-from .matching import match_projects
+from .matching import match_projects_with_evidence
 
 RISK_ORDER = {"overage": 0, "expired": 1, "critical": 2, "high": 3, "medium": 4, "healthy": 5, "exhausted": 6, "none": 7}
 
@@ -50,6 +51,8 @@ def reconcile(
     account_aliases: Mapping[str, Any],
     as_of: Optional[date] = None,
     mode: str = "live",
+    governance_mode: str = "observe_only",
+    source_coverage: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     report_date = as_of or date.today()
     requester = dict(salesforce.get("requester", {}))
@@ -60,7 +63,7 @@ def reconcile(
     entries = [item for item in billable_entries if item.get("date") and parse_date(item["date"]) <= report_date]
     future_entry_count = len(billable_entries) - len(entries)
 
-    project_map, match_exceptions = match_projects(accounts, projects, account_aliases)
+    project_map, match_exceptions, project_match_evidence = match_projects_with_evidence(accounts, projects, account_aliases)
     exceptions: List[Dict[str, Any]] = list(match_exceptions)
     if future_entry_count:
         exceptions.append({
@@ -71,18 +74,23 @@ def reconcile(
     account_results: Dict[str, Dict[str, Any]] = {}
     for account in accounts:
         account_id = str(account["id"])
-        account_results[account_id] = {
+        result = dict(account)
+        result.update({
             "id": account_id,
             "name": account["name"],
             "packages": [],
             "projects": [],
             "entries": [],
             "allocations": [],
-        }
+            "package_exceptions": [],
+        })
+        account_results[account_id] = result
 
     for project in projects:
-        account_id = project_map.get(str(project.get("id", "")))
+        project_id = str(project.get("id", ""))
+        account_id = project_map.get(project_id)
         if account_id in account_results:
+            project["match_evidence"] = dict(project_match_evidence.get(project_id, {}))
             account_results[account_id]["projects"].append(project)
 
     for opportunity in opportunities:
@@ -91,6 +99,7 @@ def reconcile(
             continue
         packages, package_exceptions = infer_packages(opportunity, package_config)
         account_results[account_id]["packages"].extend(packages)
+        account_results[account_id]["package_exceptions"].extend(package_exceptions)
         exceptions.extend(package_exceptions)
 
     unmatched_entry_count = 0
@@ -144,8 +153,8 @@ def reconcile(
             "previous_week_start": previous_week.isoformat(),
             "account_active_current": bool(current_entries),
             "account_active_previous": bool(previous_entries),
-            "aiom_active_current": any(str(item.get("user_email", "")).lower() == requester_email for item in current_entries),
-            "aiom_active_previous": any(str(item.get("user_email", "")).lower() == requester_email for item in previous_entries),
+            "aiom_active_current": bool(requester_email) and any(str(item.get("user_email", "")).lower() == requester_email for item in current_entries),
+            "aiom_active_previous": bool(requester_email) and any(str(item.get("user_email", "")).lower() == requester_email for item in previous_entries),
         }
         account["project_count"] = len(account["projects"])
         account["entry_count"] = len(account_entries)
@@ -153,17 +162,20 @@ def reconcile(
 
     ordered_accounts = sorted(account_results.values(), key=lambda item: (RISK_ORDER.get(item["risk"], 99), item["name"].lower()))
     metrics = _portfolio_metrics(ordered_accounts)
-    metrics["unmatched_projects"] = sum(1 for item in exceptions if item.get("type") in {"unmatched_project", "account_collision"})
+    metrics["unmatched_projects"] = sum(1 for item in exceptions if item.get("type") in {
+        "unmatched_project", "account_collision", "customer_id_collision", "explicit_account_out_of_scope",
+        "invalid_project_id", "project_id_collision",
+    })
     metrics["unresolved_packages"] = sum(1 for item in exceptions if item.get("type") == "unresolved_package")
 
-    return {
+    report = {
         "meta": {
             "as_of": report_date.isoformat(),
             "generated_at": report_date.isoformat(),
             "mode": mode,
             "requester": requester,
             "allocation_method": "FIFO by package expiration; pre-entitlement activity uses the earliest later package active by the report date",
-            "expiration_rule": "Close date + 1 year; expiration date is inclusive",
+            "expiration_rule": "Observe-only reported allocation remains Close date + 1 year; explicit service dates are scored as evidence for future governed enforcement. Expiration is inclusive.",
             "risk_thresholds": {"critical_days": 30, "high_days": 60, "medium_days": 90},
         },
         "metrics": metrics,
@@ -171,6 +183,12 @@ def reconcile(
         "accounts": ordered_accounts,
         "exceptions": sorted(exceptions, key=lambda item: (item.get("type", ""), item.get("account_name") or item.get("rocketlane_customer") or "")),
     }
+    return attach_governance(
+        report,
+        project_match_evidence=project_match_evidence,
+        mode=governance_mode,
+        source_coverage=source_coverage,
+    )
 
 
 def _allocate_account(account: MutableMapping[str, Any], as_of: date) -> None:

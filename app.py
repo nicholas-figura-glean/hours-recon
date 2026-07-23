@@ -6,13 +6,16 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import re
 import secrets
+import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from hours_recon.config import ROOT, settings
+from hours_recon.remediation_store import QueueConflict, QueueError, QueueValidationError
 from hours_recon.service import ReconciliationService
 
 STATIC_ROOT = ROOT / "static"
@@ -54,6 +57,25 @@ class HoursReconHandler(BaseHTTPRequestHandler):
         if path == "/api/status":
             self._json(200, self.service.status())
             return
+        if path == "/api/remediation/cases":
+            query = parse_qs(urlparse(self.path).query)
+            allowed = {key: values[0] for key, values in query.items() if key in {"status", "route", "priority", "account_id"} and values}
+            try:
+                self._json(200, {"cases": self.service.list_remediation_cases(allowed)})
+            except QueueError as exc:
+                self._json(503, {"error": str(exc)})
+            return
+        if path.startswith("/api/remediation/cases/"):
+            fingerprint = unquote(path.rsplit("/", 1)[-1])
+            if not re.fullmatch(r"hrc1_[a-f0-9]{64}", fingerprint):
+                self._json(400, {"error": "Invalid remediation case ID."})
+                return
+            try:
+                case = self.service.get_remediation_case(fingerprint)
+                self._json(200, {"case": case}) if case else self._json(404, {"error": "Remediation case not found."})
+            except QueueError as exc:
+                self._json(503, {"error": str(exc)})
+            return
         self._static(path)
 
     def do_HEAD(self) -> None:
@@ -64,6 +86,7 @@ class HoursReconHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
+            self._security_headers()
             self.end_headers()
             return
         relative = "index.html" if path in {"", "/"} else unquote(path.lstrip("/"))
@@ -74,9 +97,11 @@ class HoursReconHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", content_type + ("; charset=utf-8" if content_type.startswith("text/") else ""))
             self.send_header("Content-Length", str(candidate.stat().st_size))
             self.send_header("Cache-Control", "no-store")
+            self._security_headers()
             self.end_headers()
         else:
             self.send_response(404)
+            self._security_headers()
             self.end_headers()
 
     def do_POST(self) -> None:
@@ -86,19 +111,62 @@ class HoursReconHandler(BaseHTTPRequestHandler):
             self._json(403, {"error": "Cross-origin refresh requests are not allowed."})
             return
         path = urlparse(self.path).path
-        if path != "/api/refresh":
-            self._json(404, {"error": "Not found"})
+        if path == "/api/refresh":
+            try:
+                result = self.service.refresh()
+                self._json(200, result)
+            except Exception as exc:  # Keep last successful cache visible to the UI.
+                error_id = secrets.token_hex(4)
+                print(f"Refresh error [{error_id}] {type(exc).__name__}: {exc}")
+                self._json(500, {
+                    "error": f"Refresh failed (reference {error_id}). Check the server log for details.",
+                    "preserved_last_success": True,
+                })
             return
+        match = re.fullmatch(r"/api/remediation/gaps/(hrg1_[a-f0-9]{64})/actions", path)
+        if match:
+            if not secrets.compare_digest(self.headers.get("X-Hours-Recon-Action-Token", ""), self.service.action_token):
+                self._json(403, {"error": "Invalid remediation action token."})
+                return
+            try:
+                body = self._read_json_body()
+                action = str(body.pop("action", ""))
+                expected_version = int(body.pop("expected_version"))
+                gap = self.service.remediation_action(
+                    match.group(1), action=action, expected_version=expected_version, payload=body,
+                )
+                self._json(200, {"gap": gap})
+            except QueueConflict as exc:
+                self._json(409, {"error": str(exc)})
+            except (QueueValidationError, ValueError, TypeError, KeyError) as exc:
+                self._json(400, {"error": str(exc) or "Invalid remediation action."})
+            except QueueError as exc:
+                self._json(503, {"error": str(exc)})
+            return
+        self._json(404, {"error": "Not found"})
+
+    def _read_json_body(self, maximum_bytes: int = 16384) -> Dict[str, Any]:
         try:
-            result = self.service.refresh()
-            self._json(200, result)
-        except Exception as exc:  # Keep last successful cache visible to the UI.
-            error_id = secrets.token_hex(4)
-            print(f"Refresh error [{error_id}] {type(exc).__name__}: {exc}")
-            self._json(500, {
-                "error": f"Refresh failed (reference {error_id}). Check the server log for details.",
-                "preserved_last_success": True,
-            })
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise QueueValidationError("Invalid Content-Length header.") from exc
+        if length <= 0 or length > maximum_bytes:
+            raise QueueValidationError("JSON request body is missing or too large.")
+        previous_timeout = self.connection.gettimeout()
+        try:
+            self.connection.settimeout(5)
+            raw = self.rfile.read(length)
+        except socket.timeout as exc:
+            raise QueueValidationError("Timed out reading JSON request body.") from exc
+        finally:
+            self.connection.settimeout(previous_timeout)
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise QueueValidationError("Malformed JSON request body.") from exc
+        if not isinstance(body, dict):
+            raise QueueValidationError("JSON request body must be an object.")
+        return body
 
     def _static(self, request_path: str) -> None:
         relative = "index.html" if request_path in {"", "/"} else unquote(request_path.lstrip("/"))
@@ -115,6 +183,7 @@ class HoursReconHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type + ("; charset=utf-8" if content_type.startswith("text/") else ""))
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
+        self._security_headers()
         self.end_headers()
         self.wfile.write(payload)
 
@@ -124,8 +193,15 @@ class HoursReconHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
+        self._security_headers()
         self.end_headers()
         self.wfile.write(payload)
+
+    def _security_headers(self) -> None:
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Content-Security-Policy", "frame-ancestors 'none'; base-uri 'self'; object-src 'none'")
+        self.send_header("Referrer-Policy", "no-referrer")
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[{self.log_date_time_string()}] {fmt % args}")

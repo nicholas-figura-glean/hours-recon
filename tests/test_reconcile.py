@@ -165,6 +165,43 @@ class MatchingTests(unittest.TestCase):
         self.assertEqual("unmatched_project", exceptions[0]["type"])
         self.assertEqual("Northstar Analytics", exceptions[0]["suggested_account"])
 
+    def test_duplicate_customer_id_crosswalk_is_blocked(self):
+        accounts = [{"id": "A1", "name": "Acme"}, {"id": "A2", "name": "Other"}]
+        aliases = {"aliases": {}, "rocketlane_customer_ids": {"A1": ["C1"], "A2": ["C1"]}}
+        mapping, exceptions = match_projects(accounts, [{"id": "P1", "customer_id": "C1", "customer_name": "Acme"}], aliases)
+        self.assertEqual({}, mapping)
+        self.assertEqual("customer_id_collision", exceptions[0]["type"])
+
+    def test_name_keyed_customer_crosswalk_with_duplicate_account_names_is_blocked(self):
+        accounts = [{"id": "A1", "name": "Acme"}, {"id": "A2", "name": "Acme"}]
+        aliases = {"aliases": {}, "rocketlane_customer_ids": {"Acme": ["C1"]}}
+        mapping, exceptions = match_projects(accounts, [{"id": "P1", "customer_id": "C1", "customer_name": "Acme"}], aliases)
+        self.assertEqual({}, mapping)
+        self.assertEqual("customer_id_collision", exceptions[0]["type"])
+
+    def test_missing_and_conflicting_project_ids_are_blocked(self):
+        accounts = [{"id": "A1", "name": "Acme"}, {"id": "A2", "name": "Other"}]
+        duplicate = {"id": "P2", "salesforce_account_id": "A1", "customer_name": "Acme"}
+        projects = [
+            {"name": "Missing", "customer_name": "Acme"},
+            {"id": " None ", "name": "Sentinel", "customer_name": "Acme"},
+            {"id": "P1", "salesforce_account_id": "A1", "customer_name": "Acme"},
+            {"id": "P1", "salesforce_account_id": "A2", "customer_name": "Other"},
+            duplicate, dict(duplicate),
+        ]
+        mapping, exceptions = match_projects(accounts, projects, {"aliases": {}})
+        self.assertEqual({}, mapping)
+        self.assertEqual({"invalid_project_id", "project_id_collision"}, {item["type"] for item in exceptions})
+        self.assertEqual(2, sum(item["type"] == "project_id_collision" for item in exceptions))
+        self.assertEqual(2, sum(item["type"] == "invalid_project_id" for item in exceptions))
+
+    def test_explicit_out_of_scope_account_id_blocks_name_fallback(self):
+        accounts = [{"id": "A1", "name": "Acme"}]
+        project = {"id": "P1", "salesforce_account_id": "A2", "customer_name": "Acme"}
+        mapping, exceptions = match_projects(accounts, [project], {"aliases": {}})
+        self.assertEqual({}, mapping)
+        self.assertEqual("explicit_account_out_of_scope", exceptions[0]["type"])
+
 
 class ReconciliationTests(unittest.TestCase):
     def test_fifo_by_expiration_and_conservation(self):

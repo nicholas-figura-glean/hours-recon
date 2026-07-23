@@ -188,7 +188,7 @@ class SalesforceClient:
         for chunk in _chunks(opportunity_ids):
             ids = ",".join(_soql_string(value) for value in chunk)
             rich_query = (
-                "SELECT Id, OpportunityId, Name, Quantity, UnitPrice, TotalPrice, Product2Id, "
+                "SELECT Id, OpportunityId, Name, Quantity, UnitPrice, TotalPrice, Product2Id, PricebookEntryId, "
                 "Product2.Name, Product2.ProductCode, PricebookEntry.UnitPrice "
                 f"FROM OpportunityLineItem WHERE OpportunityId IN ({ids})"
             )
@@ -207,8 +207,11 @@ class SalesforceClient:
                 pricebook = item.get("PricebookEntry") or {}
                 opportunity["line_items"].append({
                     "id": item.get("Id"),
+                    "source": "opportunity_line_item",
                     "name": product.get("Name") or item.get("Name"),
+                    "product_id": item.get("Product2Id"),
                     "product_code": product.get("ProductCode"),
+                    "pricebook_entry_id": item.get("PricebookEntryId"),
                     "quantity": item.get("Quantity") or 1,
                     "unit_price": item.get("UnitPrice"),
                     "list_price": pricebook.get("UnitPrice"),

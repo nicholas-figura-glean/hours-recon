@@ -74,8 +74,9 @@ class RocketlaneClient:
     @staticmethod
     def _normalize_project(item: Mapping[str, Any]) -> Dict[str, Any]:
         customer = item.get("customer") or {}
+        project_id = item.get("projectId")
         return {
-            "id": str(item.get("projectId")),
+            "id": str(project_id).strip() if project_id not in (None, "") else None,
             "name": item.get("projectName"),
             "customer_id": str(customer.get("companyId")) if customer.get("companyId") is not None else None,
             "customer_name": customer.get("companyName"),

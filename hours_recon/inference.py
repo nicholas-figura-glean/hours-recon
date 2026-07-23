@@ -26,6 +26,24 @@ def _override(config: Mapping[str, Any], kind: str, identifier: Any) -> Optional
     return _decimal(value) if value is not None else None
 
 
+def _product_code_mapping(line_item: Mapping[str, Any], config: Mapping[str, Any]) -> Optional[Tuple[Decimal, str, str, str]]:
+    product_code = str(line_item.get("product_code") or "")
+    configured = config.get("product_codes", {}).get(product_code)
+    if configured is None:
+        return None
+    if isinstance(configured, Mapping):
+        hours = _decimal(configured.get("hours_per_unit", configured.get("hours")))
+        family = str(configured.get("family") or "outcome")
+        tier = str(configured.get("tier") or product_code)
+    else:
+        hours = _decimal(configured)
+        family = "outcome"
+        tier = product_code
+    if hours <= 0:
+        return None
+    return hours, family, tier, "product_code"
+
+
 def infer_text(
     text: str,
     *,
@@ -75,29 +93,42 @@ def infer_packages(opportunity: Mapping[str, Any], config: Mapping[str, Any]) ->
 
     opportunity_override = _override(config, "opportunities", opportunity_id)
     if opportunity_override is not None:
-        packages.append(_package(opportunity, None, opportunity_override, "custom", "Override", "opportunity_override", close_date, expiration))
+        packages.append(_package(
+            opportunity, None, opportunity_override, "custom", "Override", "opportunity_override",
+            close_date, expiration, mapping_key=f"opportunity:{opportunity_id}",
+        ))
         return packages, exceptions
 
     recognized_line_items = 0
     pending_exceptions: List[Dict[str, Any]] = []
     for line_item in opportunity.get("line_items", []):
         line_id = str(line_item.get("id", ""))
-        override = _override(config, "line_items", line_id)
-        if override is None:
-            product_override = config.get("overrides", {}).get("product_names", {}).get(str(line_item.get("name", "")))
-            override = _decimal(product_override) if product_override is not None else None
-        if override is not None:
-            result = (override, "custom", "Override", "line_item_override")
+        mapping_key: Optional[str] = None
+        result = _product_code_mapping(line_item, config)
+        if result is not None:
+            mapping_key = str(line_item.get("product_code") or "")
         else:
-            # Infer each line from its own product evidence only. Appending the
-            # opportunity name here can multiply one opportunity-level package
-            # hint across unrelated subscription/support lines.
-            result = infer_text(
-                " ".join(filter(None, [str(line_item.get("name", "")), str(line_item.get("product_code", ""))])),
-                unit_price=line_item.get("unit_price"),
-                list_price=line_item.get("list_price"),
-                config=config,
-            )
+            override = _override(config, "line_items", line_id)
+            if override is not None:
+                mapping_key = f"line_item:{line_id}"
+            else:
+                product_name = str(line_item.get("name", ""))
+                product_override = config.get("overrides", {}).get("product_names", {}).get(product_name)
+                override = _decimal(product_override) if product_override is not None else None
+                if override is not None:
+                    mapping_key = f"product_name:{product_name}"
+            if override is not None:
+                result = (override, "custom", "Override", "line_item_override")
+            else:
+                # Infer each line from its own product evidence only. Appending the
+                # opportunity name here can multiply one opportunity-level package
+                # hint across unrelated subscription/support lines.
+                result = infer_text(
+                    " ".join(filter(None, [str(line_item.get("name", "")), str(line_item.get("product_code", ""))])),
+                    unit_price=line_item.get("unit_price"),
+                    list_price=line_item.get("list_price"),
+                    config=config,
+                )
         if result is None:
             continue
         recognized_line_items += 1
@@ -107,7 +138,10 @@ def infer_packages(opportunity: Mapping[str, Any], config: Mapping[str, Any]) ->
         if source == "unresolved_custom" or sold <= 0:
             pending_exceptions.append(_package_exception(opportunity, line_item, "Custom package needs an hours override."))
             continue
-        packages.append(_package(opportunity, line_item, sold, family, tier, source, close_date, expiration, quantity))
+        packages.append(_package(
+            opportunity, line_item, sold, family, tier, source, close_date, expiration, quantity,
+            mapping_key=mapping_key,
+        ))
 
     # Opportunity names are a fallback only. They cover legacy records without
     # products and named custom packages such as "Custom 300 PS hours". If any
@@ -127,6 +161,34 @@ def infer_packages(opportunity: Mapping[str, Any], config: Mapping[str, Any]) ->
     return packages, exceptions
 
 
+def _service_period(
+    opportunity: Mapping[str, Any],
+    line_item: Optional[Mapping[str, Any]],
+    close_date: Any,
+    default_expiration: Any,
+) -> Tuple[Any, Any, str]:
+    line_start = line_item.get("service_start_date") if line_item else None
+    line_end = line_item.get("service_end_date") if line_item else None
+    opportunity_start = opportunity.get("service_start_date")
+    opportunity_end = opportunity.get("service_end_date")
+    start_raw = line_start or opportunity_start
+    end_raw = line_end or opportunity_end
+    if not start_raw and not end_raw:
+        return close_date, default_expiration, "close_date_plus_one_year"
+    try:
+        start = parse_date(start_raw) if start_raw else close_date
+        end = parse_date(end_raw) if end_raw else add_one_year(start)
+    except (TypeError, ValueError):
+        return close_date, default_expiration, "invalid_service_period"
+    if end < start:
+        return close_date, default_expiration, "invalid_service_period"
+    if start_raw and end_raw:
+        source = "line_item_explicit" if line_start and line_end else "opportunity_explicit"
+    else:
+        source = "partial_explicit"
+    return start, end, source
+
+
 def _package(
     opportunity: Mapping[str, Any],
     line_item: Optional[Mapping[str, Any]],
@@ -137,8 +199,11 @@ def _package(
     close_date: Any,
     expiration: Any,
     quantity: Decimal = Decimal("1"),
+    *,
+    mapping_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     line_id = str(line_item.get("id")) if line_item else "opportunity"
+    service_start, service_end, service_period_source = _service_period(opportunity, line_item, close_date, expiration)
     return {
         "id": f"{opportunity['id']}:{line_id}",
         "opportunity_id": str(opportunity["id"]),
@@ -147,13 +212,20 @@ def _package(
         "line_item_name": line_item.get("name") if line_item else None,
         "line_item_source": str(line_item.get("source") or "opportunity_line_item") if line_item else None,
         "quote_id": str(line_item.get("quote_id")) if line_item and line_item.get("quote_id") else None,
+        "product_id": str(line_item.get("product_id")) if line_item and line_item.get("product_id") else None,
+        "product_code": str(line_item.get("product_code")) if line_item and line_item.get("product_code") else None,
+        "pricebook_entry_id": str(line_item.get("pricebook_entry_id")) if line_item and line_item.get("pricebook_entry_id") else None,
         "family": family,
         "tier": tier,
         "quantity": float(quantity),
         "sold_hours": float(sold),
         "close_date": close_date.isoformat(),
+        "service_start_date": service_start.isoformat(),
+        "service_end_date": service_end.isoformat(),
         "expiration_date": expiration.isoformat(),
+        "service_period_source": service_period_source,
         "inference_source": source,
+        "mapping_key": mapping_key,
     }
 
 

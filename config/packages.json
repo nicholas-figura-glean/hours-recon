@@ -14,6 +14,16 @@
     "150000": 300
   },
   "growth_hours": [20, 50, 100, 300],
+  "product_codes": {
+    "Glean-Outcomes-Packages-Starter": {"hours_per_unit": 20, "family": "outcome", "tier": "Starter"},
+    "Glean-Outcomes-Packages-Standard": {"hours_per_unit": 50, "family": "outcome", "tier": "Standard"},
+    "Glean-Outcomes-Packages-Select": {"hours_per_unit": 100, "family": "outcome", "tier": "Select"},
+    "Glean-Outcomes-Packages-Advanced": {"hours_per_unit": 200, "family": "outcome", "tier": "Advanced"},
+    "Glean-Outcomes-Packages-Strategic": {"hours_per_unit": 300, "family": "outcome", "tier": "Strategic"},
+    "Launch-Package-Quickstart-Starter": {"hours_per_unit": 20, "family": "outcome", "tier": "Starter"},
+    "Launch-Package-Quickstart-Standard": {"hours_per_unit": 50, "family": "outcome", "tier": "Standard"},
+    "Retained-Solution-Architect-Hours": {"hours_per_unit": 1, "family": "custom", "tier": "Retained Solution Architect Hours"}
+  },
   "overrides": {
     "opportunities": {},
     "line_items": {},

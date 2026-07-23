@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
   <title>Hours Recon</title>
   <style>
     :root {
@@ -77,9 +78,14 @@
     .button { min-height: 40px; border: 1px solid var(--artifact-accent); border-radius: 8px; padding: 8px 14px; color: #fff; background: #0b6b62; font-weight: 700; }
     @media (prefers-color-scheme: dark) { .button { color: #10201d; background: var(--artifact-accent); } }
     .button.secondary { color: var(--artifact-text); background: var(--artifact-surface); border-color: var(--artifact-border); }
+    .button.tiny { min-height: 30px; padding: 4px 9px; font-size: 12px; }
     .pill { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--artifact-border); background: var(--artifact-surface); color: var(--artifact-muted); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
     .pill.live, .pill.mcp { color: var(--artifact-healthy); background: var(--artifact-healthy-soft); border-color: color-mix(in srgb, var(--artifact-healthy) 35%, var(--artifact-border)); }
     .pill.demo { color: var(--artifact-warning); background: var(--artifact-warning-soft); border-color: color-mix(in srgb, var(--artifact-warning) 35%, var(--artifact-border)); }
+    .tier-badge { display: inline-flex; align-items: center; min-height: 23px; padding: 3px 7px; border-radius: 6px; font-size: 11px; font-weight: 780; letter-spacing: .035em; white-space: nowrap; }
+    .tier-badge.t1, .tier-badge.t2 { color: var(--artifact-healthy); background: var(--artifact-healthy-soft); }
+    .tier-badge.t3 { color: var(--artifact-warning); background: var(--artifact-warning-soft); }
+    .tier-badge.t4 { color: var(--artifact-danger); background: var(--artifact-danger-soft); }
     .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
     .notice, .error { display: none; border: 1px solid var(--artifact-border); border-radius: var(--artifact-radius); padding: 12px 14px; margin-bottom: var(--artifact-space-4); }
     .notice.show, .error.show { display: flex; gap: 10px; align-items: flex-start; }
@@ -142,14 +148,40 @@
     .detail-kpis strong { color: var(--artifact-text); font-variant-numeric: tabular-nums; }
     .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--artifact-space-4); padding: var(--artifact-space-4); }
     .subpanel { border: 1px solid var(--artifact-border); border-radius: 8px; overflow: hidden; }
-    .subpanel.projects { grid-column: 1 / -1; }
+    .subpanel.projects, .subpanel.governance { grid-column: 1 / -1; }
     .subpanel h3 { padding: 12px; background: var(--artifact-surface-subtle); border-bottom: 1px solid var(--artifact-border); }
+    .evidence-summary { display: grid; grid-template-columns: repeat(5, minmax(150px, 1fr)); gap: 1px; background: var(--artifact-border); }
+    .evidence-dimension { padding: 12px; background: var(--artifact-surface); display: grid; align-content: start; gap: 7px; }
+    .evidence-dimension p { color: var(--artifact-muted); font-size: 12px; }
+    .evidence-dimension strong { font-size: 12px; }
+    .evidence-chains { display: grid; gap: 8px; padding: 12px; border-top: 1px solid var(--artifact-border); }
+    .evidence-chain { border: 1px solid var(--artifact-border); border-radius: 7px; background: var(--artifact-surface); }
+    .evidence-chain summary { cursor: pointer; padding: 9px 11px; font-weight: 700; }
+    .evidence-steps { margin: 0; padding: 0 12px 12px 34px; color: var(--artifact-muted); }
+    .evidence-steps code { color: var(--artifact-text); font-family: var(--artifact-mono); font-size: 11px; overflow-wrap: anywhere; }
     .empty { padding: var(--artifact-space-5); color: var(--artifact-muted); text-align: center; }
     .exception-list { display: grid; gap: 1px; background: var(--artifact-border); }
     .exception { background: var(--artifact-surface); padding: 13px 15px; display: grid; grid-template-columns: 150px minmax(180px, 1fr) 2fr; gap: var(--artifact-space-3); }
     .exception-type { color: var(--artifact-warning); font-family: var(--artifact-mono); font-size: 12px; }
     .exception strong { font-weight: 700; }
     .exception p { color: var(--artifact-muted); }
+    .case-list { display: grid; gap: 10px; padding: 12px; }
+    .remediation-case { border: 1px solid var(--artifact-border); border-radius: 8px; background: var(--artifact-surface); }
+    .remediation-case summary { cursor: pointer; list-style: none; padding: 12px; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+    .remediation-case summary::-webkit-details-marker { display: none; }
+    .case-priority { display: inline-flex; min-width: 30px; justify-content: center; border-radius: 5px; padding: 3px 6px; font-size: 11px; font-weight: 800; }
+    .case-priority.p0 { color: var(--artifact-danger); background: var(--artifact-danger-soft); }
+    .case-priority.p1 { color: var(--artifact-warning); background: var(--artifact-warning-soft); }
+    .case-priority.p2 { color: var(--artifact-info); background: var(--artifact-info-soft); }
+    .case-id { margin-left: auto; color: var(--artifact-muted); font-family: var(--artifact-mono); font-size: 11px; }
+    .case-body { border-top: 1px solid var(--artifact-border); padding: 12px; display: grid; gap: 12px; }
+    .gap-list { display: grid; gap: 8px; }
+    .gap-item { padding: 10px; border: 1px solid var(--artifact-border); border-radius: 7px; display: grid; gap: 7px; }
+    .gap-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .gap-head strong { margin-right: auto; }
+    .gap-item p { color: var(--artifact-muted); font-size: 12px; }
+    .gap-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+    .queue-meta { display: flex; gap: 12px; flex-wrap: wrap; color: var(--artifact-muted); font-size: 12px; }
     .footer { padding: var(--artifact-space-5) 0; color: var(--artifact-muted); font-size: 12px; text-align: center; }
     .loading { animation: pulse 1.2s ease-in-out infinite; }
     @keyframes pulse { 50% { opacity: .55; } }
@@ -159,6 +191,7 @@
       .overview-grid { grid-template-columns: 1fr; }
       .controls { grid-template-columns: 1fr 1fr; }
       .detail-grid { grid-template-columns: 1fr; }
+      .evidence-summary { grid-template-columns: 1fr 1fr; }
     }
     @media (max-width: 680px) {
       .shell { padding: var(--artifact-space-4); }
@@ -170,6 +203,8 @@
       .risk-row { grid-template-columns: 68px minmax(60px, 1fr) 84px; }
       .exception { grid-template-columns: 1fr; }
       .detail-header { flex-direction: column; }
+      .evidence-summary { grid-template-columns: 1fr; }
+      .case-id { margin-left: 0; width: 100%; }
     }
   </style>
 </head>
@@ -227,8 +262,16 @@
     </section>
 
     <section class="section">
-      <div class="section-title"><div><h2>Data quality review</h2><p class="source-note">Matching, package, correction, and entitlement-timing warnings</p></div><span class="pill" id="exceptionCount">0 items</span></div>
-      <div class="panel"><div class="exception-list" id="exceptions"></div><div class="empty" id="exceptionEmpty" hidden>No unresolved data-quality items.</div></div>
+      <div class="section-title"><div><h2>Remediation queue</h2><p class="source-note">Tier 3/4 evidence gaps launch a private, deduplicated account workflow</p></div><span class="pill" id="remediationCount">0 active cases</span></div>
+      <div class="panel">
+        <div class="case-list" id="remediationCases"></div>
+        <div class="empty" id="remediationEmpty" hidden>No active remediation cases.</div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-title"><div><h2>Source diagnostics</h2><p class="source-note">Matching, package, correction, and entitlement-timing warnings from reconciliation</p></div><span class="pill" id="exceptionCount">0 items</span></div>
+      <div class="panel"><div class="exception-list" id="exceptions"></div><div class="empty" id="exceptionEmpty" hidden>No unresolved source diagnostics.</div></div>
     </section>
 
     <footer class="footer" id="footer"></footer>
@@ -242,6 +285,8 @@
     const fmtDate = value => value ? new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${value}T00:00:00Z`)) : '—';
     const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
     const titleCase = value => String(value || '').replaceAll('_', ' ').replace(/\b\w/g, letter => letter.toUpperCase());
+    const tierClass = value => ({ T1: 't1', T2: 't2', T3: 't3', T4: 't4' })[String(value)] || 't4';
+    const tierBadge = (tier, status) => `<span class="tier-badge ${tierClass(tier)}">${escapeHtml(tier || 'T4')} · ${escapeHtml(titleCase(status || 'provisional'))}</span>`;
 
     async function loadData() {
       setError('');
@@ -289,28 +334,36 @@
       $('#subtitle').textContent = `${requester.name || requester.email || 'Requesting AIOM'} · Salesforce entitlements reconciled against billable Rocketlane time.`;
       $('#asOf').textContent = `As of ${fmtDate(meta.as_of)}`;
       const notice = $('#notice');
-      const noticeText = meta.notice || (mode === 'demo' ? 'Demo mode is active. Configure .env and switch HOURS_RECON_MODE to live before using these numbers operationally.' : '');
+      const sourceNotice = meta.notice || (mode === 'demo' ? 'Demo mode is active. Configure .env and switch HOURS_RECON_MODE to live before using these numbers operationally.' : '');
+      const governanceNotice = meta.governance_mode === 'observe_only' ? 'Governance is observe-only: reported totals are unchanged while Tier 3/4 evidence launches local remediation cases.' : '';
+      const noticeText = [sourceNotice, governanceNotice].filter(Boolean).join(' ');
       notice.textContent = noticeText;
       notice.classList.toggle('show', Boolean(noticeText));
       renderMetrics(metrics);
       renderRiskBars();
       renderWeekly(metrics);
       renderAccounts();
+      renderRemediation();
       renderExceptions();
       const refreshed = meta.refreshed_at ? new Date(meta.refreshed_at).toLocaleString() : 'not yet refreshed';
       $('#footer').textContent = `${meta.allocation_method} · ${meta.expiration_rule} · Last successful refresh: ${refreshed}`;
     }
 
     function renderMetrics(metrics) {
+      const governanceMetrics = state.data.governance?.metrics || {};
+      const note = (field, fallback) => {
+        const split = governanceMetrics[field];
+        return split ? `Governed ${fmt(split.governed)}h · Provisional ${fmt(split.provisional)}h` : fallback;
+      };
       const cards = [
-        ['Hours remaining', metrics.remaining_hours, 'Usable, unexpired entitlement', true],
-        ['Hours at risk', metrics.at_risk_hours, 'Expire within 90 days', false],
-        ['Expired unused', metrics.expired_unused_hours, 'Past expiration with balance', false],
-        ['Hours sold', metrics.sold_hours, `${metrics.account_count} assigned accounts`, false],
-        ['Hours billed', metrics.billed_hours, 'All billable contributors', false],
-        ['Overage', metrics.overage_hours, 'Billable hours beyond eligible sold capacity', false],
+        ['Hours remaining', metrics.remaining_hours, note('remaining_hours', 'Usable, unexpired entitlement'), true],
+        ['Hours at risk', metrics.at_risk_hours, note('at_risk_hours', 'Expire within 90 days'), false],
+        ['Expired unused', metrics.expired_unused_hours, note('expired_unused_hours', 'Past expiration with balance'), false],
+        ['Hours sold', metrics.sold_hours, note('sold_hours', `${metrics.account_count} assigned accounts`), false],
+        ['Hours billed', metrics.billed_hours, note('billed_hours', 'All billable contributors'), false],
+        ['Overage', metrics.overage_hours, note('overage_hours', 'Billable hours beyond eligible sold capacity'), false],
       ];
-      $('#metrics').innerHTML = cards.map(([label, value, note, primary]) => `<article class="metric ${primary ? 'primary' : ''}"><span class="metric-label">${label}</span><strong class="metric-value">${fmt(value)}</strong><span class="metric-note">${note}</span></article>`).join('');
+      $('#metrics').innerHTML = cards.map(([label, value, metricNote, primary]) => `<article class="metric ${primary ? 'primary' : ''}"><span class="metric-label">${label}</span><strong class="metric-value">${fmt(value)}</strong><span class="metric-note">${metricNote}</span></article>`).join('');
     }
 
     function renderRiskBars() {
@@ -353,7 +406,7 @@
         const weekly = account.weekly;
         const projects = `${account.project_count} project${account.project_count === 1 ? '' : 's'} · ${account.entry_count} entries`;
         return `<tr data-account-id="${escapeHtml(account.id)}" tabindex="0" class="${state.selectedId === account.id ? 'selected' : ''}">
-          <td class="account-name">${escapeHtml(account.name)}<span class="account-meta">${projects}</span></td>
+          <td class="account-name">${escapeHtml(account.name)}<span class="account-meta">${projects}</span><span class="account-meta">${account.governance ? tierBadge(account.governance.overall_tier, account.governance.status) : ''}${account.remediation?.active_gap_count ? ` · ${fmt(account.remediation.active_gap_count)} open gaps` : ''}</span></td>
           <td><span class="risk-badge ${account.risk}">${titleCase(account.risk)}</span></td>
           <td class="number">${fmt(account.sold_hours)}</td><td class="number">${fmt(account.billed_hours)}</td><td class="number">${fmt(account.remaining_hours)}</td><td class="number">${fmt(account.at_risk_hours)}</td><td class="number">${fmt(account.expired_unused_hours)}</td>
           <td><div class="activity-stack"><span class="activity-badge ${weekly.account_active_current ? 'active' : 'missing'}">Account ${weekly.account_active_current ? 'active' : 'gap'}</span><span class="activity-badge ${weekly.aiom_active_current ? 'active' : 'missing'}">AIOM ${weekly.aiom_active_current ? 'active' : 'gap'}</span></div></td>
@@ -378,6 +431,7 @@
       const detail = $('#detail');
       if (!account) { detail.classList.remove('show'); return; }
       const entries = account.entries || [];
+      const governance = account.governance || null;
       const projectStats = entries.reduce((stats, entry) => {
         const projectId = String(entry.project_id ?? '');
         const current = stats[projectId] || { count: 0, hours: 0 };
@@ -389,18 +443,139 @@
       const projectRows = (account.projects || []).map(project => {
         const stats = projectStats[String(project.id)] || { count: 0, hours: 0 };
         const status = [project.status, project.archived ? 'Archived' : ''].filter(Boolean).join(' · ') || '—';
-        return `<tr><td>${escapeHtml(project.name || 'Unnamed project')}<span class="account-meta">Rocketlane #${escapeHtml(project.id)}</span></td><td>${escapeHtml(project.customer_name || '—')}</td><td>${escapeHtml(status)}</td><td>${fmtDate(project.start_date)}</td><td>${fmtDate(project.due_date)}</td><td class="number">${fmt(stats.count)}</td><td class="number">${fmt(stats.hours)}</td></tr>`;
+        const matchBasis = project.match_evidence?.basis || 'legacy_name_match';
+        return `<tr><td>${escapeHtml(project.name || 'Unnamed project')}<span class="account-meta">Rocketlane #${escapeHtml(project.id)}</span></td><td>${escapeHtml(project.customer_name || '—')}<span class="account-meta">${escapeHtml(titleCase(matchBasis))}</span></td><td>${escapeHtml(status)}</td><td>${fmtDate(project.start_date)}</td><td>${fmtDate(project.due_date)}</td><td class="number">${fmt(stats.count)}</td><td class="number">${fmt(stats.hours)}</td></tr>`;
       }).join('');
-      const packageRows = (account.packages || []).map(pkg => `<tr><td>${escapeHtml(pkg.opportunity_name)}<span class="account-meta">${escapeHtml(pkg.tier)} · ${titleCase(pkg.inference_source)}${pkg.line_item_source === 'approved_quote' ? ' · Approved quote' : pkg.line_item_source === 'primary_quote' ? ' · Primary quote' : ''}</span></td><td>${fmtDate(pkg.close_date)}</td><td>${fmtDate(pkg.expiration_date)}<span class="account-meta">${pkg.days_to_expiration} days</span></td><td class="number">${fmt(pkg.sold_hours)}</td><td class="number">${fmt(pkg.consumed_hours)}</td><td class="number">${fmt(pkg.remaining_hours)}</td><td><span class="risk-badge ${pkg.risk}">${titleCase(pkg.risk)}</span></td></tr>`).join('');
-      const entryRows = [...entries].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 100).map(entry => `<tr><td>${fmtDate(entry.date)}${entry.pre_entitlement_hours ? `<span class="account-meta">Pre-entitlement: ${fmt(entry.pre_entitlement_hours)}h</span>` : ''}</td><td>${escapeHtml(entry.project_name || (account.projects || []).find(project => String(project.id) === String(entry.project_id))?.name || 'Rocketlane project')}</td><td>${escapeHtml(entry.user_name || entry.user_email || 'Unknown user')}<span class="account-meta">${escapeHtml(entry.approval_status || '')}</span></td><td class="number">${fmt(entry.hours)}</td></tr>`).join('');
-      detail.innerHTML = `<div class="detail-header"><div class="detail-title"><h2>${escapeHtml(account.name)}</h2><div class="detail-kpis"><span><strong>${fmt(account.remaining_hours)}</strong> remaining</span><span><strong>${fmt(account.at_risk_hours)}</strong> at risk</span><span><strong>${fmt(account.expired_unused_hours)}</strong> expired</span><span><strong>${fmt(account.overage_hours)}</strong> overage</span>${account.pre_entitlement_hours ? `<span><strong>${fmt(account.pre_entitlement_hours)}</strong> pre-entitlement</span>` : ''}</div></div><button class="button secondary" id="closeDetail" type="button">Close detail</button></div>
+      const packageRows = (account.packages || []).map(pkg => {
+        const packageGovernance = pkg.governance || {};
+        const sourceLabel = pkg.line_item_source === 'approved_quote' ? 'Approved quote' : pkg.line_item_source === 'primary_quote' ? 'Primary quote' : titleCase(pkg.line_item_source || 'Opportunity fallback');
+        const serviceEnd = pkg.service_end_date || pkg.expiration_date;
+        const allocationPeriodNote = serviceEnd !== pkg.expiration_date ? `Observe-only allocation still uses ${fmtDate(pkg.expiration_date)}` : `${pkg.days_to_expiration} days`;
+        return `<tr><td>${escapeHtml(pkg.opportunity_name)}<span class="account-meta">${escapeHtml(pkg.tier)} · ${escapeHtml(sourceLabel)}</span><span class="account-meta">${escapeHtml(pkg.product_code || pkg.line_item_name || '')}</span></td><td>${fmtDate(pkg.service_start_date || pkg.close_date)}<span class="account-meta">${escapeHtml(titleCase(pkg.service_period_source || 'close_date_plus_one_year'))}</span></td><td>${fmtDate(serviceEnd)}<span class="account-meta">${escapeHtml(allocationPeriodNote)}</span></td><td class="number">${fmt(pkg.sold_hours)}</td><td class="number">${fmt(pkg.consumed_hours)}</td><td class="number">${fmt(pkg.remaining_hours)}</td><td>${pkg.governance ? tierBadge(packageGovernance.overall_tier, packageGovernance.status) : '—'}<span class="account-meta">${escapeHtml(titleCase(pkg.inference_source))}</span></td><td><span class="risk-badge ${pkg.risk}">${titleCase(pkg.risk)}</span></td></tr>`;
+      }).join('');
+      const entryRows = [...entries].sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 100).map(entry => `<tr><td>${fmtDate(entry.date)}${entry.pre_entitlement_hours ? `<span class="account-meta">Pre-entitlement: ${fmt(entry.pre_entitlement_hours)}h</span>` : ''}</td><td>${escapeHtml(entry.project_name || (account.projects || []).find(project => String(project.id) === String(entry.project_id))?.name || 'Rocketlane project')}<span class="account-meta">${escapeHtml(entry.activity_name || 'Activity missing')} · ${escapeHtml(entry.category || 'Category missing')}</span></td><td>${escapeHtml(entry.user_name || entry.user_email || 'Unknown user')}<span class="account-meta">${escapeHtml(entry.approval_status || 'Approval unobservable')}</span></td><td class="number">${fmt(entry.hours)}</td></tr>`).join('');
+      const dimensionCards = governance ? Object.entries(governance.dimensions || {}).map(([name, item]) => `<article class="evidence-dimension">${tierBadge(item.tier, Number(item.rank) <= 2 ? 'governed' : 'provisional')}<strong>${escapeHtml(titleCase(name))}</strong><p>${escapeHtml(item.summary)}</p><p><strong>To improve:</strong> ${escapeHtml(item.recommended_action)}</p></article>`).join('') : '';
+      const evidenceChains = (account.packages || []).map(pkg => {
+        const chain = pkg.governance?.evidence_chain || [];
+        const steps = chain.map(step => `<li><strong>${escapeHtml(step.step)}:</strong> ${escapeHtml(step.label || '—')}${step.id ? ` · <code>${escapeHtml(step.id)}</code>` : ''}</li>`).join('');
+        return `<details class="evidence-chain"><summary>${escapeHtml(pkg.opportunity_name || pkg.id)} · ${fmt(pkg.sold_hours)}h</summary><ol class="evidence-steps">${steps}</ol></details>`;
+      }).join('');
+      const remediation = account.remediation;
+      const governanceHeader = governance ? `${tierBadge(governance.overall_tier, governance.status)}${remediation ? ` <span class="account-meta">${escapeHtml(remediation.priority || '')} remediation · ${fmt(remediation.active_gap_count)} active gaps · due ${fmtDate(remediation.due_on)}</span>` : ''}` : '';
+      detail.innerHTML = `<div class="detail-header"><div class="detail-title"><h2>${escapeHtml(account.name)}</h2><div>${governanceHeader}</div><div class="detail-kpis"><span><strong>${fmt(account.remaining_hours)}</strong> remaining</span><span><strong>${fmt(account.at_risk_hours)}</strong> at risk</span><span><strong>${fmt(account.expired_unused_hours)}</strong> expired</span><span><strong>${fmt(account.overage_hours)}</strong> overage</span>${account.pre_entitlement_hours ? `<span><strong>${fmt(account.pre_entitlement_hours)}</strong> pre-entitlement</span>` : ''}</div></div><button class="button secondary" id="closeDetail" type="button">Close detail</button></div>
         <div class="detail-grid">
-          <section class="subpanel projects"><h3>Matched Rocketlane projects · ${fmt(account.project_count)}</h3>${projectRows ? `<div class="table-wrap"><table><thead><tr><th>Project</th><th>Customer</th><th>Status</th><th>Start</th><th>Due</th><th class="number">Entries</th><th class="number">Billed</th></tr></thead><tbody>${projectRows}</tbody></table></div>` : '<div class="empty">No matched Rocketlane projects.</div>'}</section>
-          <section class="subpanel"><h3>Entitlement tranches · FIFO by expiration</h3>${packageRows ? `<div class="table-wrap"><table><thead><tr><th>Package</th><th>Closed</th><th>Expires</th><th class="number">Sold</th><th class="number">Used</th><th class="number">Left</th><th>Risk</th></tr></thead><tbody>${packageRows}</tbody></table></div>` : '<div class="empty">No recognized sold-hours package.</div>'}</section>
-          <section class="subpanel"><h3>Billable Rocketlane entries · latest 100</h3>${entryRows ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Project</th><th>Contributor</th><th class="number">Hours</th></tr></thead><tbody>${entryRows}</tbody></table></div>` : '<div class="empty">No matched billable entries.</div>'}</section>
+          <section class="subpanel governance"><h3>Governance evidence · weakest dimension controls the account tier</h3>${dimensionCards ? `<div class="evidence-summary">${dimensionCards}</div>${evidenceChains ? `<div class="evidence-chains"><strong>Entitlement evidence chains</strong>${evidenceChains}</div>` : ''}` : '<div class="empty">Governance evidence is pending a refreshed report.</div>'}</section>
+          <section class="subpanel projects"><h3>Matched Rocketlane projects · ${fmt(account.project_count)}</h3>${projectRows ? `<div class="table-wrap"><table><thead><tr><th>Project</th><th>Customer / match basis</th><th>Status</th><th>Start</th><th>Due</th><th class="number">Entries</th><th class="number">Billed</th></tr></thead><tbody>${projectRows}</tbody></table></div>` : '<div class="empty">No matched Rocketlane projects.</div>'}</section>
+          <section class="subpanel"><h3>Entitlement tranches · FIFO by expiration</h3>${packageRows ? `<div class="table-wrap"><table><thead><tr><th>Package</th><th>Service start</th><th>Expires</th><th class="number">Sold</th><th class="number">Used</th><th class="number">Left</th><th>Evidence</th><th>Risk</th></tr></thead><tbody>${packageRows}</tbody></table></div>` : '<div class="empty">No recognized sold-hours package.</div>'}</section>
+          <section class="subpanel"><h3>Billable Rocketlane entries · latest 100</h3>${entryRows ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Project / work</th><th>Contributor / approval</th><th class="number">Hours</th></tr></thead><tbody>${entryRows}</tbody></table></div>` : '<div class="empty">No matched billable entries.</div>'}</section>
         </div>`;
       detail.classList.add('show');
       $('#closeDetail').addEventListener('click', () => { state.selectedId = null; detail.classList.remove('show'); renderAccounts(); });
+    }
+
+    function remediationActionButtons(gap) {
+      const base = `data-gap-id="${escapeHtml(gap.fingerprint)}" data-gap-version="${Number(gap.version)}"`;
+      const active = ['open', 'acknowledged', 'in_progress', 'pending_validation', 'snoozed'].includes(gap.status);
+      let primary = '';
+      if (gap.status === 'open') primary = `<button class="button tiny secondary" ${base} data-remediation-action="acknowledge" type="button">Acknowledge</button><button class="button tiny secondary" ${base} data-remediation-action="start" type="button">Start work</button>`;
+      if (gap.status === 'acknowledged') primary = `<button class="button tiny secondary" ${base} data-remediation-action="start" type="button">Start work</button><button class="button tiny secondary" ${base} data-remediation-action="ready_for_validation" type="button">Ready for fresh-pull validation</button>`;
+      if (gap.status === 'snoozed') primary = `<button class="button tiny secondary" ${base} data-remediation-action="start" type="button">Resume work</button>`;
+      if (gap.status === 'in_progress') primary = `<button class="button tiny secondary" ${base} data-remediation-action="ready_for_validation" type="button">Ready for fresh-pull validation</button>`;
+      if (gap.status === 'pending_validation') primary = `<span class="source-note">Waiting for a new complete source retrieval.</span><button class="button tiny secondary" ${base} data-remediation-action="start" type="button">Resume work</button>`;
+      if (gap.status === 'waived') return `<span class="source-note">Temporary exception approved by ${escapeHtml(gap.waiver_approved_by || '—')} through ${escapeHtml(gap.waiver_expires_on || '—')}.</span>`;
+      const controls = active ? `<button class="button tiny secondary" ${base} data-remediation-action="assign" type="button">Assign</button><button class="button tiny secondary" ${base} data-remediation-action="snooze" type="button">Snooze</button><button class="button tiny secondary" ${base} data-remediation-action="waive" type="button">Temporary exception</button>` : '';
+      return primary + controls;
+    }
+
+    function renderRemediation() {
+      const queue = state.data.remediation_queue || {};
+      const cases = queue.cases || [];
+      const waivedCount = cases.filter(item => item.status === 'waived').length;
+      const resolvedCount = cases.filter(item => item.status === 'resolved').length;
+      $('#remediationCount').textContent = `${fmt(queue.active_case_count)} active case${queue.active_case_count === 1 ? '' : 's'} · ${fmt(queue.active_gap_count)} gaps${waivedCount ? ` · ${waivedCount} waived` : ''}${resolvedCount ? ` · ${resolvedCount} resolved` : ''}`;
+      $('#remediationEmpty').hidden = cases.length > 0;
+      if (!queue.available) {
+        $('#remediationCases').innerHTML = `<div class="error show">Remediation queue unavailable.${queue.error ? ` ${escapeHtml(queue.error)}` : ''}</div>`;
+        return;
+      }
+      $('#remediationCases').innerHTML = cases.map(item => {
+        const priority = ['P0', 'P1', 'P2'].includes(item.priority) ? item.priority : 'P2';
+        const gaps = (item.gaps || []).map(gap => {
+          const refs = (gap.evidence?.refs || []).join(', ');
+          return `<article class="gap-item"><div class="gap-head">${tierBadge(gap.tier, gap.status)}<strong>${escapeHtml(titleCase(gap.dimension))}</strong><span class="source-note">Proposed route: ${escapeHtml(titleCase(gap.route))} · due ${fmtDate(gap.due_on)}</span></div><p>${escapeHtml(gap.summary || '')}</p><p><strong>Recommended:</strong> ${escapeHtml(gap.recommended_action || '')}</p><p class="source-note">Reason: ${escapeHtml(gap.reason_code || '—')}${refs ? ` · Evidence refs: ${escapeHtml(refs)}` : ''}${gap.assignee ? ` · Assigned: ${escapeHtml(gap.assignee)}` : ''}${gap.regression_count ? ` · Regressions: ${fmt(gap.regression_count)}` : ''}</p><div class="gap-actions">${remediationActionButtons(gap)}</div></article>`;
+        }).join('');
+        const caseLabel = item.status === 'waived' ? 'Waived' : item.status === 'resolved' ? 'Resolved' : `Proposed ${priority}`;
+        return `<details class="remediation-case"><summary><span class="case-priority ${priority.toLowerCase()}">${caseLabel}</span><strong>${escapeHtml(item.account_name || item.account_id)}</strong><span>${escapeHtml(titleCase(item.status))} · ${fmt(item.active_gap_count)} active gaps</span><span class="case-id">${escapeHtml(item.fingerprint.slice(0, 17))}…</span></summary><div class="case-body"><div class="queue-meta"><span>Proposed primary route: ${escapeHtml(titleCase(item.primary_route || 'unassigned'))}</span><span>Due: ${fmtDate(item.due_on)}</span><span>Tier: ${escapeHtml(item.overall_tier || '—')}</span></div><div class="gap-list">${gaps}</div><div class="gap-actions"><button class="button tiny secondary" type="button" data-open-account-id="${escapeHtml(item.account_id)}">View account evidence</button><button class="button tiny secondary" type="button" data-case-history="${escapeHtml(item.fingerprint)}">Load case history</button></div><div id="history-${escapeHtml(item.fingerprint)}" class="source-note"></div></div></details>`;
+      }).join('');
+      document.querySelectorAll('[data-open-account-id]').forEach(button => button.addEventListener('click', event => { event.preventDefault(); selectAccount(button.dataset.openAccountId); }));
+      document.querySelectorAll('[data-remediation-action]').forEach(button => button.addEventListener('click', event => { event.preventDefault(); applyRemediationAction(button); }));
+      document.querySelectorAll('[data-case-history]').forEach(button => button.addEventListener('click', event => { event.preventDefault(); loadCaseHistory(button); }));
+    }
+
+    async function loadCaseHistory(button) {
+      const caseId = button.dataset.caseHistory;
+      const target = document.getElementById(`history-${caseId}`);
+      button.disabled = true;
+      try {
+        const response = await fetch(`/api/remediation/cases/${encodeURIComponent(caseId)}`, { cache: 'no-store' });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `Could not load case history (${response.status})`);
+        const events = result.case?.events || [];
+        target.innerHTML = events.length ? `<strong>Recent history</strong><ol class="evidence-steps">${events.slice(0, 25).map(item => {
+          const payload = Object.entries(item.payload || {}).map(([key, value]) => `${titleCase(key)}: ${String(value)}`).join(' · ');
+          return `<li>${escapeHtml(new Date(item.created_at).toLocaleString())} · ${escapeHtml(titleCase(item.event_type))} · ${escapeHtml(item.actor)}${payload ? ` · ${escapeHtml(payload)}` : ''}</li>`;
+        }).join('')}</ol>` : 'No history recorded.';
+      } catch (error) {
+        setError(error.message);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function applyRemediationAction(button) {
+      const gapId = button.dataset.gapId;
+      const action = button.dataset.remediationAction;
+      const payload = {};
+      if (action === 'assign') {
+        const assignee = window.prompt('Local assignee or team label');
+        if (!assignee) return;
+        payload.assignee = assignee;
+      }
+      if (action === 'snooze') {
+        const until = window.prompt('Snooze until (YYYY-MM-DD)');
+        if (!until) return;
+        payload.until = until;
+      }
+      if (action === 'waive') {
+        const reason = window.prompt('Temporary exception reason');
+        if (!reason) return;
+        const approvedBy = window.prompt('Approver name or role');
+        if (!approvedBy) return;
+        const expiresOn = window.prompt('Exception expires on (YYYY-MM-DD)');
+        if (!expiresOn) return;
+        payload.reason = reason;
+        payload.approved_by = approvedBy;
+        payload.expires_on = expiresOn;
+      }
+      button.disabled = true;
+      setError('');
+      try {
+        const response = await fetch(`/api/remediation/gaps/${encodeURIComponent(gapId)}/actions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Hours-Recon-Action-Token': state.data.remediation_queue?.action_token || '',
+          },
+          body: JSON.stringify({ action, expected_version: Number(button.dataset.gapVersion), ...payload }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `Remediation action failed (${response.status})`);
+        await loadData();
+      } catch (error) {
+        setError(error.message);
+      } finally {
+        button.disabled = false;
+      }
     }
 
     function renderExceptions() {
