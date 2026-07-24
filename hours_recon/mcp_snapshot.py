@@ -9,16 +9,57 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
 from .dates import business_today
+from .storage import write_cache
 from .reconcile import reconcile
 
 
 class McpSnapshotError(RuntimeError):
     pass
+
+
+def publish_mcp_snapshot(
+    path: Path,
+    snapshot: Mapping[str, Any],
+    *,
+    expected_requester_email: str,
+    expected_scope_id: str,
+    timezone_name: str,
+) -> None:
+    """Atomically replace the active snapshot only with a complete verified pull.
+
+    The caller is responsible for assembling the source evidence. This boundary
+    prevents an incomplete pull, a different requester's data, or data from a
+    different connector tenant from replacing the last known-good snapshot.
+    """
+    expected_email = expected_requester_email.strip().lower()
+    actual_email = str((snapshot.get("salesforce") or {}).get("requester", {}).get("email") or "").strip().lower()
+    if not expected_email or not actual_email or not secrets.compare_digest(expected_email, actual_email):
+        raise McpSnapshotError("Refusing to publish an MCP snapshot for a different requester.")
+
+    meta = snapshot.get("meta") if isinstance(snapshot.get("meta"), Mapping) else {}
+    coverage = meta.get("coverage") if isinstance(meta.get("coverage"), Mapping) else {}
+    required_coverage = ("accounts", "opportunities", "projects", "time_entries", "pagination_complete")
+    if coverage.get("complete") is not True or not all(coverage.get(key) is True for key in required_coverage):
+        raise McpSnapshotError("Refusing to publish an MCP snapshot with incomplete source coverage.")
+    if meta.get("scope_verified") is not True or not expected_scope_id or not secrets.compare_digest(str(meta.get("scope_id") or ""), expected_scope_id):
+        raise McpSnapshotError("Refusing to publish an MCP snapshot with an unverified or mismatched scope.")
+    try:
+        current_through_date = date.fromisoformat(str(meta.get("through_date") or "")) == business_today(timezone_name)
+    except ValueError:
+        current_through_date = False
+    if not current_through_date:
+        raise McpSnapshotError("Refusing to publish an MCP snapshot whose through_date is not the report date.")
+    if snapshot.get("schema_version") != 1 or not isinstance(snapshot.get("rocketlane"), Mapping):
+        raise McpSnapshotError("Refusing to publish an invalid MCP snapshot schema.")
+
+    # write_cache creates a 0600 temporary file and atomically replaces path.
+    write_cache(path, dict(snapshot))
 
 
 def load_mcp_snapshot(

@@ -39,7 +39,7 @@ Demo mode uses fictional data and is always labeled clearly in the dashboard.
 ## Refresh through MCP (recommended)
 
 1. Authenticate the Salesforce and Rocketlane integrations in Glean Pi.
-2. In this repository, ask Pi: **“Run Hours Recon MCP refresh.”** The project skill at `.glean/skills/hours-recon-refresh/SKILL.md` retrieves the source records, writes `var/mcp_snapshot.json`, and imports the report.
+2. In this repository, ask Pi: **“Run Hours Recon MCP refresh.”** The project skill at `.glean/skills/hours-recon-refresh/SKILL.md` retrieves the source records, validates the full evidence set, atomically replaces `var/mcp_snapshot.json`, and imports the report.
 3. Configure and run the local server:
 
    ```dotenv
@@ -57,7 +57,20 @@ Demo mode uses fictional data and is always labeled clearly in the dashboard.
 
 Glean Pi owns the authenticated MCP session; the standalone Python server cannot inherit it. Therefore, a new external fetch is initiated from Pi. **Reload MCP snapshot** in the dashboard reprocesses the latest snapshot but does not call MCP itself.
 
-The app verifies that the snapshot's Salesforce requester email matches `HOURS_RECON_MCP_REQUESTER_EMAIL`; a prior user's snapshot or cached report is rejected rather than displayed. The snapshot and report cache under `var/` are ignored by Git and written with owner-only permissions. The report cache expires after 30 days by default. The remediation database is retained separately at `var/remediation.sqlite3` so workflow history survives report-cache expiry. A failed import leaves the last successful dataset visible and reports a redacted error reference.
+The app verifies that the snapshot's Salesforce requester email matches `HOURS_RECON_MCP_REQUESTER_EMAIL`; a prior user's snapshot or cached report is rejected rather than displayed. The snapshot publisher additionally refuses to replace the active file unless the new pull has complete coverage, today’s `through_date`, and a connector-verified scope matching `HOURS_RECON_REMEDIATION_SCOPE_ID`. Publication is atomic, so a failed or incomplete refresh leaves the active file unchanged. The snapshot and report cache under `var/` are ignored by Git and written with owner-only permissions. The report cache expires after 30 days by default. The remediation database is retained separately at `var/remediation.sqlite3` so workflow history survives report-cache expiry. A failed import leaves the last successful dataset visible and reports a redacted error reference.
+
+### Test requester snapshots
+
+Keep test data for a complex requester in a separate private path such as `var/fixtures/jason_mcp_snapshot.json`; never use it as the active `HOURS_RECON_MCP_SNAPSHOT_PATH`. To exercise that dataset, launch a separate local process with a requester-specific environment file:
+
+```dotenv
+# .env.jason-test (private and ignored by Git)
+HOURS_RECON_MODE=mcp
+HOURS_RECON_MCP_REQUESTER_EMAIL=jason.fleming@glean.com
+HOURS_RECON_MCP_SNAPSHOT_PATH=var/fixtures/jason_mcp_snapshot.json
+```
+
+The normal `.env` can continue to point at `var/mcp_snapshot.json` for Nick. This preserves the requester guard while letting either full, verified snapshot be refreshed independently.
 
 ## Optional direct API mode
 

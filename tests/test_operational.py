@@ -12,6 +12,7 @@ from unittest.mock import patch
 from hours_recon.config import ROOT, load_json
 from hours_recon.dates import business_today
 from hours_recon.http_client import ApiError, request_json
+from hours_recon.mcp_snapshot import McpSnapshotError, publish_mcp_snapshot
 from hours_recon.reconcile import reconcile
 from hours_recon.rocketlane import RocketlaneClient
 from hours_recon.sample_data import build_demo_sources
@@ -123,6 +124,31 @@ class CacheSafetyTests(unittest.TestCase):
             write_cache(path, {"meta": {"mode": "live"}})
             self.assertEqual(0o600, stat.S_IMODE(path.stat().st_mode))
             self.assertEqual(0o700, stat.S_IMODE(path.parent.stat().st_mode))
+
+    def test_publish_mcp_snapshot_atomically_replaces_a_verified_snapshot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "private" / "mcp_snapshot.json"
+            snapshot = {
+                "schema_version": 1,
+                "meta": {
+                    "scope_id": "sf:tenant|rl:workspace", "scope_verified": True,
+                    "through_date": business_today("America/Denver").isoformat(),
+                    "coverage": {"complete": True, "accounts": True, "opportunities": True, "projects": True, "time_entries": True, "pagination_complete": True},
+                },
+                "salesforce": {"requester": {"email": "nick.figura@glean.com"}},
+                "rocketlane": {"projects": [], "entries": []},
+            }
+            publish_mcp_snapshot(path, snapshot, expected_requester_email="nick.figura@glean.com", expected_scope_id="sf:tenant|rl:workspace", timezone_name="America/Denver")
+            self.assertEqual(snapshot, json.loads(path.read_text()))
+            self.assertEqual(0o600, stat.S_IMODE(path.stat().st_mode))
+
+    def test_publish_mcp_snapshot_preserves_active_file_when_validation_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "mcp_snapshot.json"
+            path.write_text('{"existing": true}')
+            with self.assertRaisesRegex(McpSnapshotError, "different requester"):
+                publish_mcp_snapshot(path, {"schema_version": 1, "salesforce": {"requester": {"email": "jason.fleming@glean.com"}}, "rocketlane": {}, "meta": {}}, expected_requester_email="nick.figura@glean.com", expected_scope_id="scope", timezone_name="America/Denver")
+            self.assertEqual('{"existing": true}', path.read_text())
 
     def test_stale_cached_mcp_report_is_downgraded_before_queue_replay(self):
         with tempfile.TemporaryDirectory() as temporary:
