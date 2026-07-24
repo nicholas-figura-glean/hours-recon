@@ -2,5 +2,14 @@
   "aliases": {
     "Orthogonal Networks (DBA Jellyfish)": ["Jellyfish"],
     "Virtuous Software": ["Virtuous"]
+  },
+  "rocketlane_customer_ids": {
+    "0014S00000A0hVpQAJ": ["445682"],
+    "0014S00000BxzyZQAR": ["458270"],
+    "0014S00000By3PyQAJ": ["696414"],
+    "0014S00000By6v4QAB": ["524282"],
+    "001PZ00000XRr72YAD": ["503037"],
+    "001PZ00000YSWZkYAP": ["573942"],
+    "001PZ00000YcWoDYAV": ["509291"]
   }
 }
