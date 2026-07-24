@@ -293,6 +293,72 @@ class CacheSafetyTests(unittest.TestCase):
             self.assertEqual(first_count, refreshed["remediation_queue"]["case_count"])
             self.assertFalse(refreshed["meta"]["remediation_observation"]["new_source_observation"])
 
+    def test_remediation_queue_excludes_accounts_not_held_by_requester(self):
+        from hours_recon.remediation_store import QueueValidationError, RemediationStore
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            snapshot_path = root / "mcp_snapshot.json"
+            db_path = root / "private" / "queue.sqlite3"
+            salesforce, rocketlane = build_demo_sources(date(2026, 2, 2))
+            snapshot_path.write_text(json.dumps({
+                "schema_version": 1,
+                "meta": {
+                    "created_at": "2026-02-02T12:00:00Z", "scope": "test", "retrieval_id": "retrieval-mine",
+                    "scope_id": "test-tenant", "through_date": "2026-02-02",
+                    "coverage": {
+                        "complete": True, "accounts": True, "opportunities": True,
+                        "projects": True, "time_entries": True, "pagination_complete": True,
+                    },
+                },
+                "salesforce": salesforce,
+                "rocketlane": rocketlane,
+            }))
+            # Simulate another requester's testing suite writing a case for an
+            # account this requester does not own, under the SAME tenant-wide
+            # scope_id and the SAME shared remediation database.
+            foreign_report = {
+                "meta": {"as_of": "2026-02-02"},
+                "accounts": [{
+                    "id": "FOREIGN-JASON-1", "name": "Jason Test Corp",
+                    "sold_hours": 20, "billed_hours": 0, "remaining_hours": 20,
+                    "at_risk_hours": 0, "expired_unused_hours": 0, "overage_hours": 0,
+                    "governance": {
+                        "overall_tier": "T4", "policy_version": "test",
+                        "gaps": [{
+                            "dimension": "entitlement_source", "tier": "T4",
+                            "reason_code": "missing", "summary": "foreign gap",
+                            "recommended_action": "fix", "refs": [], "details": {},
+                        }],
+                    },
+                }],
+            }
+            store = RemediationStore(db_path)
+            store.observe(
+                foreign_report, retrieval_id="jason-suite-1", scope_id="test-tenant",
+                coverage_complete=True, report_digest="jason-digest",
+            )
+            foreign = store.list_cases(scope_id="test-tenant")
+            self.assertTrue(any(case["account_id"] == "FOREIGN-JASON-1" for case in foreign))
+            foreign_gap = foreign[0]["gaps"][0]["fingerprint"]
+
+            service = ReconciliationService({
+                "mode": "mcp", "timezone": "America/Denver", "requester_email": "", "mcp_requester_email": "demo.aiom@example.com", "packages": PACKAGES,
+                "account_aliases": load_json(ROOT / "config" / "account_aliases.json"),
+                "cache_path": root / "cache.json", "mcp_snapshot_path": snapshot_path,
+                "cache_max_age_days": 30, "governance_mode": "observe_only",
+                "remediation_mode": "observe_only", "remediation_db_path": db_path,
+                "remediation_scope_id": "test-tenant",
+            })
+            queue = service.data["remediation_queue"]
+            queue_accounts = {case["account_id"] for case in queue["cases"]}
+            self.assertNotIn("FOREIGN-JASON-1", queue_accounts)
+            self.assertTrue(queue_accounts)  # the requester's own cases still show
+            self.assertNotIn("FOREIGN-JASON-1", {case["account_id"] for case in service.list_remediation_cases()})
+            # The requester must not be able to act on an unowned gap either.
+            with self.assertRaises(QueueValidationError):
+                service.remediation_action(foreign_gap, action="acknowledge", expected_version=1)
+
     def test_cached_report_rebuilds_missing_remediation_queue(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

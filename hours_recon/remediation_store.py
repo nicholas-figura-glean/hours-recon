@@ -421,9 +421,24 @@ class RemediationStore:
         route: Optional[str] = None,
         priority: Optional[str] = None,
         account_id: Optional[str] = None,
+        account_ids: Optional[Iterable[str]] = None,
     ) -> List[Dict[str, Any]]:
         clauses = ["c.scope_id = ?"]
         values: List[Any] = [scope_id]
+        # Ownership boundary: scope_id is tenant-wide (one Salesforce org +
+        # Rocketlane workspace) and is shared by every requester, so it cannot
+        # isolate one AIOM's accounts from another's. When the caller supplies
+        # the accounts held by the current requester, restrict the queue to
+        # them so another requester's cases never leak into this dashboard.
+        # None means "no ownership filter"; an empty collection means "no owned
+        # accounts", which must match nothing rather than everything.
+        if account_ids is not None:
+            owned = [str(value) for value in account_ids]
+            if owned:
+                clauses.append("c.account_id IN (" + ",".join("?" for _ in owned) + ")")
+                values.extend(owned)
+            else:
+                clauses.append("1 = 0")
         if status:
             clauses.append("c.status = ?")
             values.append(status)
@@ -461,8 +476,21 @@ class RemediationStore:
         finally:
             connection.close()
 
-    def get_case(self, fingerprint: str, *, scope_id: str) -> Optional[Dict[str, Any]]:
-        case = next((item for item in self.list_cases(scope_id=scope_id) if item["fingerprint"] == fingerprint), None)
+    def get_case(
+        self,
+        fingerprint: str,
+        *,
+        scope_id: str,
+        account_ids: Optional[Iterable[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        case = next(
+            (
+                item
+                for item in self.list_cases(scope_id=scope_id, account_ids=account_ids)
+                if item["fingerprint"] == fingerprint
+            ),
+            None,
+        )
         if not case:
             return None
         connection = self._connect()
@@ -478,8 +506,8 @@ class RemediationStore:
         finally:
             connection.close()
 
-    def summary(self, *, scope_id: str) -> Dict[str, Any]:
-        cases = self.list_cases(scope_id=scope_id)
+    def summary(self, *, scope_id: str, account_ids: Optional[Iterable[str]] = None) -> Dict[str, Any]:
+        cases = self.list_cases(scope_id=scope_id, account_ids=account_ids)
         active_cases = [item for item in cases if item["status"] not in {"resolved", "waived"}]
         active_gaps = [gap for case in active_cases for gap in case["gaps"] if gap["status"] in ACTIVE_GAP_STATUSES]
         return {
@@ -526,17 +554,29 @@ class RemediationStore:
         expected_version: int,
         actor: str = "local_dashboard",
         payload: Optional[Mapping[str, Any]] = None,
+        account_ids: Optional[Iterable[str]] = None,
     ) -> Dict[str, Any]:
         data = dict(payload or {})
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
             self._expire_temporary_states(connection, scope_id=scope_id)
-            row = connection.execute(
-                """SELECT g.* FROM gaps g JOIN cases c ON c.fingerprint=g.case_fingerprint
-                   WHERE g.fingerprint=? AND c.scope_id=?""",
-                (gap_id, scope_id),
-            ).fetchone()
+            # Enforce the same ownership boundary on writes: a requester may only
+            # act on gaps for accounts they hold. Unowned gaps are reported as
+            # unknown so the queue never confirms another requester's records.
+            query = (
+                "SELECT g.* FROM gaps g JOIN cases c ON c.fingerprint=g.case_fingerprint "
+                "WHERE g.fingerprint=? AND c.scope_id=?"
+            )
+            params: List[Any] = [gap_id, scope_id]
+            if account_ids is not None:
+                owned = [str(value) for value in account_ids]
+                if owned:
+                    query += " AND c.account_id IN (" + ",".join("?" for _ in owned) + ")"
+                    params.extend(owned)
+                else:
+                    query += " AND 1 = 0"
+            row = connection.execute(query, params).fetchone()
             if not row:
                 raise QueueValidationError("Unknown remediation gap.")
             if int(row["version"]) != int(expected_version):

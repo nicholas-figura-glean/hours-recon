@@ -135,6 +135,19 @@ class ReconciliationService:
             or "local-default"
         )
 
+    def _owned_account_ids(self, result: Optional[Mapping[str, Any]] = None) -> List[str]:
+        """Account IDs held by the current requester in the active report.
+
+        The remediation store is keyed by a tenant-wide scope_id shared across
+        requesters, so it cannot by itself distinguish accounts one AIOM owns
+        from another's. The active report is requester-bound (AIOM-filtered
+        Salesforce pull / requester-verified MCP snapshot), so its account set
+        is the authoritative ownership boundary for the remediation queue.
+        """
+        source = result if result is not None else self._data
+        accounts = source.get("accounts", []) if isinstance(source, Mapping) else []
+        return sorted({str(account.get("id")) for account in accounts if account.get("id")})
+
     def _attach_remediation(self, result: Dict[str, Any]) -> None:
         if not self.remediation_store:
             result["remediation_queue"] = {
@@ -149,7 +162,9 @@ class ReconciliationService:
             return
         try:
             scope_id = self._active_scope_id(result)
-            summary = self.remediation_store.summary(scope_id=scope_id)
+            summary = self.remediation_store.summary(
+                scope_id=scope_id, account_ids=self._owned_account_ids(result)
+            )
             summary["available"] = True
             summary["action_token"] = self.action_token
             by_account = {str(item["account_id"]): item for item in summary.get("cases", [])}
@@ -265,6 +280,7 @@ class ReconciliationService:
         values = dict(filters or {})
         return self.remediation_store.list_cases(
             scope_id=self._active_scope_id(),
+            account_ids=self._owned_account_ids(),
             status=values.get("status"),
             route=values.get("route"),
             priority=values.get("priority"),
@@ -274,7 +290,11 @@ class ReconciliationService:
     def get_remediation_case(self, fingerprint: str) -> Optional[Dict[str, Any]]:
         if not self.remediation_store:
             raise QueueError("The remediation queue is unavailable.")
-        return self.remediation_store.get_case(fingerprint, scope_id=self._active_scope_id())
+        return self.remediation_store.get_case(
+            fingerprint,
+            scope_id=self._active_scope_id(),
+            account_ids=self._owned_account_ids(),
+        )
 
     def remediation_action(
         self,
@@ -289,6 +309,7 @@ class ReconciliationService:
         return self.remediation_store.action(
             gap_id,
             scope_id=self._active_scope_id(),
+            account_ids=self._owned_account_ids(),
             action=action,
             expected_version=expected_version,
             payload=payload,
