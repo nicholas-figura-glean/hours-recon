@@ -142,6 +142,24 @@ class CacheSafetyTests(unittest.TestCase):
             self.assertEqual(snapshot, json.loads(path.read_text()))
             self.assertEqual(0o600, stat.S_IMODE(path.stat().st_mode))
 
+    def test_publish_mcp_snapshot_rejects_stale_report_date(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "mcp_snapshot.json"
+            path.write_text('{"existing": true}')
+            snapshot = {
+                "schema_version": 1,
+                "meta": {
+                    "scope_id": "sf:tenant|rl:workspace", "scope_verified": True,
+                    "through_date": "2000-01-01",
+                    "coverage": {"complete": True, "accounts": True, "opportunities": True, "projects": True, "time_entries": True, "pagination_complete": True},
+                },
+                "salesforce": {"requester": {"email": "nick.figura@glean.com"}},
+                "rocketlane": {"projects": [], "entries": []},
+            }
+            with self.assertRaisesRegex(McpSnapshotError, "through_date is not the report date"):
+                publish_mcp_snapshot(path, snapshot, expected_requester_email="nick.figura@glean.com", expected_scope_id="sf:tenant|rl:workspace", timezone_name="America/Denver")
+            self.assertEqual('{"existing": true}', path.read_text())
+
     def test_publish_mcp_snapshot_preserves_active_file_when_validation_fails(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "mcp_snapshot.json"

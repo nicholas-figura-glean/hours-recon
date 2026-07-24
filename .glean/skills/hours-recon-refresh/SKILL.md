@@ -9,6 +9,7 @@ Use MCP tools from the active Glean Pi session. Do not require Salesforce or Roc
 
 ## Workflow
 
+0. At the start of every refresh, derive one `report_date` from the active system date in the configured dashboard timezone. Use that exact value everywhere: Salesforce `CloseDate <= report_date`, Rocketlane `date <= report_date`, snapshot `meta.through_date`, and final validation. Never reuse a date from an earlier query, prior refresh, fixture, or chat message. If the system date changes while fetching, restart the external pull with the new report date rather than publishing a mixed-date snapshot.
 1. Read `config/packages.json`, `config/account_aliases.json`, `hours_recon/mcp_snapshot.py`, and this skill.
 2. Use `glean_find_skills` to discover the current Salesforce and Rocketlane skills. Read each `SKILL.md` and the exact schemas for:
    - Salesforce: `getUserInfo`, `getObjectSchema`, `soqlQuery`
@@ -28,6 +29,7 @@ Use MCP tools from the active Glean Pi session. Do not require Salesforce or Roc
    - `rocketlane.requester`, `projects`, `entries`
    - Preserve product IDs/codes, PricebookEntry IDs, line source/Quote IDs, explicit service dates, Rocketlane customer IDs, explicit Salesforce IDs, project lifecycle fields, approval status, activity, category, and contributor identity when available.
    - `meta.created_at`, scope, MCP server identifiers, and source counts
+   - Record the derived `report_date` as `meta.through_date`; it must be the exact same bound used in every Salesforce and Rocketlane query.
    - Generate a unique `meta.retrieval_id` for every new external fetch, a stable tenant/workspace `meta.scope_id`, and `meta.through_date`. Set `meta.scope_verified: true` only after the scope ID is corroborated against the authenticated connector tenant/workspace identity; string presence alone is not verification. Remediation validation transitions additionally require `HOURS_RECON_REMEDIATION_SCOPE_ID` to exactly match this verified source value.
    - Add `meta.coverage` with explicit booleans for `accounts`, `opportunities`, `projects`, `time_entries`, and `pagination_complete`, plus `complete`. Set a value true only after the account-isolated retrieval and every pagination terminal page are verified. `meta.through_date` must equal the report date, and `meta.scope_id` must be a verified stable tenant/workspace identifier before a retrieval can resolve or reopen remediation. Existing counts alone do not prove completeness.
 9. Publish the snapshot with `hours_recon.mcp_snapshot.publish_mcp_snapshot(...)`, using `settings()` for the expected requester email, remediation scope ID, and timezone. The publisher atomically replaces the configured active snapshot only when the schema, requester, complete coverage, current through-date, and verified scope all pass; it creates parent directories at `0700` and the file at `0600`. Never commit `var/`. For a test requester, configure a separate ignored `HOURS_RECON_MCP_SNAPSHOT_PATH` such as `var/fixtures/jason_mcp_snapshot.json`; do not replace the active requester’s file.
