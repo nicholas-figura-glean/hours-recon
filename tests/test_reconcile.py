@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import copy
+import json
 import unittest
 from datetime import date
+from decimal import Decimal
+from pathlib import Path
 
-from hours_recon.inference import infer_packages
+from hours_recon.inference import infer_packages, infer_text
 from hours_recon.matching import match_projects, normalize_name
 from hours_recon.reconcile import package_risk, reconcile
 
@@ -142,6 +145,32 @@ class InferenceTests(unittest.TestCase):
         self.assertEqual(77.0, packages[0]["sold_hours"])
         self.assertEqual("opportunity_override", packages[0]["inference_source"])
 
+    def test_growth_numeric_ignores_price_and_seat_tokens(self):
+        # Regression: bare-number growth matching used to grab price and seat
+        # fragments (e.g. the "20" in "$20,000").
+        self.assertIsNone(infer_text("Growth Package $20,000 ARR", unit_price=None, list_price=None, config=PACKAGE_CONFIG))
+        self.assertIsNone(infer_text("Growth Package - 300 seats", unit_price=None, list_price=None, config=PACKAGE_CONFIG))
+
+    def test_growth_numeric_resolves_with_package_context(self):
+        result = infer_text("Growth Package 100", unit_price=None, list_price=None, config=PACKAGE_CONFIG)
+        self.assertIsNotNone(result)
+        self.assertEqual(Decimal("100"), result[0])
+        self.assertEqual("growth_tier", result[3])
+
+    def test_multiple_unresolved_custom_lines_are_not_masked_by_opp_name(self):
+        opportunity = {
+            "id": "O1", "account_id": "A1", "account_name": "Acme",
+            "name": "Custom 300 PS hours (Growth Package)", "close_date": "2026-01-01",
+            "line_items": [
+                {"id": "L1", "name": "Glean Outcomes Packages: Custom", "quantity": 1},
+                {"id": "L2", "name": "Glean Outcomes Packages: Custom", "quantity": 1},
+            ],
+        }
+        packages, exceptions = infer_packages(opportunity, PACKAGE_CONFIG)
+        self.assertEqual([], packages)
+        self.assertEqual(2, len(exceptions))
+        self.assertTrue(all(item["type"] == "unresolved_package" for item in exceptions))
+
 
 class MatchingTests(unittest.TestCase):
     def test_normalization_and_alias(self):
@@ -261,6 +290,36 @@ class ReconciliationTests(unittest.TestCase):
         self.assertTrue(weekly["account_active_current"])
         self.assertFalse(weekly["aiom_active_current"])
 
+    def test_aiom_time_matches_rocketlane_identity(self):
+        # Salesforce login email differs from the Rocketlane email; attribution
+        # must still resolve via the stable Rocketlane user id.
+        opportunities = [{"id": "O1", "account_id": "A1", "account_name": "Acme", "name": "Growth Package 20 hours", "close_date": "2026-01-01", "line_items": []}]
+        entries = [{"id": "T1", "project_id": "P1", "date": "2026-07-21", "minutes": 60, "billable": True, "user_email": "alex.aiom@rocketlane.com", "user_id": "RL9"}]
+        sf, rl = sources(opportunities, entries)
+        rl["requester"] = {"user_id": "RL9", "email": "alex.aiom@rocketlane.com"}
+        weekly = reconcile(sf, rl, package_config=PACKAGE_CONFIG, account_aliases={"aliases": {}}, as_of=date(2026, 7, 22))["accounts"][0]["weekly"]
+        self.assertTrue(weekly["aiom_active_current"])
+
+    def test_negative_correction_is_not_weekly_activity(self):
+        opportunities = [{"id": "O1", "account_id": "A1", "account_name": "Acme", "name": "Growth Package 20 hours", "close_date": "2026-01-01", "line_items": []}]
+        entries = [{"id": "T1", "project_id": "P1", "date": "2026-07-21", "minutes": -60, "billable": True, "user_email": "alex@example.com"}]
+        sf, rl = sources(opportunities, entries)
+        weekly = reconcile(sf, rl, package_config=PACKAGE_CONFIG, account_aliases={"aliases": {}}, as_of=date(2026, 7, 22))["accounts"][0]["weekly"]
+        self.assertFalse(weekly["account_active_current"])
+        self.assertFalse(weekly["aiom_active_current"])
+
+    def test_undated_and_future_entries_are_reported_separately(self):
+        opportunities = [{"id": "O1", "account_id": "A1", "account_name": "Acme", "name": "Growth Package 20 hours", "close_date": "2026-01-01", "line_items": []}]
+        entries = [
+            {"id": "T1", "project_id": "P1", "date": None, "minutes": 60, "billable": True, "user_email": "alex@example.com"},
+            {"id": "T2", "project_id": "P1", "date": "2999-01-01", "minutes": 60, "billable": True, "user_email": "alex@example.com"},
+        ]
+        sf, rl = sources(opportunities, entries)
+        result = reconcile(sf, rl, package_config=PACKAGE_CONFIG, account_aliases={"aliases": {}}, as_of=date(2026, 1, 2))
+        counts = {item["type"]: item.get("count") for item in result["exceptions"]}
+        self.assertEqual(1, counts.get("future_entries_excluded"))
+        self.assertEqual(1, counts.get("undated_entries_excluded"))
+
     def test_non_billable_entries_are_excluded(self):
         opportunities = [{"id": "O1", "account_id": "A1", "account_name": "Acme", "name": "Growth Package 20 hours", "close_date": "2026-01-01", "line_items": []}]
         entries = [{"id": "T1", "project_id": "P1", "date": "2026-02-01", "minutes": 600, "billable": False, "user_email": "alex@example.com"}]
@@ -295,6 +354,15 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual("healthy", package_risk(__import__('decimal').Decimal('1'), date(2026, 4, 2), as_of)[0])    # 91
         self.assertEqual("expired", package_risk(__import__('decimal').Decimal('1'), date(2025, 12, 31), as_of)[0])
         self.assertEqual("exhausted", package_risk(__import__('decimal').Decimal('0'), date(2025, 12, 31), as_of)[0])
+
+
+class ConfigFixtureTests(unittest.TestCase):
+    def test_package_config_fixture_matches_repo_config(self):
+        root = Path(__file__).resolve().parent.parent
+        real = json.loads((root / "config" / "packages.json").read_text())
+        self.assertEqual(PACKAGE_CONFIG["outcome_tiers"], real["outcome_tiers"])
+        self.assertEqual(PACKAGE_CONFIG["outcome_list_prices"], real["outcome_list_prices"])
+        self.assertEqual(PACKAGE_CONFIG["growth_hours"], real["growth_hours"])
 
 
 if __name__ == "__main__":

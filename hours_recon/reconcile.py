@@ -24,6 +24,39 @@ def _hours(entry: Mapping[str, Any]) -> Decimal:
     return _d(entry.get("minutes")) / Decimal("60")
 
 
+def _requester_identity(salesforce: Mapping[str, Any], rocketlane: Mapping[str, Any]) -> Tuple[set, set]:
+    """Collect every known email and Rocketlane user id for the requesting AIOM.
+
+    Salesforce and Rocketlane frequently identify the same person with different
+    email addresses, so time-entry attribution must match on any known identity
+    (preferring the stable Rocketlane user id) rather than the Salesforce login
+    email alone.
+    """
+    emails: set = set()
+    user_ids: set = set()
+    sf_requester = salesforce.get("requester") or {}
+    if sf_requester.get("email"):
+        emails.add(str(sf_requester["email"]).strip().lower())
+    rl_requester = rocketlane.get("requester") or {}
+    for key in ("email", "emailId", "user_email"):
+        value = rl_requester.get(key)
+        if value:
+            emails.add(str(value).strip().lower())
+    for key in ("user_id", "userId", "id"):
+        value = rl_requester.get(key)
+        if value not in (None, ""):
+            user_ids.add(str(value))
+    return emails, user_ids
+
+
+def _entry_is_requester(entry: Mapping[str, Any], emails: set, user_ids: set) -> bool:
+    user_id = entry.get("user_id")
+    if user_id not in (None, "") and str(user_id) in user_ids:
+        return True
+    email = str(entry.get("user_email") or "").strip().lower()
+    return bool(email) and email in emails
+
+
 def _round(value: Decimal) -> float:
     return float(value.quantize(Decimal("0.01")))
 
@@ -60,8 +93,10 @@ def reconcile(
     opportunities = [dict(item) for item in salesforce.get("opportunities", [])]
     projects = [dict(item) for item in rocketlane.get("projects", [])]
     billable_entries = [dict(item) for item in rocketlane.get("entries", []) if item.get("billable", True)]
-    entries = [item for item in billable_entries if item.get("date") and parse_date(item["date"]) <= report_date]
-    future_entry_count = len(billable_entries) - len(entries)
+    dated_entries = [item for item in billable_entries if item.get("date")]
+    entries = [item for item in dated_entries if parse_date(item["date"]) <= report_date]
+    future_entry_count = len(dated_entries) - len(entries)
+    undated_entry_count = len(billable_entries) - len(dated_entries)
 
     project_map, match_exceptions, project_match_evidence = match_projects_with_evidence(accounts, projects, account_aliases)
     exceptions: List[Dict[str, Any]] = list(match_exceptions)
@@ -70,6 +105,12 @@ def reconcile(
             "type": "future_entries_excluded",
             "message": f"{future_entry_count} future-dated billable time entries were excluded from this as-of report.",
             "count": future_entry_count,
+        })
+    if undated_entry_count:
+        exceptions.append({
+            "type": "undated_entries_excluded",
+            "message": f"{undated_entry_count} billable time entries had no usable date and were excluded from this as-of report.",
+            "count": undated_entry_count,
         })
     account_results: Dict[str, Dict[str, Any]] = {}
     for account in accounts:
@@ -119,7 +160,7 @@ def reconcile(
 
     current_week = monday_of(report_date)
     previous_week = current_week - timedelta(days=7)
-    requester_email = str(requester.get("email", "")).lower()
+    requester_emails, requester_ids = _requester_identity(salesforce, rocketlane)
 
     for account in account_results.values():
         _allocate_account(account, report_date)
@@ -146,15 +187,15 @@ def reconcile(
         account_entries = account["entries"]
         for entry in account_entries:
             entry["hours"] = _round(_hours(entry))
-        current_entries = [item for item in account_entries if current_week <= parse_date(item["date"]) <= report_date and _hours(item) != 0]
-        previous_entries = [item for item in account_entries if previous_week <= parse_date(item["date"]) < current_week and _hours(item) != 0]
+        current_entries = [item for item in account_entries if current_week <= parse_date(item["date"]) <= report_date and _hours(item) > 0]
+        previous_entries = [item for item in account_entries if previous_week <= parse_date(item["date"]) < current_week and _hours(item) > 0]
         account["weekly"] = {
             "current_week_start": current_week.isoformat(),
             "previous_week_start": previous_week.isoformat(),
             "account_active_current": bool(current_entries),
             "account_active_previous": bool(previous_entries),
-            "aiom_active_current": bool(requester_email) and any(str(item.get("user_email", "")).lower() == requester_email for item in current_entries),
-            "aiom_active_previous": bool(requester_email) and any(str(item.get("user_email", "")).lower() == requester_email for item in previous_entries),
+            "aiom_active_current": any(_entry_is_requester(item, requester_emails, requester_ids) for item in current_entries),
+            "aiom_active_previous": any(_entry_is_requester(item, requester_emails, requester_ids) for item in previous_entries),
         }
         account["project_count"] = len(account["projects"])
         account["entry_count"] = len(account_entries)

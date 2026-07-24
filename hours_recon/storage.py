@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def read_cache(path: Path, max_age_days: int = 30) -> Optional[Dict[str, Any]]:
@@ -19,7 +22,8 @@ def read_cache(path: Path, max_age_days: int = 30) -> Optional[Dict[str, Any]]:
             return None
         with path.open(encoding="utf-8") as handle:
             return json.load(handle)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        logger.warning("Ignoring unreadable local cache at %s: %s", path, exc)
         return None
 
 

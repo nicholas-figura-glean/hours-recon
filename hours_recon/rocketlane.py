@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from .http_client import ApiError, request_json
@@ -55,20 +56,30 @@ class RocketlaneClient:
         records = self._paginate("projects", {"includeAllFields": "true", "includeArchive.eq": "true"})
         return [self._normalize_project(item) for item in records]
 
-    def fetch_time_entries(self, project_ids: Iterable[str]) -> List[Dict[str, Any]]:
-        entries: List[Dict[str, Any]] = []
-        seen = set()
-        for project_id in sorted(set(str(value) for value in project_ids if value)):
+    def fetch_time_entries(self, project_ids: Iterable[str], *, max_workers: int = 8) -> List[Dict[str, Any]]:
+        unique_ids = sorted(set(str(value) for value in project_ids if value))
+        if not unique_ids:
+            return []
+
+        def _fetch_one(project_id: str) -> List[Dict[str, Any]]:
             records = self._paginate(
                 "time-entries/search",
                 {"billable.eq": "true", "project.eq": project_id, "includeAllFields": "true", "sortBy": "DATE", "sortOrder": "ASC"},
             )
-            for item in records:
-                normalized = self._normalize_entry(item, project_id)
-                entry_id = normalized["id"]
-                if entry_id not in seen:
-                    seen.add(entry_id)
-                    entries.append(normalized)
+            return [self._normalize_entry(item, project_id) for item in records]
+
+        entries: List[Dict[str, Any]] = []
+        seen = set()
+        workers = max(1, min(max_workers, len(unique_ids)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            # pool.map preserves input order, so deduplication stays deterministic.
+            for project_entries in pool.map(_fetch_one, unique_ids):
+                for normalized in project_entries:
+                    entry_id = normalized["id"]
+                    if entry_id not in seen:
+                        seen.add(entry_id)
+                        entries.append(normalized)
+        entries.sort(key=lambda item: (str(item.get("date") or ""), str(item.get("id") or "")))
         return entries
 
     @staticmethod

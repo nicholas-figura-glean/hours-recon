@@ -67,10 +67,28 @@ def infer_text(
             return _decimal(hours_value), "outcome", tier.title(), "tier_name"
 
     if "growth" in normalized:
+        # Growth shorthand like "Growth Package 100" omits the word "hours".
+        # Only accept an allowed number when it is a standalone token adjacent
+        # to package/hours wording, so prices ($20,000), seat counts, and year
+        # fragments are never misread as sold hours.
+        tokens = normalized.split()
+        positive = {"growth", "package", "packages", "hour", "hours", "hrs", "ps"}
+        negative = {"seat", "seats", "user", "users", "license", "licenses", "arr"}
         allowed = sorted((int(value) for value in config.get("growth_hours", [])), reverse=True)
         for hours_value in allowed:
-            if re.search(rf"\b{hours_value}\b", normalized):
-                return _decimal(hours_value), "growth", str(hours_value), "growth_tier"
+            target = str(hours_value)
+            for index, token in enumerate(tokens):
+                if token != target:
+                    continue
+                neighbors = set()
+                if index > 0:
+                    neighbors.add(tokens[index - 1])
+                if index + 1 < len(tokens):
+                    neighbors.add(tokens[index + 1])
+                if neighbors & negative:
+                    continue
+                if neighbors & positive:
+                    return _decimal(hours_value), "growth", target, "growth_tier"
 
     if "custom" in normalized:
         return Decimal("0"), "custom", "Custom", "unresolved_custom"
@@ -152,6 +170,11 @@ def infer_packages(opportunity: Mapping[str, Any], config: Mapping[str, Any]) ->
             hours, family, tier, source = result
             if source == "unresolved_custom" or hours <= 0:
                 exceptions.extend(pending_exceptions or [_package_exception(opportunity, None, "Custom package needs an hours override.")])
+            elif len(pending_exceptions) > 1:
+                # A single opportunity-name total cannot disambiguate multiple
+                # unresolved custom line items. Surface them instead of masking
+                # real gaps behind one name-derived package.
+                exceptions.extend(pending_exceptions)
             else:
                 packages.append(_package(opportunity, None, hours, family, tier, f"opportunity_{source}", close_date, expiration))
         elif recognized_line_items:

@@ -11,9 +11,9 @@ A local, read-only AIOM dashboard that reconciles hours sold in Salesforce with 
 - Allocates Rocketlane hours FIFO against the earliest-expiring active package, then applies pre-entitlement activity to the earliest later package that has closed by the report date.
 - Expires each package one year after its Salesforce close date; the expiration date is inclusive.
 - Separates usable remaining hours, 90-day at-risk hours, expired-unused hours, and true overage beyond eligible sold capacity.
-- Flags weekly account inactivity and missing requesting-AIOM time separately.
+- Flags weekly account inactivity and missing requesting-AIOM time separately. AIOM time is attributed by the requester's Rocketlane identity (stable user id, then any known email), so a Salesforce login email that differs from the Rocketlane email is still matched; only positive billable hours count as activity.
 - Includes archived Rocketlane projects so historical billable entries are not omitted.
-- Excludes future-dated entries and not-yet-active entitlement from the as-of balance.
+- Excludes future-dated entries and not-yet-active entitlement from the as-of balance, and reports billable entries with no usable date separately rather than mislabeling them as future.
 - Preserves unmatched accounts, unknown packages, and excess negative corrections instead of silently dropping them.
 - Scores entitlement source, hours mapping, service period, project linkage, and time quality independently from Tier 1 through Tier 4.
 - Keeps current reported totals unchanged in observe-only mode while separating governed and provisional exposure.

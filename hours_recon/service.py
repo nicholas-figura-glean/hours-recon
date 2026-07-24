@@ -309,9 +309,13 @@ class ReconciliationService:
                 result = self._load_mcp_report()
             else:
                 salesforce_client = SalesforceClient()
-                salesforce_data = salesforce_client.fetch(self.settings["requester_email"])
+                salesforce_data = salesforce_client.fetch(self.settings["requester_email"], as_of=report_date)
                 rocketlane_client = RocketlaneClient()
                 projects = rocketlane_client.fetch_projects()
+                # Two-phase by design: fetch_projects() returns the whole
+                # Rocketlane workspace, so match first and only pull time entries
+                # for in-scope projects. reconcile() re-derives the same
+                # deterministic map from identical inputs, so no drift results.
                 project_map, _ = match_projects(salesforce_data["accounts"], projects, self.settings["account_aliases"])
                 entries = rocketlane_client.fetch_time_entries(project_map.keys())
                 result = reconcile(

@@ -94,7 +94,7 @@ def load_mcp_snapshot(
         raise McpSnapshotError(
             "HOURS_RECON_MCP_REQUESTER_EMAIL is required in MCP mode so the dashboard can verify the snapshot belongs to its requester."
         )
-    if not snapshot_email or snapshot_email != expected_email:
+    if not snapshot_email or not secrets.compare_digest(snapshot_email, expected_email):
         raise McpSnapshotError(
             "The MCP snapshot requester does not match HOURS_RECON_MCP_REQUESTER_EMAIL. "
             "Ask Glean Pi to run an Hours Recon MCP refresh for the authenticated requester."

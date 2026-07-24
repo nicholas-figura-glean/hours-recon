@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
+from datetime import date
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import quote
 
 from .http_client import ApiError, request_json
@@ -135,7 +136,8 @@ class SalesforceClient:
         user = records[0]
         return {"id": user["Id"], "name": user.get("Name"), "email": user.get("Email") or email}
 
-    def fetch(self, requester_email: str) -> Dict[str, Any]:
+    def fetch(self, requester_email: str, *, as_of: Optional[date] = None) -> Dict[str, Any]:
+        report_date = as_of or date.today()
         requester = self.resolve_requester(requester_email)
         field = self.discover_aiom_field()
         field_name = str(field["name"])
@@ -159,7 +161,7 @@ class SalesforceClient:
             ids = ",".join(_soql_string(value) for value in chunk)
             query = (
                 "SELECT Id, AccountId, Account.Name, Name, StageName, IsWon, CloseDate, HasOpportunityLineItem "
-                f"FROM Opportunity WHERE StageName = 'Closed Won' AND CloseDate <= TODAY AND AccountId IN ({ids}) "
+                f"FROM Opportunity WHERE StageName = 'Closed Won' AND CloseDate <= {report_date.isoformat()} AND AccountId IN ({ids}) "
                 "ORDER BY CloseDate ASC NULLS LAST"
             )
             for item in self.query_all(query):
