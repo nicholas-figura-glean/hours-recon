@@ -35,6 +35,10 @@ def settings() -> Dict[str, Any]:
         "host": os.getenv("HOURS_RECON_HOST", "127.0.0.1"),
         "port": int(os.getenv("HOURS_RECON_PORT", "8765")),
         "requester_email": os.getenv("HOURS_RECON_REQUESTER_EMAIL", ""),
+        # MCP snapshots are produced outside this process. Bind them to the
+        # expected requester so a previous user's private snapshot is never
+        # displayed as the current user's dashboard.
+        "mcp_requester_email": os.getenv("HOURS_RECON_MCP_REQUESTER_EMAIL", os.getenv("HOURS_RECON_REQUESTER_EMAIL", "")).strip().lower(),
         "timezone": os.getenv("HOURS_RECON_TIMEZONE", "America/Denver"),
         "cache_max_age_days": int(os.getenv("HOURS_RECON_CACHE_MAX_AGE_DAYS", "30")),
         "packages": load_json(ROOT / "config" / "packages.json"),

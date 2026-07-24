@@ -45,6 +45,8 @@ Demo mode uses fictional data and is always labeled clearly in the dashboard.
    ```dotenv
    HOURS_RECON_MODE=mcp
    HOURS_RECON_MCP_SNAPSHOT_PATH=var/mcp_snapshot.json
+   # Must match the authenticated requester Pi records in the snapshot.
+   HOURS_RECON_MCP_REQUESTER_EMAIL=your.name@glean.com
    ```
 
    ```bash
@@ -55,7 +57,7 @@ Demo mode uses fictional data and is always labeled clearly in the dashboard.
 
 Glean Pi owns the authenticated MCP session; the standalone Python server cannot inherit it. Therefore, a new external fetch is initiated from Pi. **Reload MCP snapshot** in the dashboard reprocesses the latest snapshot but does not call MCP itself.
 
-The snapshot and report cache under `var/` are ignored by Git and written with owner-only permissions. The report cache expires after 30 days by default. The remediation database is retained separately at `var/remediation.sqlite3` so workflow history survives report-cache expiry. A failed import leaves the last successful dataset visible and reports a redacted error reference.
+The app verifies that the snapshot's Salesforce requester email matches `HOURS_RECON_MCP_REQUESTER_EMAIL`; a prior user's snapshot or cached report is rejected rather than displayed. The snapshot and report cache under `var/` are ignored by Git and written with owner-only permissions. The report cache expires after 30 days by default. The remediation database is retained separately at `var/remediation.sqlite3` so workflow history survives report-cache expiry. A failed import leaves the last successful dataset visible and reports a redacted error reference.
 
 ## Optional direct API mode
 

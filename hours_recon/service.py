@@ -15,7 +15,7 @@ from .dates import business_today
 from .demo import demo_report
 from .evidence import attach_governance
 from .matching import match_projects
-from .mcp_snapshot import load_mcp_snapshot
+from .mcp_snapshot import McpSnapshotError, load_mcp_snapshot
 from .reconcile import reconcile
 from .remediation_store import QueueError, RemediationStore
 from .rocketlane import RocketlaneClient
@@ -46,6 +46,11 @@ class ReconciliationService:
             cached = read_cache(self.settings["cache_path"], self.settings["cache_max_age_days"])
             if cached and cached.get("meta", {}).get("mode") != configured_mode:
                 cached = None
+            if cached and configured_mode == "mcp":
+                expected_email = str(self.settings.get("mcp_requester_email") or "").strip().lower()
+                cached_email = str(cached.get("meta", {}).get("mcp_requester_email") or cached.get("meta", {}).get("requester", {}).get("email") or "").strip().lower()
+                if not expected_email or not cached_email or not secrets.compare_digest(expected_email, cached_email):
+                    cached = None
             if (
                 cached
                 and self.settings.get("governance_mode", "observe_only") == "observe_only"
@@ -60,10 +65,15 @@ class ReconciliationService:
             self._downgrade_stale_cached_governance(self._data)
         if self._data is not None and self.remediation_store and "governance" in self._data:
             self._observe_source(self._data)
+        mcp_snapshot_error = None
         if self._data is None and configured_mode == "mcp" and self.settings["mcp_snapshot_path"].exists():
-            self._data = self._load_mcp_report()
-            self._observe_source(self._data)
-            write_cache(self.settings["cache_path"], self._data)
+            try:
+                self._data = self._load_mcp_report()
+            except McpSnapshotError as exc:
+                mcp_snapshot_error = str(exc)
+            else:
+                self._observe_source(self._data)
+                write_cache(self.settings["cache_path"], self._data)
         if self._data is None:
             self._data = demo_report(
                 self.settings["packages"],
@@ -71,7 +81,10 @@ class ReconciliationService:
                 as_of=business_today(self.settings["timezone"]),
             )
             if configured_mode == "mcp":
-                self._data["meta"]["notice"] = "Demo data is shown until Glean Pi writes the first MCP snapshot."
+                self._data["meta"]["notice"] = (
+                    mcp_snapshot_error
+                    or "Demo data is shown until Glean Pi writes the first MCP snapshot."
+                )
             else:
                 self._data["meta"]["notice"] = "Demo data is shown until the first successful live refresh."
 
@@ -194,6 +207,7 @@ class ReconciliationService:
             account_aliases=self.settings["account_aliases"],
             timezone_name=self.settings["timezone"],
             governance_mode=self.settings.get("governance_mode", "observe_only"),
+            expected_requester_email=self.settings.get("mcp_requester_email", ""),
         )
 
     def _observe_source(self, result: Dict[str, Any]) -> None:

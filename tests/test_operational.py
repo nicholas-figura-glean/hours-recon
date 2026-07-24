@@ -151,7 +151,7 @@ class CacheSafetyTests(unittest.TestCase):
             cache = root / "cache.json"
             write_cache(cache, report)
             service = ReconciliationService({
-                "mode": "mcp", "timezone": "America/Denver", "requester_email": "", "packages": PACKAGES,
+                "mode": "mcp", "timezone": "America/Denver", "requester_email": "", "mcp_requester_email": "u@example.com", "packages": PACKAGES,
                 "account_aliases": ALIASES, "cache_path": cache, "mcp_snapshot_path": root / "missing.json",
                 "cache_max_age_days": 30, "governance_mode": "observe_only", "remediation_mode": "observe_only",
                 "remediation_db_path": root / "private" / "queue.sqlite3", "remediation_scope_id": "test-tenant",
@@ -184,7 +184,7 @@ class CacheSafetyTests(unittest.TestCase):
                 "rocketlane": rocketlane,
             }))
             service = ReconciliationService({
-                "mode": "mcp", "timezone": "America/Denver", "requester_email": "", "packages": PACKAGES,
+                "mode": "mcp", "timezone": "America/Denver", "requester_email": "", "mcp_requester_email": "demo.aiom@example.com", "packages": PACKAGES,
                 "account_aliases": load_json(ROOT / "config" / "account_aliases.json"),
                 "cache_path": root / "cache.json", "mcp_snapshot_path": snapshot_path,
                 "cache_max_age_days": 30,
@@ -192,6 +192,26 @@ class CacheSafetyTests(unittest.TestCase):
             self.assertEqual("mcp", service.data["meta"]["mode"])
             self.assertEqual("Salesforce MCP + Rocketlane MCP", service.data["meta"]["source"])
             self.assertEqual(4, service.data["metrics"]["account_count"])
+
+    def test_mcp_snapshot_for_a_different_requester_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            snapshot_path = root / "mcp_snapshot.json"
+            salesforce, rocketlane = build_demo_sources(date(2026, 2, 2))
+            snapshot_path.write_text(json.dumps({
+                "schema_version": 1,
+                "meta": {"created_at": "2026-02-02T12:00:00Z", "scope": "test"},
+                "salesforce": salesforce,
+                "rocketlane": rocketlane,
+            }))
+            service = ReconciliationService({
+                "mode": "mcp", "timezone": "America/Denver", "requester_email": "",
+                "mcp_requester_email": "another.aiom@example.com", "packages": PACKAGES,
+                "account_aliases": ALIASES, "cache_path": root / "cache.json", "mcp_snapshot_path": snapshot_path,
+                "cache_max_age_days": 30,
+            })
+            self.assertEqual("demo", service.data["meta"]["mode"])
+            self.assertIn("requester does not match", service.data["meta"]["notice"])
 
     def test_mcp_observe_mode_creates_idempotent_local_remediation_cases(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -212,7 +232,7 @@ class CacheSafetyTests(unittest.TestCase):
                 "rocketlane": rocketlane,
             }))
             service = ReconciliationService({
-                "mode": "mcp", "timezone": "America/Denver", "requester_email": "", "packages": PACKAGES,
+                "mode": "mcp", "timezone": "America/Denver", "requester_email": "", "mcp_requester_email": "demo.aiom@example.com", "packages": PACKAGES,
                 "account_aliases": load_json(ROOT / "config" / "account_aliases.json"),
                 "cache_path": root / "cache.json", "mcp_snapshot_path": snapshot_path,
                 "cache_max_age_days": 30, "governance_mode": "observe_only",
@@ -246,7 +266,7 @@ class CacheSafetyTests(unittest.TestCase):
                 "salesforce": salesforce, "rocketlane": rocketlane,
             }))
             settings = {
-                "mode": "mcp", "timezone": "America/Denver", "requester_email": "", "packages": PACKAGES,
+                "mode": "mcp", "timezone": "America/Denver", "requester_email": "", "mcp_requester_email": "demo.aiom@example.com", "packages": PACKAGES,
                 "account_aliases": load_json(ROOT / "config" / "account_aliases.json"),
                 "cache_path": root / "cache.json", "mcp_snapshot_path": snapshot_path, "cache_max_age_days": 30,
                 "governance_mode": "observe_only", "remediation_mode": "observe_only",
@@ -274,7 +294,7 @@ class CacheSafetyTests(unittest.TestCase):
                 "salesforce": salesforce, "rocketlane": rocketlane,
             }))
             service = ReconciliationService({
-                "mode": "mcp", "timezone": "America/Denver", "requester_email": "", "packages": PACKAGES,
+                "mode": "mcp", "timezone": "America/Denver", "requester_email": "", "mcp_requester_email": "demo.aiom@example.com", "packages": PACKAGES,
                 "account_aliases": ALIASES, "cache_path": root / "cache.json", "mcp_snapshot_path": snapshot_path,
                 "cache_max_age_days": 30, "governance_mode": "observe_only", "remediation_mode": "observe_only",
                 "remediation_db_path": root / "private" / "queue.sqlite3", "remediation_scope_id": "tenant-a",
@@ -299,7 +319,7 @@ class CacheSafetyTests(unittest.TestCase):
                 "salesforce": salesforce, "rocketlane": rocketlane,
             }))
             service = ReconciliationService({
-                "mode": "mcp", "timezone": "America/Denver", "requester_email": "", "packages": PACKAGES,
+                "mode": "mcp", "timezone": "America/Denver", "requester_email": "", "mcp_requester_email": "demo.aiom@example.com", "packages": PACKAGES,
                 "account_aliases": load_json(ROOT / "config" / "account_aliases.json"),
                 "cache_path": root / "cache.json", "mcp_snapshot_path": snapshot_path, "cache_max_age_days": 30,
                 "governance_mode": "observe_only", "remediation_mode": "observe_only",

@@ -28,6 +28,7 @@ def load_mcp_snapshot(
     account_aliases: Mapping[str, Any],
     timezone_name: str,
     governance_mode: str = "observe_only",
+    expected_requester_email: str = "",
 ) -> Dict[str, Any]:
     if not path.exists():
         raise McpSnapshotError(
@@ -45,6 +46,18 @@ def load_mcp_snapshot(
     rocketlane = snapshot.get("rocketlane")
     if not isinstance(salesforce, dict) or not isinstance(rocketlane, dict):
         raise McpSnapshotError("The MCP snapshot must contain Salesforce and Rocketlane source objects.")
+
+    expected_email = expected_requester_email.strip().lower()
+    snapshot_email = str((salesforce.get("requester") or {}).get("email") or "").strip().lower()
+    if not expected_email:
+        raise McpSnapshotError(
+            "HOURS_RECON_MCP_REQUESTER_EMAIL is required in MCP mode so the dashboard can verify the snapshot belongs to its requester."
+        )
+    if not snapshot_email or snapshot_email != expected_email:
+        raise McpSnapshotError(
+            "The MCP snapshot requester does not match HOURS_RECON_MCP_REQUESTER_EMAIL. "
+            "Ask Glean Pi to run an Hours Recon MCP refresh for the authenticated requester."
+        )
 
     source_meta = snapshot.get("meta", {})
     snapshot_digest = hashlib.sha256(
@@ -88,6 +101,7 @@ def load_mcp_snapshot(
     report["meta"].update({
         "source": "Salesforce MCP + Rocketlane MCP",
         "mcp_snapshot_created_at": source_meta.get("created_at"),
+        "mcp_requester_email": snapshot_email,
         "mcp_scope": source_meta.get("scope"),
         "mcp_retrieval_id": source_meta.get("retrieval_id") or f"legacy-{snapshot_digest}",
         "mcp_scope_id": explicit_scope_id or fallback_scope,
