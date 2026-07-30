@@ -166,6 +166,26 @@
     .exception-type { color: var(--artifact-warning); font-family: var(--artifact-mono); font-size: 12px; }
     .exception strong { font-weight: 700; }
     .exception p { color: var(--artifact-muted); }
+    .workspace-tabs { display: flex; gap: 4px; padding: 8px 10px 0; border-bottom: 1px solid var(--artifact-border); background: var(--artifact-surface-subtle); }
+    .workspace-tab { min-height: 40px; padding: 8px 14px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--artifact-muted); background: transparent; font-weight: 750; }
+    .workspace-tab:hover { color: var(--artifact-text); background: color-mix(in srgb, var(--artifact-surface) 55%, transparent); }
+    .workspace-tab[aria-selected="true"] { color: var(--artifact-accent); background: var(--artifact-surface); border-color: var(--artifact-border); position: relative; top: 1px; }
+    .workspace-tab-count { margin-left: 6px; color: inherit; font-variant-numeric: tabular-nums; }
+    .workspace-pane { min-height: 120px; }
+    .slack-queue { margin: 12px; border: 1px solid var(--artifact-border); border-radius: 9px; overflow: hidden; }
+    .slack-queue-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; background: var(--artifact-surface-subtle); }
+    .slack-queue-head div { display: grid; gap: 2px; }
+    .slack-queue-section { border-top: 1px solid var(--artifact-border); }
+    .slack-queue-section:first-of-type { border-top: 0; }
+    .slack-queue-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 13px; background: var(--artifact-surface-subtle); }
+    .slack-queue-section-head span { color: var(--artifact-muted); font-size: 12px; }
+    .slack-queue-list { display: grid; }
+    .slack-queue-item { display: grid; grid-template-columns: auto minmax(180px, 1fr) auto; align-items: center; gap: 10px; padding: 10px 13px; border-top: 1px solid var(--artifact-border); }
+    .slack-queue-item p { color: var(--artifact-muted); font-size: 12px; }
+    .slack-queue-status { min-width: 88px; text-align: center; }
+    .handoff-list { display: grid; gap: 7px; }
+    .handoff-item { display: grid; grid-template-columns: minmax(160px, .8fr) minmax(220px, 1.2fr); gap: 8px; padding: 9px; border: 1px solid var(--artifact-border); border-radius: 7px; background: var(--artifact-surface); }
+    .handoff-item span { color: var(--artifact-muted); font-size: 12px; }
     .workstream-list { display: grid; gap: 12px; padding: 12px; }
     .workstream-card { border: 1px solid var(--artifact-border); border-radius: 9px; background: var(--artifact-surface); overflow: hidden; }
     .workstream-card > summary { cursor: pointer; list-style: none; padding: 14px; display: grid; grid-template-columns: auto minmax(240px, 1fr) auto; align-items: center; gap: 10px; }
@@ -311,10 +331,19 @@
     </section>
 
     <section class="section">
-      <div class="section-title"><div><h2>Remediation planner</h2><p class="source-note">Ranked T1/T2 paths grouped into systemic workstreams with account-level validation</p></div><span class="pill" id="remediationCount">0 active workstreams</span></div>
+      <div class="section-title"><div><h2>Remediation workspace</h2><p class="source-note">Plan source corrections and track Slack handoff delivery in one workspace</p></div><span class="pill" id="remediationCount">0 active workstreams</span></div>
       <div class="panel">
-        <div class="workstream-list" id="remediationWorkstreams"></div>
-        <div class="empty" id="remediationEmpty" hidden>No remediation workstreams have been observed.</div>
+        <div class="workspace-tabs" role="tablist" aria-label="Remediation workspace views">
+          <button class="workspace-tab" id="plannerTab" role="tab" type="button" aria-selected="true" aria-controls="remediationPlannerPane" data-remediation-tab="planner">Remediation planner <span class="workspace-tab-count" id="plannerTabCount">0</span></button>
+          <button class="workspace-tab" id="slackTab" role="tab" type="button" aria-selected="false" aria-controls="slackQueuePane" data-remediation-tab="slack" tabindex="-1">Slack delivery queue <span class="workspace-tab-count" id="slackTabCount">0</span></button>
+        </div>
+        <div class="workspace-pane" id="remediationPlannerPane" role="tabpanel" aria-labelledby="plannerTab">
+          <div class="workstream-list" id="remediationWorkstreams"></div>
+          <div class="empty" id="remediationEmpty" hidden>No remediation workstreams have been observed.</div>
+        </div>
+        <div class="workspace-pane" id="slackQueuePane" role="tabpanel" aria-labelledby="slackTab" hidden>
+          <div class="slack-queue" id="slackQueue" aria-live="polite"></div>
+        </div>
       </div>
     </section>
 
@@ -337,7 +366,7 @@
   </dialog>
 
   <script>
-    const state = { data: null, selectedId: null, execution: null, filters: { search: '', risk: 'all', weeklyOnly: false, sort: 'risk' } };
+    const state = { data: null, selectedId: null, execution: null, remediationTab: 'planner', filters: { search: '', risk: 'all', weeklyOnly: false, sort: 'risk' } };
     const riskOrder = { overage: 0, expired: 1, critical: 2, high: 3, medium: 4, healthy: 5, exhausted: 6, none: 7 };
     const $ = selector => document.querySelector(selector);
     const fmt = value => new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(Number(value || 0));
@@ -556,13 +585,44 @@
       return `<article class="path-option ${path.recommended ? 'recommended' : ''} ${selected ? 'selected' : ''}"><div class="path-head">${tierBadge(path.target_tier, path.target_tier === 'T1' ? 'preferred' : 'governed')}${badges}<strong>${escapeHtml(path.title)}</strong></div><div class="path-meta"><span>Effort ${escapeHtml(path.effort)}</span><span>${escapeHtml(titleCase(path.durability))} durability</span><span>${escapeHtml(titleCase(path.execution_scope))} execution</span><span>${escapeHtml(titleCase(path.validation_mode))} validation</span></div><p>${escapeHtml(path.outcome)}</p><ol class="path-steps">${steps}</ol><p><strong>Owner:</strong> ${escapeHtml(path.primary_owner)} · <strong>Partners:</strong> ${escapeHtml(contributors)}</p><p><strong>Dependencies:</strong> ${escapeHtml(dependencies)}</p>${selected ? `<div class="execution-button-row"><span class="source-note">Selected path; this drives target-state reporting.</span><button class="button tiny" ${base} data-remediation-action="prepare_execution" type="button">Open next steps</button></div>` : `<button class="button tiny secondary" ${base} data-remediation-action="select_path" data-path-id="${escapeHtml(path.id)}" type="button">Select and open next steps</button>`}</article>`;
     }
 
+    function selectRemediationTab(tab, focus = false) {
+      const selected = tab === 'slack' ? 'slack' : 'planner';
+      state.remediationTab = selected;
+      document.querySelectorAll('[data-remediation-tab]').forEach(button => {
+        const active = button.dataset.remediationTab === selected;
+        button.setAttribute('aria-selected', String(active));
+        button.tabIndex = active ? 0 : -1;
+        if (active && focus) button.focus();
+      });
+      $('#remediationPlannerPane').hidden = selected !== 'planner';
+      $('#slackQueuePane').hidden = selected !== 'slack';
+    }
+
+    function renderSlackQueue(queue) {
+      const rows = queue.slack_outbox || [];
+      const counts = queue.slack_outbox_counts || {};
+      const activeCount = Number(counts.pending || 0) + Number(counts.sending || 0) + Number(counts.needs_review || 0);
+      const statusLabel = status => status === 'pending' ? 'Queued' : status === 'sending' ? 'Sending' : status === 'needs_review' ? 'Needs review' : titleCase(status);
+      const queued = rows.filter(item => ['pending', 'sending', 'needs_review'].includes(item.status))
+        .sort((a, b) => String(b.queued_at || '').localeCompare(String(a.queued_at || '')));
+      const delivered = rows.filter(item => item.status === 'sent')
+        .sort((a, b) => String(b.sent_at || b.queued_at || '').localeCompare(String(a.sent_at || a.queued_at || '')));
+      const renderItem = item => `<article class="slack-queue-item"><span class="pill slack-queue-status ${item.status === 'sent' ? 'live' : item.status === 'pending' ? 'demo' : ''}">${escapeHtml(statusLabel(item.status))}</span><div><strong>${escapeHtml(item.recipient_query || 'Unresolved recipient')}</strong><p>${escapeHtml(item.workstream_title || 'Hours Recon handoff')} · ${item.status === 'sent' ? 'delivered' : 'queued'} ${new Date(item.status === 'sent' ? item.sent_at || item.queued_at : item.queued_at).toLocaleString()}${item.error ? ` · ${escapeHtml(item.error)}` : ''}</p></div>${item.permalink ? `<a class="button tiny secondary" href="${escapeHtml(item.permalink)}" target="_blank" rel="noreferrer">Open Slack</a>` : '<span class="source-note">Not sent</span>'}</article>`;
+      const renderSection = (title, items, emptyText) => `<section class="slack-queue-section"><div class="slack-queue-section-head"><strong>${title}</strong><span>${fmt(items.length)} message${items.length === 1 ? '' : 's'} · newest first</span></div>${items.length ? `<div class="slack-queue-list">${items.map(renderItem).join('')}</div>` : `<div class="empty">${emptyText}</div>`}</section>`;
+      $('#slackTabCount').textContent = fmt(activeCount);
+      $('#slackQueue').innerHTML = `<div class="slack-queue-head"><div><strong>Delivery status</strong><span class="source-note">Every reviewed handoff and its current state</span></div><span class="pill ${activeCount ? 'demo' : 'live'}">${fmt(activeCount)} awaiting delivery · ${fmt(delivered.length)} delivered</span></div>${renderSection('Queued', queued, 'No messages are awaiting delivery.')}${renderSection('Delivered', delivered, 'No messages have been delivered yet.')}`;
+    }
+
     function renderRemediation() {
       const queue = state.data.remediation_queue || {};
       const workstreams = queue.workstreams || [];
+      renderSlackQueue(queue);
       const waivedCount = workstreams.filter(item => item.status === 'waived').length;
       const governedCount = workstreams.filter(item => item.status === 'governed').length;
       $('#remediationCount').textContent = `${fmt(queue.active_workstream_count)} active workstream${queue.active_workstream_count === 1 ? '' : 's'} · ${fmt(queue.active_instance_count)} account gaps${governedCount ? ` · ${governedCount} governed` : ''}${waivedCount ? ` · ${waivedCount} waived` : ''}`;
+      $('#plannerTabCount').textContent = fmt(queue.active_workstream_count);
       $('#remediationEmpty').hidden = workstreams.length > 0;
+      selectRemediationTab(state.remediationTab);
       if (!queue.available) {
         $('#remediationWorkstreams').innerHTML = `<div class="error show">Remediation planner unavailable.${queue.error ? ` ${escapeHtml(queue.error)}` : ''}</div>`;
         return;
@@ -646,9 +706,11 @@
       const limitations = executionList(workspace.limitations || [], 'No additional connector limitations.');
       const inputs = executionList(workspace.required_inputs || [], 'No additional business input is required beyond confirmation.');
       const slackMcpAvailable = state.data?.remediation_queue?.slack_delivery?.available === true;
+      const handoffs = workspace.slack_handoffs || [];
+      const handoffRows = handoffs.map(item => `<article class="handoff-item"><strong>${escapeHtml(item.recipient_label || item.recipient)}</strong><span>${fmt(item.entry_ids?.length || 0)} submitted entr${item.entry_ids?.length === 1 ? 'y' : 'ies'} · ${escapeHtml((item.issues || []).join(' · '))}</span></article>`).join('');
       const slackSetupNote = slackMcpAvailable ? 'Review and queue this message, then tell Glean Pi “send pending Hours Recon messages.” Pi will send it through your connected Slack identity and return the message link.' : 'The local remediation queue is unavailable. Use Copy instead.';
       $('#executionSubtitle').textContent = `${workspace.selected_path?.title || 'Selected path'} · ${modeLabel}`;
-      $('#executionContent').innerHTML = `<div class="execution-banner"><strong>Approval boundary:</strong> Hours Recon prepared this workspace but did not write Salesforce or Rocketlane. Glean MCP must re-read the records and ask for explicit confirmation immediately before every supported write.</div><div class="execution-grid"><div class="execution-column"><section><h2>Proposed source actions</h2><div class="execution-column">${operations}</div></section><section><h2>Affected records</h2><div class="execution-column">${recordCards}</div></section></div><aside class="execution-column"><article class="execution-card"><h3>Before execution</h3><strong>Required inputs</strong>${inputs}<strong>Connector boundaries</strong>${limitations}<strong>Safety</strong>${notices}</article><article class="execution-card execution-copy"><h3>MCP execution request</h3><p class="source-note">Copy this into Glean. The request requires read-before-write, exact payload review, and confirmation.</p><textarea id="mcpRequest" readonly aria-label="MCP execution request"></textarea><div class="execution-button-row"><button class="button" id="copyMcpRequest" type="button">Copy MCP request</button><a class="button secondary" id="openMcpWorkspace" target="_blank" rel="noreferrer">Open Glean for MCP</a><span class="execution-feedback" id="mcpCopyFeedback"></span></div></article><article class="execution-card execution-copy slack"><h3>Owner follow-up via Slack MCP</h3><p class="source-note">${escapeHtml(slackSetupNote)} ${workspace.recipient_suggestions?.length ? `Suggested from source ownership: ${escapeHtml(workspace.recipient_suggestions.join(' · '))}.` : ''}</p><div class="field"><label for="executionRecipient">Slack user, email, @handle, channel, or Slack ID</label><input id="executionRecipient" value="${escapeHtml(workspace.default_recipient || workspace.recipient_role || '')}"></div><textarea id="slackDraft" aria-label="Reviewed Slack message"></textarea><div class="execution-button-row"><button class="button" id="queueSlackDraft" type="button" ${slackMcpAvailable ? '' : 'disabled'}>Queue for Slack MCP</button><button class="button secondary" id="copySlackDraft" type="button">Copy instead</button><span class="execution-feedback" id="slackCopyFeedback"></span></div></article></aside></div>`;
+      $('#executionContent').innerHTML = `<div class="execution-banner"><strong>Approval boundary:</strong> Hours Recon prepared this workspace but did not write Salesforce or Rocketlane. Glean MCP must re-read the records and ask for explicit confirmation immediately before every supported write.</div><div class="execution-grid"><div class="execution-column"><section><h2>Proposed source actions</h2><div class="execution-column">${operations}</div></section><section><h2>Affected records</h2><div class="execution-column">${recordCards}</div></section></div><aside class="execution-column"><article class="execution-card"><h3>Before execution</h3><strong>Required inputs</strong>${inputs}<strong>Connector boundaries</strong>${limitations}<strong>Safety</strong>${notices}</article><article class="execution-card execution-copy"><h3>MCP execution request</h3><p class="source-note">Copy this into Glean. The request requires read-before-write, exact payload review, and confirmation.</p><textarea id="mcpRequest" readonly aria-label="MCP execution request"></textarea><div class="execution-button-row"><button class="button" id="copyMcpRequest" type="button">Copy MCP request</button><a class="button secondary" id="openMcpWorkspace" target="_blank" rel="noreferrer">Open Glean for MCP</a><span class="execution-feedback" id="mcpCopyFeedback"></span></div></article><article class="execution-card execution-copy slack"><h3>Owner follow-up via Slack MCP</h3><p class="source-note">${escapeHtml(slackSetupNote)} ${workspace.recipient_suggestions?.length ? `Suggested from source ownership: ${escapeHtml(workspace.recipient_suggestions.join(' · '))}.` : ''}</p>${handoffRows ? `<div><strong>Time-entry submitter handoffs</strong><div class="handoff-list">${handoffRows}</div><div class="execution-button-row"><button class="button" id="queueAllSlackHandoffs" type="button" ${slackMcpAvailable ? '' : 'disabled'}>Queue all ${handoffs.length} submitter messages</button><span class="source-note">Each person receives only their own flagged entries.</span></div></div>` : ''}<div class="field"><label for="executionRecipient">Slack user, email, @handle, channel, or Slack ID</label><input id="executionRecipient" value="${escapeHtml(workspace.default_recipient || workspace.recipient_role || '')}"></div><textarea id="slackDraft" aria-label="Reviewed Slack message"></textarea><div class="execution-button-row"><button class="button" id="queueSlackDraft" type="button" ${slackMcpAvailable ? '' : 'disabled'}>Queue for Slack MCP</button><button class="button secondary" id="copySlackDraft" type="button">Copy instead</button><span class="execution-feedback" id="slackCopyFeedback"></span></div></article></aside></div>`;
       $('#mcpRequest').value = workspace.mcp_request || '';
       const template = workspace.slack_draft?.message || '';
       const updateSlackPreview = () => { $('#slackDraft').value = template.replaceAll('{{recipient}}', $('#executionRecipient').value.trim() || workspace.recipient_role || 'source owner'); };
@@ -659,6 +721,7 @@
       $('#openMcpWorkspace').href = mcpUrl;
       $('#copyMcpRequest').addEventListener('click', copyMcpRequest);
       $('#queueSlackDraft').addEventListener('click', queueExecutionSlackDraft);
+      if ($('#queueAllSlackHandoffs')) $('#queueAllSlackHandoffs').addEventListener('click', queueAllSlackHandoffs);
       $('#copySlackDraft').addEventListener('click', copyExecutionSlackDraft);
       $('#executionDialog').showModal();
     }
@@ -708,6 +771,46 @@
       } catch (error) { /* The original delivery error remains more useful. */ }
     }
 
+    async function queueSlackHandoff(current, recipient, message) {
+      const response = await fetch(`/api/remediation/workstreams/${encodeURIComponent(current.workstreamId)}/slack/queue`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Hours-Recon-Action-Token': state.data.remediation_queue?.action_token || '',
+        },
+        body: JSON.stringify({ expected_version: current.version, recipient, message, confirmed: true }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || `Slack MCP queueing failed (${response.status})`);
+      current.version = Number(result.workstream.version);
+      syncRemediationWorkstream(result.workstream);
+      return result;
+    }
+
+    async function queueAllSlackHandoffs() {
+      const button = $('#queueAllSlackHandoffs');
+      const current = state.execution;
+      const handoffs = current?.workspace?.slack_handoffs || [];
+      if (!current || !handoffs.length) return;
+      if (!window.confirm(`Queue ${handoffs.length} reviewed messages, one for each time-entry submitter? They will not be sent until you tell Glean Pi to send pending Hours Recon messages.`)) return;
+      button.disabled = true;
+      setError('');
+      let queued = 0;
+      try {
+        for (const handoff of handoffs) {
+          const message = String(handoff.message || '').replaceAll('{{recipient}}', handoff.recipient_label || handoff.recipient);
+          await queueSlackHandoff(current, handoff.recipient, message);
+          queued += 1;
+          $('#slackCopyFeedback').textContent = `Queued ${queued} of ${handoffs.length}…`;
+        }
+        await loadData();
+        $('#slackCopyFeedback').textContent = `All ${queued} submitter messages queued · tell Pi “send pending Hours Recon messages”`;
+      } catch (error) {
+        await loadData();
+        setError(`${error.message} ${queued} message${queued === 1 ? '' : 's'} queued before the error; nothing was sent by the dashboard.`);
+      } finally { button.disabled = false; }
+    }
+
     async function queueExecutionSlackDraft() {
       const button = $('#queueSlackDraft');
       const current = state.execution;
@@ -721,17 +824,7 @@
       setError('');
       $('#slackCopyFeedback').textContent = 'Queueing…';
       try {
-        const response = await fetch(`/api/remediation/workstreams/${encodeURIComponent(current.workstreamId)}/slack/queue`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Hours-Recon-Action-Token': state.data.remediation_queue?.action_token || '',
-          },
-          body: JSON.stringify({ expected_version: current.version, recipient, message, confirmed: true }),
-        });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || `Slack MCP queueing failed (${response.status})`);
-        current.version = Number(result.workstream.version);
+        const result = await queueSlackHandoff(current, recipient, message);
         syncRemediationWorkstream(result.workstream);
         $('#slackDraft').value = result.slack_message || message;
         const status = result.outbox?.status || 'pending';
@@ -824,6 +917,14 @@
     }
 
     $('#refreshButton').addEventListener('click', refreshData);
+    document.querySelectorAll('[data-remediation-tab]').forEach(button => {
+      button.addEventListener('click', () => selectRemediationTab(button.dataset.remediationTab));
+      button.addEventListener('keydown', event => {
+        if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+        event.preventDefault();
+        selectRemediationTab(button.dataset.remediationTab === 'planner' ? 'slack' : 'planner', true);
+      });
+    });
     $('#search').addEventListener('input', event => { state.filters.search = event.target.value; renderAccounts(); });
     $('#riskFilter').addEventListener('change', event => { state.filters.risk = event.target.value; renderAccounts(); });
     $('#sort').addEventListener('change', event => { state.filters.sort = event.target.value; renderAccounts(); });

@@ -202,6 +202,31 @@ class ReconciliationService:
             summary["available"] = True
             summary["action_token"] = self.action_token
             summary["slack_delivery"] = self._slack_delivery_status()
+            workstream_titles = {
+                str(item.get("fingerprint")): str(item.get("title") or "Hours Recon handoff")
+                for item in summary.get("workstreams", [])
+            }
+            outbox_rows = self.remediation_store.list_slack_outbox(
+                scope_id=scope_id,
+                portfolio_id=portfolio_id,
+                status=None,
+                account_ids=self._owned_account_ids(result),
+            )
+            visible_outbox = [
+                {
+                    key: item.get(key)
+                    for key in (
+                        "id", "workstream_fingerprint", "recipient_query", "status", "queued_at",
+                        "claimed_at", "sent_at", "permalink", "error", "version",
+                    )
+                } | {"workstream_title": workstream_titles.get(str(item.get("workstream_fingerprint")), "Hours Recon handoff")}
+                for item in outbox_rows
+            ]
+            summary["slack_outbox"] = visible_outbox
+            summary["slack_outbox_counts"] = {
+                status: sum(1 for item in visible_outbox if item.get("status") == status)
+                for status in ("pending", "sending", "needs_review", "sent", "cancelled")
+            }
             by_account: Dict[str, List[Dict[str, Any]]] = {}
             for workstream in summary.get("workstreams", []):
                 for instance in workstream.get("instances", []):

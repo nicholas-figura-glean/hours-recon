@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 from .evidence import TIER_RANK
 from .remediation import METRIC_FIELDS, PRIORITY_RANK, build_workstreams, format_slack_followup
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ACTIVE_WORKSTREAM_STATUSES = {"open", "acknowledged", "in_progress", "pending_validation", "snoozed"}
 
 
@@ -70,10 +70,10 @@ class RemediationStore:
         connection = self._connect()
         try:
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, 1, SCHEMA_VERSION}:
+            if version not in {0, 1, 2, SCHEMA_VERSION}:
                 raise QueueError(f"Unsupported remediation database schema version {version}.")
             if version == 1:
-                # The v2 planner intentionally starts clean: v1 cases had no
+                # The workstream planner intentionally starts clean: v1 cases had no
                 # workstream grouping or path semantics, so pretending to
                 # migrate their workflow state would create misleading data.
                 connection.executescript(
@@ -241,12 +241,14 @@ class RemediationStore:
                         ON events(workstream_fingerprint, id);
                     CREATE INDEX idx_slack_outbox_scope_status
                         ON slack_outbox(scope_id, portfolio_id, status, queued_at);
-                    CREATE UNIQUE INDEX idx_slack_outbox_one_active
-                        ON slack_outbox(workstream_fingerprint) WHERE status IN ('pending', 'sending', 'needs_review');
-                    PRAGMA user_version = 2;
+                    CREATE UNIQUE INDEX idx_slack_outbox_recipient_active
+                        ON slack_outbox(workstream_fingerprint, recipient_query COLLATE NOCASE)
+                        WHERE status IN ('pending', 'sending', 'needs_review');
+                    PRAGMA user_version = 3;
                     """
                 )
                 connection.commit()
+                version = SCHEMA_VERSION
             workstream_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(workstreams)").fetchall()}
             for column in (
                 "slack_copied_at", "slack_recipient_id", "slack_channel_id", "slack_message_ts",
@@ -254,10 +256,10 @@ class RemediationStore:
                 "slack_message_sha256", "execution_plan_json", "execution_path_id",
                 "execution_prepared_at", "mcp_request_copied_at",
             ):
-                if version == SCHEMA_VERSION and column not in workstream_columns:
+                if version in {2, SCHEMA_VERSION} and column not in workstream_columns:
                     connection.execute(f"ALTER TABLE workstreams ADD COLUMN {column} TEXT")
             instance_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(instances)").fetchall()}
-            if version == SCHEMA_VERSION and "last_governed_tier" not in instance_columns:
+            if version in {2, SCHEMA_VERSION} and "last_governed_tier" not in instance_columns:
                 connection.execute("ALTER TABLE instances ADD COLUMN last_governed_tier TEXT")
             connection.executescript(
                 """
@@ -282,8 +284,11 @@ class RemediationStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_slack_outbox_scope_status
                     ON slack_outbox(scope_id, portfolio_id, status, queued_at);
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_slack_outbox_one_active
-                    ON slack_outbox(workstream_fingerprint) WHERE status IN ('pending', 'sending', 'needs_review');
+                DROP INDEX IF EXISTS idx_slack_outbox_one_active;
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_slack_outbox_recipient_active
+                    ON slack_outbox(workstream_fingerprint, recipient_query COLLATE NOCASE)
+                    WHERE status IN ('pending', 'sending', 'needs_review');
+                PRAGMA user_version = 3;
                 """
             )
             connection.commit()
@@ -734,12 +739,13 @@ class RemediationStore:
         result["reason_codes"] = sorted({str(item.get("reason_code") or "") for item in instances})
         result["minimum_target_met"] = all(bool(item["minimum_target_met"]) for item in instances)
         result["selected_target_met"] = all(bool(item["selected_target_met"]) for item in instances)
-        outbox_row = connection.execute(
+        outbox_rows = connection.execute(
             """SELECT id, recipient_query, status, queued_at, claimed_at, sent_at, permalink, error, version
-               FROM slack_outbox WHERE workstream_fingerprint=? ORDER BY queued_at DESC LIMIT 1""",
+               FROM slack_outbox WHERE workstream_fingerprint=? ORDER BY queued_at DESC, id DESC""",
             (row["fingerprint"],),
-        ).fetchone()
-        result["slack_outbox"] = dict(outbox_row) if outbox_row else None
+        ).fetchall()
+        result["slack_outboxes"] = [dict(item) for item in outbox_rows]
+        result["slack_outbox"] = result["slack_outboxes"][0] if result["slack_outboxes"] else None
         if include_events:
             event_rows = connection.execute(
                 """SELECT event_type, actor, created_at, payload_json, instance_fingerprint
@@ -1025,10 +1031,20 @@ class RemediationStore:
                     or str(stored_plan.get("execution_id") or "") != execution_id
                 ):
                     raise QueueValidationError("Open the selected remediation path and review its current Slack handoff before queueing.")
+                uncertain = connection.execute(
+                    """SELECT id FROM slack_outbox WHERE workstream_fingerprint=?
+                       AND status='needs_review' ORDER BY queued_at DESC LIMIT 1""",
+                    (workstream_id,),
+                ).fetchone()
+                if uncertain:
+                    raise QueueConflict(
+                        "The existing Slack MCP delivery must be reconciled before another message can be queued."
+                    )
                 active = connection.execute(
                     """SELECT * FROM slack_outbox WHERE workstream_fingerprint=?
-                       AND status IN ('pending','sending','needs_review') ORDER BY queued_at DESC LIMIT 1""",
-                    (workstream_id,),
+                       AND recipient_query=? COLLATE NOCASE
+                       AND status IN ('pending','sending') ORDER BY queued_at DESC LIMIT 1""",
+                    (workstream_id, recipient),
                 ).fetchone()
                 if active and str(active["status"]) in {"sending", "needs_review"}:
                     raise QueueConflict(

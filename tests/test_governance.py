@@ -406,10 +406,10 @@ class RemediationPlannerTests(unittest.TestCase):
         }
         report = queue_report([gap])
         report["accounts"][0].update({
-            "projects": [{"id": "77", "name": "Acme Outcomes", "customer_id": "88"}],
+            "projects": [{"id": "77", "name": "Acme Outcomes", "customer_id": "88", "start_date": "2026-01-01", "due_date": "2026-12-31"}],
             "entries": [
-                {"id": "9001", "approval_status": "SUBMITTED", "activity_name": None},
-                {"id": "9002", "approval_status": "APPROVED", "activity_name": "Discovery"},
+                {"id": "9001", "project_id": "77", "date": "2026-07-01", "billable": True, "approval_status": "SUBMITTED", "activity_name": None, "category": "Delivery", "user_id": "11", "user_name": "Taylor Submitter", "user_email": "taylor@example.com"},
+                {"id": "9002", "project_id": "77", "date": "2026-07-02", "billable": True, "approval_status": "APPROVED", "activity_name": "Discovery", "category": "Delivery", "user_id": "12", "user_name": "Healthy Author", "user_email": "healthy@example.com"},
             ],
         })
         workstream = build_workstreams(report, scope_id="scope")[0]
@@ -425,6 +425,14 @@ class RemediationPlannerTests(unittest.TestCase):
         self.assertIn("does not expose approvalStatus", approval["limitation"])
         self.assertIn("What needs attention", workspace["slack_draft"]["message"])
         self.assertIn("— sent via Glean Pi", workspace["slack_draft"]["message"])
+        self.assertEqual("Rocketlane time-entry submitter", workspace["recipient_role"])
+        self.assertEqual(["taylor@example.com"], workspace["recipient_suggestions"])
+        self.assertEqual(1, len(workspace["slack_handoffs"]))
+        handoff = workspace["slack_handoffs"][0]
+        self.assertEqual("taylor@example.com", handoff["recipient"])
+        self.assertEqual(["9001"], handoff["entry_ids"])
+        self.assertNotIn("9002", handoff["message"])
+        self.assertIn("entries you submitted", handoff["message"])
 
     def test_execution_slack_template_is_recipient_specific_and_never_claims_delivery(self):
         workstream = build_workstreams(queue_report([RemediationStoreTests.gap_value()]), scope_id="scope")[0]
@@ -755,6 +763,14 @@ class RemediationStoreTests(unittest.TestCase):
                 message="Hi Alex — please update the linked record.\n\n— sent via Glean Pi",
             )
             self.assertEqual("already_pending", duplicate["delivery"])
+            second = store.queue_slack_message(
+                workstream["fingerprint"], scope_id="scope", portfolio_id="local-default", account_ids=None,
+                expected_version=duplicate["workstream"]["version"], execution_id=plan["execution_id"],
+                path_id=prepared["selected_path_id"], recipient_query="Taylor Submitter",
+                message="Hi Taylor — please update your submitted entries.\n\n— sent via Glean Pi",
+            )
+            self.assertEqual("pending", second["outbox"]["status"])
+            self.assertEqual(2, len(store.list_slack_outbox(scope_id="scope", status="pending")))
             claimed = store.claim_slack_outbox(
                 queued["outbox"]["id"], scope_id="scope", portfolio_id="local-default",
                 expected_version=queued["outbox"]["version"],
@@ -772,6 +788,7 @@ class RemediationStoreTests(unittest.TestCase):
             self.assertEqual("D456DEF", final["slack_channel_id"])
             self.assertEqual("1770000000.123456", final["slack_message_ts"])
             self.assertEqual(sent["id"], final["slack_outbox_id"])
+            self.assertEqual(2, len(final["slack_outboxes"]))
             self.assertEqual("sent", final["events"][0]["payload"]["delivery"])
 
     def test_slack_mcp_outbox_rejects_unsafe_permalink_and_blocks_uncertain_retry(self):
@@ -887,7 +904,7 @@ class RemediationStoreTests(unittest.TestCase):
             self.assertTrue({"slack_recipient_id", "slack_channel_id", "slack_message_ts", "slack_permalink", "slack_sent_at", "slack_outbox_id", "slack_message_sha256"} <= columns)
             self.assertIn("slack_outbox", tables)
 
-    def test_v1_database_is_cleanly_reset_to_v2(self):
+    def test_v1_database_is_cleanly_reset_to_v3(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "queue.sqlite3"
             with sqlite3.connect(str(path)) as connection:
@@ -896,7 +913,7 @@ class RemediationStoreTests(unittest.TestCase):
                 connection.execute("PRAGMA user_version=1")
                 connection.commit()
             store = RemediationStore(path)
-            self.assertEqual(2, store.health(scope_id="scope")["schema_version"])
+            self.assertEqual(3, store.health(scope_id="scope")["schema_version"])
             with sqlite3.connect(str(path)) as connection:
                 tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 workstream_columns = {row[1] for row in connection.execute("PRAGMA table_info(workstreams)")}

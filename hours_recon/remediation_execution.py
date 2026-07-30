@@ -14,7 +14,7 @@ import re
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 from urllib.parse import quote, urlparse
 
-EXECUTION_SCHEMA_VERSION = 1
+EXECUTION_SCHEMA_VERSION = 2
 DEFAULT_SALESFORCE_WEB_BASE_URL = "https://glean.lightning.force.com"
 DEFAULT_ROCKETLANE_WEB_BASE_URL = "https://glean.rocketlane.com"
 DEFAULT_MCP_WORKSPACE_URL = "https://app.glean.com/chat"
@@ -122,6 +122,59 @@ def _person_label(value: Any) -> str:
     return _safe_text(value, 200)
 
 
+def _entry_quality_issues(entry: Mapping[str, Any], project: Mapping[str, Any] | None) -> List[str]:
+    issues: List[str] = []
+    if not entry.get("id") or not entry.get("project_id") or not entry.get("date") or entry.get("billable") is not True:
+        issues.append("invalid required time-entry fields")
+    approval = str(entry.get("approval_status") or "").strip().upper()
+    if not approval:
+        issues.append("approval state is missing")
+    elif approval not in {"APPROVED", "APPROVED_WITH_CHANGES"}:
+        issues.append(f"approval state is {approval.lower().replace('_', ' ')}")
+    if not _safe_text(entry.get("activity_name")):
+        issues.append("activity is missing")
+    if not _safe_text(entry.get("category")):
+        issues.append("category is missing")
+    if not entry.get("user_id") and not entry.get("user_email"):
+        issues.append("contributor identity is missing")
+    if project:
+        entry_date = str(entry.get("date") or "")
+        start = str(project.get("start_date") or "")
+        due = str(project.get("due_date") or "")
+        if entry_date and ((start and entry_date < start) or (due and entry_date > due)):
+            issues.append("date falls outside the project dates")
+    return issues
+
+
+def _time_submitter_handoffs(account: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    projects = {str(item.get("id")): item for item in account.get("projects", [])}
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for entry in account.get("entries", []):
+        issues = _entry_quality_issues(entry, projects.get(str(entry.get("project_id"))))
+        if not issues:
+            continue
+        recipient = _safe_text(entry.get("user_email") or entry.get("user_name"), 200)
+        if not recipient:
+            continue
+        label = _person_label({"name": entry.get("user_name"), "email": entry.get("user_email")}) or recipient
+        group = grouped.setdefault(recipient.casefold(), {
+            "recipient": recipient,
+            "recipient_label": label,
+            "entry_ids": [],
+            "issues": [],
+        })
+        group["entry_ids"].append(str(entry.get("id") or "missing-id"))
+        group["issues"].extend(issues)
+    return [
+        {
+            **group,
+            "entry_ids": _unique(group["entry_ids"]),
+            "issues": _unique(group["issues"]),
+        }
+        for _, group in sorted(grouped.items())
+    ]
+
+
 def _owner_suggestions(account: Mapping[str, Any], path_id: str) -> List[str]:
     suggestions: List[str] = []
     if path_id.startswith(("hours_mapping.", "service_period.", "entitlement_source.")):
@@ -134,18 +187,19 @@ def _owner_suggestions(account: Mapping[str, Any], path_id: str) -> List[str]:
                 label = _person_label(package.get(key))
                 if label:
                     suggestions.append(label)
-    if path_id.startswith(("project_linkage.", "time_quality.")):
+    if path_id.startswith("time_quality."):
+        suggestions.extend(item["recipient"] for item in _time_submitter_handoffs(account))
+    if path_id.startswith("project_linkage.") or (
+        path_id.startswith("time_quality.") and any(
+            str(project.get("status") or "").lower() in {"proposed", "in planning", "planning"}
+            or not project.get("start_date") or not project.get("due_date")
+            for project in account.get("projects", [])
+        )
+    ):
         for project in account.get("projects", []):
             label = _person_label(project.get("owner") or project.get("owner_name") or project.get("owner_email"))
             if label:
                 suggestions.append(label)
-    if path_id.startswith("time_quality."):
-        for entry in account.get("entries", []):
-            pending = str(entry.get("approval_status") or "").upper() in {"SUBMITTED", "NOT_SUBMITTED", "PENDING", "UNKNOWN"}
-            if pending or not _safe_text(entry.get("activity_name")):
-                label = _person_label(entry.get("user") or entry.get("user_name") or entry.get("user_email"))
-                if label:
-                    suggestions.append(label)
     return list(dict.fromkeys(suggestions))[:12]
 
 
@@ -191,7 +245,7 @@ def _recipient_role(path_id: str, primary_owner: str) -> str:
     if path_id.startswith("project_linkage."):
         return "AISM / Rocketlane project owner"
     if path_id.startswith("time_quality."):
-        return "AISM / Rocketlane project owner or time-entry author"
+        return "Rocketlane time-entry submitter"
     if path_id.startswith("source_coverage."):
         return "Salesforce / Rocketlane connector owner"
     return primary_owner or "source-system owner"
@@ -472,6 +526,34 @@ def _slack_message(
     )
 
 
+def _time_submitter_message(
+    *,
+    workstream: Mapping[str, Any],
+    account_name: str,
+    handoff: Mapping[str, Any],
+    links: Sequence[Mapping[str, Any]],
+) -> str:
+    entry_lines = "\n".join(f"- Time entry `{entry_id}`" for entry_id in handoff.get("entry_ids", []))
+    issue_lines = "\n".join(f"- {issue}" for issue in handoff.get("issues", []))
+    time_links = [link for link in links if "time entries" in str(link.get("label") or "").lower()]
+    link_lines = "\n".join(
+        f"- {_safe_text(link.get('label'), 180)}: {link.get('url')}" for link in time_links[:3]
+    )
+    records_section = f"\n\nRocketlane\n{link_lines}" if link_lines else ""
+    due = _safe_text(workstream.get("due_on"), 40)
+    due_line = f"\nDue: {due}" if due else ""
+    return (
+        f"Hi {{{{recipient}}}} — could you correct the Rocketlane time entries you submitted for {account_name}?\n\n"
+        f"Your entries\n{entry_lines}\n\n"
+        f"What needs correction\n{issue_lines}\n\n"
+        "Please update only your listed entries. If an entry date is correct but the project dates are stale, "
+        "reply here rather than changing valid time."
+        f"{records_section}{due_line}\n\n"
+        "Reply here when it’s done so I can refresh Hours Recon and verify the change.\n\n"
+        "— sent via Glean Pi"
+    )
+
+
 def _mcp_request(workspace: Mapping[str, Any]) -> str:
     packet = {
         "execution_id": workspace["execution_id"],
@@ -542,6 +624,7 @@ def build_execution_workspace(
             "customer_ids": customer_ids,
             "time_entry_ids": pending_ids,
             "missing_activity_entry_ids": _unique(entry.get("id") for entry in entries if not _safe_text(entry.get("activity_name"))),
+            "time_submitter_handoffs": _time_submitter_handoffs(account) if path_id.startswith("time_quality.") else [],
             "owner_suggestions": _owner_suggestions(account, path_id),
             "links": _record_links(account, salesforce_base_url=salesforce_base, rocketlane_base_url=rocketlane_base),
         })
@@ -551,6 +634,20 @@ def build_execution_workspace(
     recipient_suggestions = list(dict.fromkeys(
         suggestion for record in records for suggestion in record.get("owner_suggestions", [])
     ))[:12]
+    slack_handoffs: List[Dict[str, Any]] = []
+    if path_id.startswith("time_quality."):
+        for record in records:
+            for handoff in record.get("time_submitter_handoffs", []):
+                slack_handoffs.append({
+                    **handoff,
+                    "account_name": record["account_name"],
+                    "message": _time_submitter_message(
+                        workstream=workstream,
+                        account_name=record["account_name"],
+                        handoff=handoff,
+                        links=record.get("links", []),
+                    ),
+                })
     workspace: Dict[str, Any] = {
         "schema_version": EXECUTION_SCHEMA_VERSION,
         "execution_id": _stable_id({
@@ -579,6 +676,7 @@ def build_execution_workspace(
         "recipient_role": recipient_role,
         "recipient_suggestions": recipient_suggestions,
         "default_recipient": recipient_suggestions[0] if recipient_suggestions else recipient_role,
+        "slack_handoffs": slack_handoffs,
         "handoff_recommended": execution_mode in {"delegated", "mcp_assisted"} or recipient_role != "Hours Recon owner",
         "slack_draft": {
             "recipient_role": recipient_role,
