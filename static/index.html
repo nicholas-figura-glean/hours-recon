@@ -61,9 +61,9 @@
     }
     * { box-sizing: border-box; }
     body { margin: 0; background: var(--artifact-bg); color: var(--artifact-text); font-family: var(--artifact-font); font-size: 14px; line-height: 1.45; }
-    button, input, select { font: inherit; }
-    button, input, select, [tabindex] { outline: none; }
-    button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 3px solid color-mix(in srgb, var(--artifact-accent) 45%, transparent); outline-offset: 2px; }
+    button, input, select, textarea { font: inherit; }
+    button, input, select, textarea, [tabindex] { outline: none; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline: 3px solid color-mix(in srgb, var(--artifact-accent) 45%, transparent); outline-offset: 2px; }
     button { cursor: pointer; }
     button:disabled { cursor: wait; opacity: .65; }
     .shell { max-width: 1540px; margin: 0 auto; padding: var(--artifact-space-5); }
@@ -120,7 +120,8 @@
     .controls { display: grid; grid-template-columns: minmax(220px, 1fr) 180px 180px auto; gap: var(--artifact-space-3); padding: var(--artifact-space-4); border-bottom: 1px solid var(--artifact-border); }
     .field { display: grid; gap: 5px; }
     .field label { color: var(--artifact-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .055em; }
-    input, select { width: 100%; min-height: 38px; padding: 7px 10px; color: var(--artifact-text); background: var(--artifact-surface); border: 1px solid var(--artifact-border); border-radius: 7px; }
+    input, select, textarea { width: 100%; min-height: 38px; padding: 7px 10px; color: var(--artifact-text); background: var(--artifact-surface); border: 1px solid var(--artifact-border); border-radius: 7px; }
+    textarea { resize: vertical; font-family: var(--artifact-mono); font-size: 12px; line-height: 1.5; }
     .checkbox { display: flex; align-items: end; padding-bottom: 8px; gap: 8px; color: var(--artifact-muted); white-space: nowrap; }
     .checkbox input { width: 16px; min-height: 16px; height: 16px; accent-color: var(--artifact-accent); }
     .table-wrap { overflow-x: auto; }
@@ -165,23 +166,64 @@
     .exception-type { color: var(--artifact-warning); font-family: var(--artifact-mono); font-size: 12px; }
     .exception strong { font-weight: 700; }
     .exception p { color: var(--artifact-muted); }
-    .case-list { display: grid; gap: 10px; padding: 12px; }
-    .remediation-case { border: 1px solid var(--artifact-border); border-radius: 8px; background: var(--artifact-surface); }
-    .remediation-case summary { cursor: pointer; list-style: none; padding: 12px; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
-    .remediation-case summary::-webkit-details-marker { display: none; }
+    .workstream-list { display: grid; gap: 12px; padding: 12px; }
+    .workstream-card { border: 1px solid var(--artifact-border); border-radius: 9px; background: var(--artifact-surface); overflow: hidden; }
+    .workstream-card > summary { cursor: pointer; list-style: none; padding: 14px; display: grid; grid-template-columns: auto minmax(240px, 1fr) auto; align-items: center; gap: 10px; }
+    .workstream-card > summary::-webkit-details-marker { display: none; }
+    .workstream-title { display: grid; gap: 3px; }
+    .workstream-title strong { font-size: 14px; }
+    .workstream-summary-meta { color: var(--artifact-muted); font-size: 12px; }
     .case-priority { display: inline-flex; min-width: 30px; justify-content: center; border-radius: 5px; padding: 3px 6px; font-size: 11px; font-weight: 800; }
     .case-priority.p0 { color: var(--artifact-danger); background: var(--artifact-danger-soft); }
     .case-priority.p1 { color: var(--artifact-warning); background: var(--artifact-warning-soft); }
     .case-priority.p2 { color: var(--artifact-info); background: var(--artifact-info-soft); }
-    .case-id { margin-left: auto; color: var(--artifact-muted); font-family: var(--artifact-mono); font-size: 11px; }
-    .case-body { border-top: 1px solid var(--artifact-border); padding: 12px; display: grid; gap: 12px; }
-    .gap-list { display: grid; gap: 8px; }
-    .gap-item { padding: 10px; border: 1px solid var(--artifact-border); border-radius: 7px; display: grid; gap: 7px; }
-    .gap-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .gap-head strong { margin-right: auto; }
-    .gap-item p { color: var(--artifact-muted); font-size: 12px; }
-    .gap-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+    .workstream-id { color: var(--artifact-muted); font-family: var(--artifact-mono); font-size: 11px; text-align: right; }
+    .workstream-body { border-top: 1px solid var(--artifact-border); padding: 14px; display: grid; gap: 14px; }
+    .planner-summary { display: grid; grid-template-columns: minmax(220px, 1.5fr) repeat(4, minmax(105px, .6fr)); gap: 1px; border: 1px solid var(--artifact-border); border-radius: 8px; overflow: hidden; background: var(--artifact-border); }
+    .planner-fact { padding: 11px; background: var(--artifact-surface-subtle); display: grid; gap: 3px; }
+    .planner-fact span { color: var(--artifact-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .045em; }
+    .planner-fact strong { font-size: 12px; }
+    .recommendation { padding: 12px; border-left: 4px solid var(--artifact-accent); border-radius: 6px; background: var(--artifact-accent-soft); display: grid; gap: 4px; }
+    .recommendation p { color: var(--artifact-muted); font-size: 12px; }
+    .path-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 10px; }
+    .path-option { border: 1px solid var(--artifact-border); border-radius: 8px; padding: 11px; display: grid; gap: 9px; align-content: start; }
+    .path-option.recommended { border-color: var(--artifact-accent); }
+    .path-option.selected { box-shadow: inset 0 0 0 2px var(--artifact-accent); }
+    .path-head { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+    .path-head strong { margin-right: auto; }
+    .path-meta { display: flex; flex-wrap: wrap; gap: 6px; color: var(--artifact-muted); font-size: 11px; }
+    .path-option p { color: var(--artifact-muted); font-size: 12px; }
+    .path-steps { margin: 0; padding-left: 22px; color: var(--artifact-muted); font-size: 12px; display: grid; gap: 4px; }
+    .instance-list { display: grid; gap: 7px; }
+    .instance-item { border: 1px solid var(--artifact-border); border-radius: 7px; padding: 9px 10px; display: grid; grid-template-columns: auto minmax(180px, 1fr) auto; gap: 9px; align-items: center; }
+    .instance-item p { color: var(--artifact-muted); font-size: 12px; }
+    .workstream-actions { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
     .queue-meta { display: flex; gap: 12px; flex-wrap: wrap; color: var(--artifact-muted); font-size: 12px; }
+    .copy-feedback { color: var(--artifact-healthy); font-weight: 700; font-size: 12px; }
+    .target-note { color: var(--artifact-muted); font-size: 12px; }
+    .target-note.optional { color: var(--artifact-info); }
+    .history { color: var(--artifact-muted); font-size: 12px; }
+    .execution-dialog { width: min(1180px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; color: var(--artifact-text); background: var(--artifact-surface); border: 1px solid var(--artifact-border); border-radius: 12px; box-shadow: 0 24px 70px rgba(0,0,0,.25); }
+    .execution-dialog::backdrop { background: rgba(7, 18, 25, .62); backdrop-filter: blur(3px); }
+    .execution-shell { display: grid; max-height: calc(100vh - 34px); grid-template-rows: auto minmax(0, 1fr); }
+    .execution-header { display: flex; justify-content: space-between; gap: 16px; align-items: start; padding: 16px 18px; border-bottom: 1px solid var(--artifact-border); }
+    .execution-header div { display: grid; gap: 4px; }
+    .execution-content { overflow-y: auto; padding: 18px; display: grid; gap: 16px; }
+    .execution-banner { padding: 12px; border: 1px solid color-mix(in srgb, var(--artifact-warning) 35%, var(--artifact-border)); border-radius: 8px; color: var(--artifact-warning); background: var(--artifact-warning-soft); }
+    .execution-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(320px, .8fr); gap: 14px; }
+    .execution-column { display: grid; gap: 12px; align-content: start; }
+    .execution-card { border: 1px solid var(--artifact-border); border-radius: 8px; padding: 12px; display: grid; gap: 9px; background: var(--artifact-surface-subtle); }
+    .execution-card h3 { display: flex; align-items: center; gap: 7px; }
+    .execution-operation { border-left: 4px solid var(--artifact-accent); }
+    .execution-operation.unsupported { border-left-color: var(--artifact-warning); }
+    .execution-fields { margin: 0; padding: 9px; border-radius: 6px; overflow-x: auto; color: var(--artifact-text); background: var(--artifact-surface); border: 1px solid var(--artifact-border); font: 11px/1.5 var(--artifact-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+    .execution-links, .execution-list { margin: 0; padding-left: 20px; display: grid; gap: 5px; color: var(--artifact-muted); }
+    .execution-links a { color: var(--artifact-info); overflow-wrap: anywhere; }
+    .execution-copy { display: grid; gap: 8px; }
+    .execution-copy textarea { min-height: 190px; }
+    .execution-copy.slack textarea { min-height: 240px; }
+    .execution-button-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .execution-feedback { color: var(--artifact-healthy); font-size: 12px; font-weight: 700; }
     .footer { padding: var(--artifact-space-5) 0; color: var(--artifact-muted); font-size: 12px; text-align: center; }
     .loading { animation: pulse 1.2s ease-in-out infinite; }
     @keyframes pulse { 50% { opacity: .55; } }
@@ -192,6 +234,7 @@
       .controls { grid-template-columns: 1fr 1fr; }
       .detail-grid { grid-template-columns: 1fr; }
       .evidence-summary { grid-template-columns: 1fr 1fr; }
+      .planner-summary { grid-template-columns: 1fr 1fr; }
     }
     @media (max-width: 680px) {
       .shell { padding: var(--artifact-space-4); }
@@ -204,7 +247,13 @@
       .exception { grid-template-columns: 1fr; }
       .detail-header { flex-direction: column; }
       .evidence-summary { grid-template-columns: 1fr; }
-      .case-id { margin-left: 0; width: 100%; }
+      .workstream-card > summary { grid-template-columns: auto 1fr; }
+      .workstream-id { grid-column: 1 / -1; text-align: left; }
+      .planner-summary { grid-template-columns: 1fr; }
+      .instance-item { grid-template-columns: auto 1fr; }
+      .instance-item .button { grid-column: 1 / -1; }
+      .execution-grid { grid-template-columns: 1fr; }
+      .execution-header { flex-direction: column; }
     }
   </style>
 </head>
@@ -262,10 +311,10 @@
     </section>
 
     <section class="section">
-      <div class="section-title"><div><h2>Remediation queue</h2><p class="source-note">Tier 3/4 evidence gaps launch a private, deduplicated account workflow</p></div><span class="pill" id="remediationCount">0 active cases</span></div>
+      <div class="section-title"><div><h2>Remediation planner</h2><p class="source-note">Ranked T1/T2 paths grouped into systemic workstreams with account-level validation</p></div><span class="pill" id="remediationCount">0 active workstreams</span></div>
       <div class="panel">
-        <div class="case-list" id="remediationCases"></div>
-        <div class="empty" id="remediationEmpty" hidden>No active remediation cases.</div>
+        <div class="workstream-list" id="remediationWorkstreams"></div>
+        <div class="empty" id="remediationEmpty" hidden>No remediation workstreams have been observed.</div>
       </div>
     </section>
 
@@ -277,8 +326,18 @@
     <footer class="footer" id="footer"></footer>
   </main>
 
+  <dialog class="execution-dialog" id="executionDialog" aria-labelledby="executionTitle">
+    <div class="execution-shell">
+      <header class="execution-header">
+        <div><span class="eyebrow">Selected path next steps</span><h2 id="executionTitle">MCP execution workspace</h2><p class="source-note" id="executionSubtitle"></p></div>
+        <button class="button secondary" id="closeExecution" type="button">Close</button>
+      </header>
+      <div class="execution-content" id="executionContent"></div>
+    </div>
+  </dialog>
+
   <script>
-    const state = { data: null, selectedId: null, filters: { search: '', risk: 'all', weeklyOnly: false, sort: 'risk' } };
+    const state = { data: null, selectedId: null, execution: null, filters: { search: '', risk: 'all', weeklyOnly: false, sort: 'risk' } };
     const riskOrder = { overage: 0, expired: 1, critical: 2, high: 3, medium: 4, healthy: 5, exhausted: 6, none: 7 };
     const $ = selector => document.querySelector(selector);
     const fmt = value => new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(Number(value || 0));
@@ -335,7 +394,7 @@
       $('#asOf').textContent = `As of ${fmtDate(meta.as_of)}`;
       const notice = $('#notice');
       const sourceNotice = meta.notice || (mode === 'demo' ? 'Demo mode is active. Configure .env and switch HOURS_RECON_MODE to live before using these numbers operationally.' : '');
-      const governanceNotice = meta.governance_mode === 'observe_only' ? 'Governance is observe-only: reported totals are unchanged while Tier 3/4 evidence launches local remediation cases.' : '';
+      const governanceNotice = meta.governance_mode === 'observe_only' ? 'Governance is observe-only: reported totals are unchanged while Tier 3/4 evidence launches ranked remediation workstreams.' : '';
       const noticeText = [sourceNotice, governanceNotice].filter(Boolean).join(' ');
       notice.textContent = noticeText;
       notice.classList.toggle('show', Boolean(noticeText));
@@ -406,7 +465,7 @@
         const weekly = account.weekly;
         const projects = `${account.project_count} project${account.project_count === 1 ? '' : 's'} · ${account.entry_count} entries`;
         return `<tr data-account-id="${escapeHtml(account.id)}" tabindex="0" class="${state.selectedId === account.id ? 'selected' : ''}">
-          <td class="account-name">${escapeHtml(account.name)}<span class="account-meta">${projects}</span><span class="account-meta">${account.governance ? tierBadge(account.governance.overall_tier, account.governance.status) : ''}${account.remediation?.active_gap_count ? ` · ${fmt(account.remediation.active_gap_count)} open gaps` : ''}</span></td>
+          <td class="account-name">${escapeHtml(account.name)}<span class="account-meta">${projects}</span><span class="account-meta">${account.governance ? tierBadge(account.governance.overall_tier, account.governance.status) : ''}${account.remediation?.active_workstream_count ? ` · ${fmt(account.remediation.active_workstream_count)} active workstreams` : ''}</span></td>
           <td><span class="risk-badge ${account.risk}">${titleCase(account.risk)}</span></td>
           <td class="number">${fmt(account.sold_hours)}</td><td class="number">${fmt(account.billed_hours)}</td><td class="number">${fmt(account.remaining_hours)}</td><td class="number">${fmt(account.at_risk_hours)}</td><td class="number">${fmt(account.expired_unused_hours)}</td>
           <td><div class="activity-stack"><span class="activity-badge ${weekly.account_active_current ? 'active' : 'missing'}">Account ${weekly.account_active_current ? 'active' : 'gap'}</span><span class="activity-badge ${weekly.aiom_active_current ? 'active' : 'missing'}">AIOM ${weekly.aiom_active_current ? 'active' : 'gap'}</span></div></td>
@@ -461,7 +520,7 @@
         return `<details class="evidence-chain"><summary>${escapeHtml(pkg.opportunity_name || pkg.id)} · ${fmt(pkg.sold_hours)}h</summary><ol class="evidence-steps">${steps}</ol></details>`;
       }).join('');
       const remediation = account.remediation;
-      const governanceHeader = governance ? `${tierBadge(governance.overall_tier, governance.status)}${remediation ? ` <span class="account-meta">${escapeHtml(remediation.priority || '')} remediation · ${fmt(remediation.active_gap_count)} active gaps · due ${fmtDate(remediation.due_on)}</span>` : ''}` : '';
+      const governanceHeader = governance ? `${tierBadge(governance.overall_tier, governance.status)}${remediation ? ` <span class="account-meta">${escapeHtml(remediation.highest_priority || '')} remediation · ${fmt(remediation.active_workstream_count)} active workstreams</span>` : ''}` : '';
       detail.innerHTML = `<div class="detail-header"><div class="detail-title"><h2>${escapeHtml(account.name)}</h2><div>${governanceHeader}</div><div class="detail-kpis"><span><strong>${fmt(account.remaining_hours)}</strong> remaining</span><span><strong>${fmt(account.at_risk_hours)}</strong> at risk</span><span><strong>${fmt(account.expired_unused_hours)}</strong> expired</span><span><strong>${fmt(account.overage_hours)}</strong> overage</span>${account.pre_entitlement_hours ? `<span><strong>${fmt(account.pre_entitlement_hours)}</strong> pre-entitlement</span>` : ''}</div></div><button class="button secondary" id="closeDetail" type="button">Close detail</button></div>
         <div class="detail-grid">
           <section class="subpanel governance"><h3>Governance evidence · weakest dimension controls the account tier</h3>${dimensionCards ? `<div class="evidence-summary">${dimensionCards}</div>${evidenceChains ? `<div class="evidence-chains"><strong>Entitlement evidence chains</strong>${evidenceChains}</div>` : ''}` : '<div class="empty">Governance evidence is pending a refreshed report.</div>'}</section>
@@ -473,56 +532,74 @@
       $('#closeDetail').addEventListener('click', () => { state.selectedId = null; detail.classList.remove('show'); renderAccounts(); });
     }
 
-    function remediationActionButtons(gap) {
-      const base = `data-gap-id="${escapeHtml(gap.fingerprint)}" data-gap-version="${Number(gap.version)}"`;
-      const active = ['open', 'acknowledged', 'in_progress', 'pending_validation', 'snoozed'].includes(gap.status);
+    function remediationActionButtons(workstream) {
+      const base = `data-workstream-id="${escapeHtml(workstream.fingerprint)}" data-workstream-version="${Number(workstream.version)}"`;
+      const active = ['open', 'acknowledged', 'in_progress', 'pending_validation', 'snoozed'].includes(workstream.status);
       let primary = '';
-      if (gap.status === 'open') primary = `<button class="button tiny secondary" ${base} data-remediation-action="acknowledge" type="button">Acknowledge</button><button class="button tiny secondary" ${base} data-remediation-action="start" type="button">Start work</button>`;
-      if (gap.status === 'acknowledged') primary = `<button class="button tiny secondary" ${base} data-remediation-action="start" type="button">Start work</button><button class="button tiny secondary" ${base} data-remediation-action="ready_for_validation" type="button">Ready for fresh-pull validation</button>`;
-      if (gap.status === 'snoozed') primary = `<button class="button tiny secondary" ${base} data-remediation-action="start" type="button">Resume work</button>`;
-      if (gap.status === 'in_progress') primary = `<button class="button tiny secondary" ${base} data-remediation-action="ready_for_validation" type="button">Ready for fresh-pull validation</button>`;
-      if (gap.status === 'pending_validation') primary = `<span class="source-note">Waiting for a new complete source retrieval.</span><button class="button tiny secondary" ${base} data-remediation-action="start" type="button">Resume work</button>`;
-      if (gap.status === 'waived') return `<span class="source-note">Temporary exception approved by ${escapeHtml(gap.waiver_approved_by || '—')} through ${escapeHtml(gap.waiver_expires_on || '—')}.</span>`;
-      const controls = active ? `<button class="button tiny secondary" ${base} data-remediation-action="assign" type="button">Assign</button><button class="button tiny secondary" ${base} data-remediation-action="snooze" type="button">Snooze</button><button class="button tiny secondary" ${base} data-remediation-action="waive" type="button">Temporary exception</button>` : '';
+      if (workstream.status === 'open') primary = `<button class="button tiny secondary" ${base} data-remediation-action="acknowledge" type="button">Acknowledge</button><button class="button tiny secondary" ${base} data-remediation-action="start" type="button">Start work</button>`;
+      if (workstream.status === 'acknowledged') primary = `<button class="button tiny secondary" ${base} data-remediation-action="start" type="button">Start work</button><button class="button tiny secondary" ${base} data-remediation-action="ready_for_validation" type="button">Ready for fresh-pull validation</button>`;
+      if (workstream.status === 'snoozed') primary = `<button class="button tiny secondary" ${base} data-remediation-action="resume" type="button">Resume work</button>`;
+      if (workstream.status === 'in_progress') primary = `<button class="button tiny secondary" ${base} data-remediation-action="ready_for_validation" type="button">Ready for fresh-pull validation</button>`;
+      if (workstream.status === 'pending_validation') primary = `<span class="source-note">Waiting for a new complete source retrieval.</span><button class="button tiny secondary" ${base} data-remediation-action="resume" type="button">Resume work</button>`;
+      if (workstream.status === 'waived') return `<span class="source-note">Temporary exception approved by ${escapeHtml(workstream.waiver_approved_by || '—')} through ${fmtDate(workstream.waiver_expires_on)}.</span>`;
+      const controls = active ? `<button class="button tiny secondary" ${base} data-remediation-action="snooze" type="button">Snooze</button><button class="button tiny secondary" ${base} data-remediation-action="waive" type="button">Temporary exception</button>` : '';
       return primary + controls;
+    }
+
+    function renderPathOption(path, workstream) {
+      const selected = path.id === workstream.selected_path_id;
+      const base = `data-workstream-id="${escapeHtml(workstream.fingerprint)}" data-workstream-version="${Number(workstream.version)}"`;
+      const badges = `${path.recommended ? '<span class="pill live">Recommended</span>' : ''}${selected ? '<span class="pill">Selected</span>' : ''}`;
+      const steps = (path.steps || []).map(step => `<li>${escapeHtml(step)}</li>`).join('');
+      const dependencies = (path.dependencies || []).join(' · ') || 'None listed';
+      const contributors = (path.contributors || []).join(' · ') || 'None listed';
+      return `<article class="path-option ${path.recommended ? 'recommended' : ''} ${selected ? 'selected' : ''}"><div class="path-head">${tierBadge(path.target_tier, path.target_tier === 'T1' ? 'preferred' : 'governed')}${badges}<strong>${escapeHtml(path.title)}</strong></div><div class="path-meta"><span>Effort ${escapeHtml(path.effort)}</span><span>${escapeHtml(titleCase(path.durability))} durability</span><span>${escapeHtml(titleCase(path.execution_scope))} execution</span><span>${escapeHtml(titleCase(path.validation_mode))} validation</span></div><p>${escapeHtml(path.outcome)}</p><ol class="path-steps">${steps}</ol><p><strong>Owner:</strong> ${escapeHtml(path.primary_owner)} · <strong>Partners:</strong> ${escapeHtml(contributors)}</p><p><strong>Dependencies:</strong> ${escapeHtml(dependencies)}</p>${selected ? `<div class="execution-button-row"><span class="source-note">Selected path; this drives target-state reporting.</span><button class="button tiny" ${base} data-remediation-action="prepare_execution" type="button">Open next steps</button></div>` : `<button class="button tiny secondary" ${base} data-remediation-action="select_path" data-path-id="${escapeHtml(path.id)}" type="button">Select and open next steps</button>`}</article>`;
     }
 
     function renderRemediation() {
       const queue = state.data.remediation_queue || {};
-      const cases = queue.cases || [];
-      const waivedCount = cases.filter(item => item.status === 'waived').length;
-      const resolvedCount = cases.filter(item => item.status === 'resolved').length;
-      $('#remediationCount').textContent = `${fmt(queue.active_case_count)} active case${queue.active_case_count === 1 ? '' : 's'} · ${fmt(queue.active_gap_count)} gaps${waivedCount ? ` · ${waivedCount} waived` : ''}${resolvedCount ? ` · ${resolvedCount} resolved` : ''}`;
-      $('#remediationEmpty').hidden = cases.length > 0;
+      const workstreams = queue.workstreams || [];
+      const waivedCount = workstreams.filter(item => item.status === 'waived').length;
+      const governedCount = workstreams.filter(item => item.status === 'governed').length;
+      $('#remediationCount').textContent = `${fmt(queue.active_workstream_count)} active workstream${queue.active_workstream_count === 1 ? '' : 's'} · ${fmt(queue.active_instance_count)} account gaps${governedCount ? ` · ${governedCount} governed` : ''}${waivedCount ? ` · ${waivedCount} waived` : ''}`;
+      $('#remediationEmpty').hidden = workstreams.length > 0;
       if (!queue.available) {
-        $('#remediationCases').innerHTML = `<div class="error show">Remediation queue unavailable.${queue.error ? ` ${escapeHtml(queue.error)}` : ''}</div>`;
+        $('#remediationWorkstreams').innerHTML = `<div class="error show">Remediation planner unavailable.${queue.error ? ` ${escapeHtml(queue.error)}` : ''}</div>`;
         return;
       }
-      $('#remediationCases').innerHTML = cases.map(item => {
+      $('#remediationWorkstreams').innerHTML = workstreams.map((item, index) => {
         const priority = ['P0', 'P1', 'P2'].includes(item.priority) ? item.priority : 'P2';
-        const gaps = (item.gaps || []).map(gap => {
-          const refs = (gap.evidence?.refs || []).join(', ');
-          return `<article class="gap-item"><div class="gap-head">${tierBadge(gap.tier, gap.status)}<strong>${escapeHtml(titleCase(gap.dimension))}</strong><span class="source-note">Proposed route: ${escapeHtml(titleCase(gap.route))} · due ${fmtDate(gap.due_on)}</span></div><p>${escapeHtml(gap.summary || '')}</p><p><strong>Recommended:</strong> ${escapeHtml(gap.recommended_action || '')}</p><p class="source-note">Reason: ${escapeHtml(gap.reason_code || '—')}${refs ? ` · Evidence refs: ${escapeHtml(refs)}` : ''}${gap.assignee ? ` · Assigned: ${escapeHtml(gap.assignee)}` : ''}${gap.regression_count ? ` · Regressions: ${fmt(gap.regression_count)}` : ''}</p><div class="gap-actions">${remediationActionButtons(gap)}</div></article>`;
-        }).join('');
-        const caseLabel = item.status === 'waived' ? 'Waived' : item.status === 'resolved' ? 'Resolved' : `Proposed ${priority}`;
-        return `<details class="remediation-case"><summary><span class="case-priority ${priority.toLowerCase()}">${caseLabel}</span><strong>${escapeHtml(item.account_name || item.account_id)}</strong><span>${escapeHtml(titleCase(item.status))} · ${fmt(item.active_gap_count)} active gaps</span><span class="case-id">${escapeHtml(item.fingerprint.slice(0, 17))}…</span></summary><div class="case-body"><div class="queue-meta"><span>Proposed primary route: ${escapeHtml(titleCase(item.primary_route || 'unassigned'))}</span><span>Due: ${fmtDate(item.due_on)}</span><span>Tier: ${escapeHtml(item.overall_tier || '—')}</span></div><div class="gap-list">${gaps}</div><div class="gap-actions"><button class="button tiny secondary" type="button" data-open-account-id="${escapeHtml(item.account_id)}">View account evidence</button><button class="button tiny secondary" type="button" data-case-history="${escapeHtml(item.fingerprint)}">Load case history</button></div><div id="history-${escapeHtml(item.fingerprint)}" class="source-note"></div></div></details>`;
+        const selectedPath = item.selected_path || (item.paths || []).find(path => path.id === item.selected_path_id) || {};
+        const impact = item.impact || {};
+        const impactText = `${fmt(impact.sold_hours)}h sold · ${fmt(impact.remaining_hours)}h remaining · ${fmt(impact.at_risk_hours)}h at risk · ${fmt(impact.overage_hours)}h overage`;
+        const targetNote = item.minimum_target_met
+          ? (item.selected_target_met ? `Selected ${escapeHtml(item.selected_target_tier)} outcome validated.` : `Governed at T2; selected T1 improvement remains optional.`)
+          : `Current evidence is below the T2 governed minimum.`;
+        const instances = (item.instances || []).map(instance => `<article class="instance-item">${tierBadge(instance.validation_tier || instance.current_tier, instance.governance_status)}<div><strong>${escapeHtml(instance.account_name || instance.account_id)} · ${escapeHtml(titleCase(instance.dimension))}</strong><p>${escapeHtml(instance.summary || '')}</p><p>Reason: ${escapeHtml(instance.reason_code || '—')}${instance.unverified_observed_tier ? ` · Latest incomplete observation: ${escapeHtml(instance.unverified_observed_tier)} (not revalidated)` : ''}${instance.regression_count ? ` · Regressions: ${fmt(instance.regression_count)}` : ''}</p></div><button class="button tiny secondary" type="button" data-open-account-id="${escapeHtml(instance.account_id)}">View evidence</button></article>`).join('');
+        const paths = (item.paths || []).map(path => renderPathOption(path, item)).join('');
+        const statusLabel = item.status === 'governed' ? 'Governed' : item.status === 'waived' ? 'Waived' : `${priority} · ${titleCase(item.status)}`;
+        const copied = item.slack_copied_at ? `Slack follow-up copied ${escapeHtml(new Date(item.slack_copied_at).toLocaleString())}; delivery is not tracked.` : (item.mcp_request_copied_at ? `MCP request copied ${escapeHtml(new Date(item.mcp_request_copied_at).toLocaleString())}; no source write is implied.` : '');
+        const selectedAlternate = item.selected_path_id !== item.recommended_path_id;
+        const recommendationHeading = selectedAlternate ? 'Selected alternate path' : 'Why this path';
+        const recommendationText = selectedAlternate ? `Policy recommends a different path: ${item.recommendation_reason || ''} The selected alternate remains valid and drives the current target.` : (item.recommendation_reason || '');
+        return `<details class="workstream-card" ${index === 0 && item.status !== 'governed' ? 'open' : ''}><summary><span class="case-priority ${priority.toLowerCase()}">${escapeHtml(statusLabel)}</span><span class="workstream-title"><strong>${escapeHtml(item.title)}</strong><span class="workstream-summary-meta">${fmt(item.affected_account_count)} account${item.affected_account_count === 1 ? '' : 's'} · ${escapeHtml((item.dimensions || []).map(titleCase).join(', '))} · Target ${escapeHtml(item.selected_target_tier || selectedPath.target_tier || 'T2')}</span></span><span class="workstream-id">${escapeHtml(item.fingerprint.slice(0, 17))}…</span></summary><div class="workstream-body"><div class="planner-summary"><div class="planner-fact"><span>Selected path</span><strong>${escapeHtml(selectedPath.title || 'Policy recommendation')}</strong></div><div class="planner-fact"><span>Route</span><strong>${escapeHtml(titleCase(item.route))}</strong></div><div class="planner-fact"><span>Effort</span><strong>${escapeHtml(selectedPath.effort || '—')}</strong></div><div class="planner-fact"><span>Due</span><strong>${fmtDate(item.due_on)}</strong></div><div class="planner-fact"><span>Impact</span><strong>${escapeHtml(impactText)}</strong></div></div><div class="recommendation"><strong>${escapeHtml(recommendationHeading)}</strong><p>${escapeHtml(recommendationText)}</p><span class="target-note ${item.minimum_target_met && !item.selected_target_met ? 'optional' : ''}">${targetNote}</span></div><div><h3>Ranked paths</h3><div class="path-list">${paths}</div></div><div><h3>Affected account evidence</h3><div class="instance-list">${instances}</div></div><div class="queue-meta"><span>Primary owner: ${escapeHtml(item.primary_owner || '—')}</span><span>Required partners: ${escapeHtml((item.required_partners || []).join(' · ') || '—')}</span>${item.assignee ? `<span>Slack follow-up: ${escapeHtml(item.assignee)}</span>` : ''}${item.regression_count ? `<span>Workstream regressions: ${fmt(item.regression_count)}</span>` : ''}</div><div class="workstream-actions">${remediationActionButtons(item)}<button class="button tiny secondary" type="button" data-workstream-history="${escapeHtml(item.fingerprint)}">Load history</button><span class="copy-feedback" id="copy-${escapeHtml(item.fingerprint)}">${escapeHtml(copied)}</span></div><div id="history-${escapeHtml(item.fingerprint)}" class="history"></div></div></details>`;
       }).join('');
       document.querySelectorAll('[data-open-account-id]').forEach(button => button.addEventListener('click', event => { event.preventDefault(); selectAccount(button.dataset.openAccountId); }));
       document.querySelectorAll('[data-remediation-action]').forEach(button => button.addEventListener('click', event => { event.preventDefault(); applyRemediationAction(button); }));
-      document.querySelectorAll('[data-case-history]').forEach(button => button.addEventListener('click', event => { event.preventDefault(); loadCaseHistory(button); }));
+      document.querySelectorAll('[data-workstream-history]').forEach(button => button.addEventListener('click', event => { event.preventDefault(); loadWorkstreamHistory(button); }));
     }
 
-    async function loadCaseHistory(button) {
-      const caseId = button.dataset.caseHistory;
-      const target = document.getElementById(`history-${caseId}`);
+    async function loadWorkstreamHistory(button) {
+      const workstreamId = button.dataset.workstreamHistory;
+      const target = document.getElementById(`history-${workstreamId}`);
       button.disabled = true;
       try {
-        const response = await fetch(`/api/remediation/cases/${encodeURIComponent(caseId)}`, { cache: 'no-store' });
+        const response = await fetch(`/api/remediation/workstreams/${encodeURIComponent(workstreamId)}`, { cache: 'no-store' });
         const result = await response.json();
-        if (!response.ok) throw new Error(result.error || `Could not load case history (${response.status})`);
-        const events = result.case?.events || [];
+        if (!response.ok) throw new Error(result.error || `Could not load workstream history (${response.status})`);
+        const events = result.workstream?.events || [];
         target.innerHTML = events.length ? `<strong>Recent history</strong><ol class="evidence-steps">${events.slice(0, 25).map(item => {
-          const payload = Object.entries(item.payload || {}).map(([key, value]) => `${titleCase(key)}: ${String(value)}`).join(' · ');
+          const payload = Object.entries(item.payload || {}).map(([key, value]) => `${titleCase(key)}: ${typeof value === 'object' ? JSON.stringify(value) : String(value)}`).join(' · ');
           return `<li>${escapeHtml(new Date(item.created_at).toLocaleString())} · ${escapeHtml(titleCase(item.event_type))} · ${escapeHtml(item.actor)}${payload ? ` · ${escapeHtml(payload)}` : ''}</li>`;
         }).join('')}</ol>` : 'No history recorded.';
       } catch (error) {
@@ -532,15 +609,119 @@
       }
     }
 
+    async function postRemediationAction(workstreamId, version, action, payload = {}) {
+      const response = await fetch(`/api/remediation/workstreams/${encodeURIComponent(workstreamId)}/actions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Hours-Recon-Action-Token': state.data.remediation_queue?.action_token || '',
+        },
+        body: JSON.stringify({ action, expected_version: Number(version), ...payload }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || `Remediation action failed (${response.status})`);
+      return result;
+    }
+
+    function executionList(items, emptyText = 'None') {
+      return items?.length ? `<ul class="execution-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : `<p class="source-note">${escapeHtml(emptyText)}</p>`;
+    }
+
+    function renderExecutionWorkspace(workspace, workstream) {
+      if (!workspace) throw new Error('The execution workspace was not returned.');
+      state.execution = { workspace, workstreamId: workstream.fingerprint, version: Number(workstream.version) };
+      const modeLabel = titleCase(workspace.execution_mode || 'guided');
+      const operations = (workspace.operations || []).map(operation => {
+        const unsupported = !operation.tool || String(operation.status || '').includes('unsupported');
+        const records = (operation.record_ids || []).join(', ') || 'Resolve during preflight';
+        return `<article class="execution-card execution-operation ${unsupported ? 'unsupported' : ''}"><h3><span class="pill ${operation.tool ? 'mcp' : ''}">${operation.tool ? 'MCP-ready' : 'Owner handoff'}</span>${escapeHtml(titleCase(operation.system))} · ${escapeHtml(operation.object)}</h3><p><strong>Tool:</strong> ${escapeHtml(operation.tool || 'No safe connector write registered')} · <strong>Records:</strong> ${escapeHtml(records)}</p><pre class="execution-fields">${escapeHtml(JSON.stringify(operation.proposed_fields || {}, null, 2))}</pre><div><strong>Required preflight</strong>${executionList(operation.preflight || [])}</div>${operation.limitation ? `<p class="source-note"><strong>Boundary:</strong> ${escapeHtml(operation.limitation)}</p>` : ''}</article>`;
+      }).join('') || '<div class="execution-card">No concrete operation is available from the current evidence.</div>';
+      const recordCards = (workspace.records || []).map(record => {
+        const links = (record.links || []).map(link => `<li><a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.label)}</a></li>`).join('');
+        return `<article class="execution-card"><h3>${escapeHtml(record.account_name)} · ${escapeHtml(titleCase(record.dimension))}</h3>${executionList(record.findings || [], 'No additional findings.')}${links ? `<div><strong>Source records</strong><ul class="execution-links">${links}</ul></div>` : '<p class="source-note">No source link is available.</p>'}</article>`;
+      }).join('');
+      const notices = executionList(workspace.notices || []);
+      const limitations = executionList(workspace.limitations || [], 'No additional connector limitations.');
+      const inputs = executionList(workspace.required_inputs || [], 'No additional business input is required beyond confirmation.');
+      $('#executionSubtitle').textContent = `${workspace.selected_path?.title || 'Selected path'} · ${modeLabel}`;
+      $('#executionContent').innerHTML = `<div class="execution-banner"><strong>Approval boundary:</strong> Hours Recon prepared this workspace but did not write Salesforce or Rocketlane. Glean MCP must re-read the records and ask for explicit confirmation immediately before every supported write.</div><div class="execution-grid"><div class="execution-column"><section><h2>Proposed source actions</h2><div class="execution-column">${operations}</div></section><section><h2>Affected records</h2><div class="execution-column">${recordCards}</div></section></div><aside class="execution-column"><article class="execution-card"><h3>Before execution</h3><strong>Required inputs</strong>${inputs}<strong>Connector boundaries</strong>${limitations}<strong>Safety</strong>${notices}</article><article class="execution-card execution-copy"><h3>MCP execution request</h3><p class="source-note">Copy this into Glean. The request requires read-before-write, exact payload review, and confirmation.</p><textarea id="mcpRequest" readonly aria-label="MCP execution request"></textarea><div class="execution-button-row"><button class="button" id="copyMcpRequest" type="button">Copy MCP request</button><a class="button secondary" id="openMcpWorkspace" target="_blank" rel="noreferrer">Open Glean for MCP</a><span class="execution-feedback" id="mcpCopyFeedback"></span></div></article><article class="execution-card execution-copy slack"><h3>Owner Slack handoff</h3><p class="source-note">Prefilled for the responsible ${escapeHtml(workspace.recipient_role || 'source owner')}. ${workspace.recipient_suggestions?.length ? `Suggested from current source ownership: ${escapeHtml(workspace.recipient_suggestions.join(' · '))}. ` : ''}Review and copy; Hours Recon does not send it.</p><div class="field"><label for="executionRecipient">Recipient name, @handle, or team label</label><input id="executionRecipient" value="${escapeHtml(workspace.default_recipient || workspace.recipient_role || '')}"></div><textarea id="slackDraft" aria-label="Slack handoff draft"></textarea><div class="execution-button-row"><button class="button" id="copySlackDraft" type="button">Copy reviewed Slack draft</button><span class="execution-feedback" id="slackCopyFeedback"></span></div></article></aside></div>`;
+      $('#mcpRequest').value = workspace.mcp_request || '';
+      const template = workspace.slack_draft?.message || '';
+      const updateSlackPreview = () => { $('#slackDraft').value = template.replaceAll('{{recipient}}', $('#executionRecipient').value.trim() || workspace.recipient_role || 'source owner'); };
+      updateSlackPreview();
+      $('#executionRecipient').addEventListener('input', updateSlackPreview);
+      let mcpUrl = 'https://app.glean.com/chat';
+      try { const parsed = new URL(workspace.mcp_workspace_url); if (parsed.protocol === 'https:') mcpUrl = parsed.href; } catch (error) { /* Use the safe default. */ }
+      $('#openMcpWorkspace').href = mcpUrl;
+      $('#copyMcpRequest').addEventListener('click', copyMcpRequest);
+      $('#copySlackDraft').addEventListener('click', copyExecutionSlackDraft);
+      $('#executionDialog').showModal();
+    }
+
+    async function writeClipboard(text, failureMessage) {
+      if (!text || !navigator.clipboard?.writeText) throw new Error(failureMessage);
+      try { await navigator.clipboard.writeText(text); }
+      catch (error) { throw new Error(failureMessage); }
+    }
+
+    function syncRemediationWorkstream(workstream) {
+      const rows = state.data?.remediation_queue?.workstreams || [];
+      const index = rows.findIndex(item => item.fingerprint === workstream?.fingerprint);
+      if (index >= 0) {
+        rows[index] = workstream;
+        renderRemediation();
+      }
+    }
+
+    async function copyMcpRequest() {
+      const button = $('#copyMcpRequest');
+      const current = state.execution;
+      if (!current) return;
+      button.disabled = true;
+      setError('');
+      let copied = false;
+      try {
+        await writeClipboard(current.workspace.mcp_request, 'Clipboard access failed. No source write was attempted.');
+        copied = true;
+        const result = await postRemediationAction(current.workstreamId, current.version, 'record_mcp_request_copy');
+        current.version = Number(result.workstream.version);
+        syncRemediationWorkstream(result.workstream);
+        $('#mcpCopyFeedback').textContent = 'Copied · not executed';
+      } catch (error) {
+        setError(copied ? 'The MCP request was copied, but Hours Recon could not record the copy. No source write was attempted.' : error.message);
+      } finally { button.disabled = false; }
+    }
+
+    async function copyExecutionSlackDraft() {
+      const button = $('#copySlackDraft');
+      const current = state.execution;
+      if (!current) return;
+      const recipient = $('#executionRecipient').value.trim();
+      if (!recipient) { setError('Enter a recipient name, @handle, or team label before copying the Slack draft.'); return; }
+      button.disabled = true;
+      setError('');
+      let copied = false;
+      try {
+        const prepared = await postRemediationAction(current.workstreamId, current.version, 'prepare_slack', { recipient });
+        current.version = Number(prepared.workstream.version);
+        syncRemediationWorkstream(prepared.workstream);
+        $('#slackDraft').value = prepared.slack_message;
+        await writeClipboard(prepared.slack_message, 'The Slack handoff was prepared, but clipboard access failed. Nothing was marked as copied or sent.');
+        copied = true;
+        const recorded = await postRemediationAction(current.workstreamId, current.version, 'record_slack_copy');
+        current.version = Number(recorded.workstream.version);
+        syncRemediationWorkstream(recorded.workstream);
+        $('#slackCopyFeedback').textContent = `Copied for ${recipient} · not sent`;
+      } catch (error) {
+        setError(copied ? 'The Slack handoff was copied, but Hours Recon could not record the copy. It was not sent.' : error.message);
+      } finally { button.disabled = false; }
+    }
+
     async function applyRemediationAction(button) {
-      const gapId = button.dataset.gapId;
+      const workstreamId = button.dataset.workstreamId;
       const action = button.dataset.remediationAction;
       const payload = {};
-      if (action === 'assign') {
-        const assignee = window.prompt('Local assignee or team label');
-        if (!assignee) return;
-        payload.assignee = assignee;
-      }
+      if (action === 'select_path') payload.path_id = button.dataset.pathId;
       if (action === 'snooze') {
         const until = window.prompt('Snooze until (YYYY-MM-DD)');
         if (!until) return;
@@ -559,19 +740,21 @@
       }
       button.disabled = true;
       setError('');
+      let plannerMutated = false;
       try {
-        const response = await fetch(`/api/remediation/gaps/${encodeURIComponent(gapId)}/actions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Hours-Recon-Action-Token': state.data.remediation_queue?.action_token || '',
-          },
-          body: JSON.stringify({ action, expected_version: Number(button.dataset.gapVersion), ...payload }),
-        });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || `Remediation action failed (${response.status})`);
+        let result = await postRemediationAction(workstreamId, button.dataset.workstreamVersion, action, payload);
+        plannerMutated = true;
+        if (action === 'select_path') {
+          result = await postRemediationAction(workstreamId, result.workstream.version, 'prepare_execution');
+        }
         await loadData();
+        if (action === 'select_path' || action === 'prepare_execution') {
+          renderExecutionWorkspace(result.execution_workspace || result.workstream?.execution_plan, result.workstream);
+        }
       } catch (error) {
+        if (plannerMutated) {
+          try { await loadData(); } catch (reloadError) { /* Keep the original action error visible. */ }
+        }
         setError(error.message);
       } finally {
         button.disabled = false;
@@ -594,6 +777,8 @@
     $('#riskFilter').addEventListener('change', event => { state.filters.risk = event.target.value; renderAccounts(); });
     $('#sort').addEventListener('change', event => { state.filters.sort = event.target.value; renderAccounts(); });
     $('#weeklyOnly').addEventListener('change', event => { state.filters.weeklyOnly = event.target.checked; renderAccounts(); });
+    $('#closeExecution').addEventListener('click', () => { $('#executionDialog').close(); state.execution = null; });
+    $('#executionDialog').addEventListener('cancel', () => { state.execution = null; });
 
     loadData().catch(error => setError(error.message));
   </script>

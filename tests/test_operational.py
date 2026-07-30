@@ -96,23 +96,34 @@ class DashboardMarkupTests(unittest.TestCase):
         self.assertIn("Matched Rocketlane projects", html)
         self.assertIn("No matched Rocketlane projects.", html)
 
-    def test_dashboard_renders_governance_and_remediation_workflow(self):
+    def test_dashboard_renders_governance_and_remediation_planner(self):
         html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
         self.assertIn("function renderRemediation()", html)
+        self.assertIn("function renderPathOption(path, workstream)", html)
         self.assertIn("function applyRemediationAction(button)", html)
         self.assertIn("Governance evidence", html)
         self.assertIn("Governed ${fmt(split.governed)}h · Provisional ${fmt(split.provisional)}h", html)
-        self.assertIn("data-remediation-action", html)
-        self.assertIn("Ready for fresh-pull validation", html)
-        self.assertIn("data-remediation-action=\"assign\"", html)
+        self.assertIn("Ranked paths", html)
+        self.assertIn("MCP execution workspace", html)
+        self.assertIn("Select and open next steps", html)
+        self.assertIn("data-remediation-action=\"prepare_execution\"", html)
+        self.assertIn("data-remediation-action=\"select_path\"", html)
+        self.assertIn("function renderExecutionWorkspace(workspace, workstream)", html)
+        self.assertIn("function copyMcpRequest()", html)
+        self.assertIn("function copyExecutionSlackDraft()", html)
+        self.assertIn("Copy reviewed Slack draft", html)
         self.assertIn("data-remediation-action=\"snooze\"", html)
         self.assertIn("data-remediation-action=\"waive\"", html)
-        self.assertIn("function loadCaseHistory(button)", html)
-        self.assertIn("const cases = queue.cases || []", html)
-        self.assertIn("item.payload || {}", html)
-        self.assertIn("Resume work", html)
+        self.assertIn("function loadWorkstreamHistory(button)", html)
+        self.assertIn("const workstreams = queue.workstreams || []", html)
+        self.assertIn("record_mcp_request_copy", html)
+        self.assertIn("record_slack_copy", html)
+        self.assertIn("Nothing was marked as copied or sent", html)
+        self.assertIn("no source write is implied", html)
         self.assertIn("X-Hours-Recon-Action-Token", html)
         app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+        self.assertIn("/api/remediation/workstreams", app_source)
+        self.assertIn("hrw2_[a-f0-9]{64}", app_source)
         self.assertIn("X-Frame-Options", app_source)
         self.assertIn("Invalid remediation action token", app_source)
 
@@ -257,7 +268,7 @@ class CacheSafetyTests(unittest.TestCase):
             self.assertEqual("demo", service.data["meta"]["mode"])
             self.assertIn("requester does not match", service.data["meta"]["notice"])
 
-    def test_mcp_observe_mode_creates_idempotent_local_remediation_cases(self):
+    def test_mcp_observe_mode_creates_idempotent_local_remediation_workstreams(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             snapshot_path = root / "mcp_snapshot.json"
@@ -287,13 +298,13 @@ class CacheSafetyTests(unittest.TestCase):
             self.assertFalse(first["meta"]["mcp_coverage_complete"])
             self.assertEqual(0.0, first["governance"]["metrics"]["sold_hours"]["governed"])
             self.assertTrue(first["remediation_queue"]["available"])
-            self.assertGreater(first["remediation_queue"]["active_case_count"], 0)
-            first_count = first["remediation_queue"]["case_count"]
+            self.assertGreater(first["remediation_queue"]["active_workstream_count"], 0)
+            first_count = first["remediation_queue"]["workstream_count"]
             refreshed = service.refresh()
-            self.assertEqual(first_count, refreshed["remediation_queue"]["case_count"])
+            self.assertEqual(first_count, refreshed["remediation_queue"]["workstream_count"])
             self.assertFalse(refreshed["meta"]["remediation_observation"]["new_source_observation"])
 
-    def test_remediation_queue_excludes_accounts_not_held_by_requester(self):
+    def test_remediation_planner_excludes_accounts_not_held_by_requester(self):
         from hours_recon.remediation_store import QueueValidationError, RemediationStore
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -314,17 +325,22 @@ class CacheSafetyTests(unittest.TestCase):
                 "salesforce": salesforce,
                 "rocketlane": rocketlane,
             }))
-            # Simulate another requester's testing suite writing a case for an
-            # account this requester does not own, under the SAME tenant-wide
-            # scope_id and the SAME shared remediation database.
+            # Simulate a shared local database containing a workstream for an
+            # account this requester does not own under the same scope and
+            # portfolio identity. Account filtering remains a final boundary.
             foreign_report = {
                 "meta": {"as_of": "2026-02-02"},
                 "accounts": [{
                     "id": "FOREIGN-JASON-1", "name": "Jason Test Corp",
                     "sold_hours": 20, "billed_hours": 0, "remaining_hours": 20,
-                    "at_risk_hours": 0, "expired_unused_hours": 0, "overage_hours": 0,
+                    "at_risk_hours": 0, "expired_unused_hours": 0, "future_entitlement_hours": 0, "overage_hours": 0,
+                    "packages": [],
                     "governance": {
                         "overall_tier": "T4", "policy_version": "test",
+                        "dimensions": {"entitlement_source": {
+                            "tier": "T4", "rank": 4, "reason_code": "missing", "summary": "foreign gap",
+                            "recommended_action": "fix", "refs": [], "details": {},
+                        }},
                         "gaps": [{
                             "dimension": "entitlement_source", "tier": "T4",
                             "reason_code": "missing", "summary": "foreign gap",
@@ -336,11 +352,14 @@ class CacheSafetyTests(unittest.TestCase):
             store = RemediationStore(db_path)
             store.observe(
                 foreign_report, retrieval_id="jason-suite-1", scope_id="test-tenant",
-                coverage_complete=True, report_digest="jason-digest",
+                portfolio_id="demo.aiom@example.com", coverage_complete=True, report_digest="jason-digest",
             )
-            foreign = store.list_cases(scope_id="test-tenant")
-            self.assertTrue(any(case["account_id"] == "FOREIGN-JASON-1" for case in foreign))
-            foreign_gap = foreign[0]["gaps"][0]["fingerprint"]
+            foreign = store.list_workstreams(scope_id="test-tenant", portfolio_id="demo.aiom@example.com")
+            self.assertTrue(any(
+                instance["account_id"] == "FOREIGN-JASON-1"
+                for workstream in foreign for instance in workstream["instances"]
+            ))
+            foreign_workstream = foreign[0]
 
             service = ReconciliationService({
                 "mode": "mcp", "timezone": "America/Denver", "requester_email": "", "mcp_requester_email": "demo.aiom@example.com", "packages": PACKAGES,
@@ -351,13 +370,23 @@ class CacheSafetyTests(unittest.TestCase):
                 "remediation_scope_id": "test-tenant",
             })
             queue = service.data["remediation_queue"]
-            queue_accounts = {case["account_id"] for case in queue["cases"]}
+            queue_accounts = {
+                instance["account_id"]
+                for workstream in queue["workstreams"] for instance in workstream["instances"]
+            }
             self.assertNotIn("FOREIGN-JASON-1", queue_accounts)
-            self.assertTrue(queue_accounts)  # the requester's own cases still show
-            self.assertNotIn("FOREIGN-JASON-1", {case["account_id"] for case in service.list_remediation_cases()})
-            # The requester must not be able to act on an unowned gap either.
+            self.assertTrue(queue_accounts)  # the requester's own workstreams still show
+            listed_accounts = {
+                instance["account_id"]
+                for workstream in service.list_remediation_workstreams() for instance in workstream["instances"]
+            }
+            self.assertNotIn("FOREIGN-JASON-1", listed_accounts)
+            # The requester must not be able to act on an unowned workstream either.
             with self.assertRaises(QueueValidationError):
-                service.remediation_action(foreign_gap, action="acknowledge", expected_version=1)
+                service.remediation_action(
+                    foreign_workstream["fingerprint"], action="acknowledge",
+                    expected_version=foreign_workstream["version"],
+                )
 
     def test_cached_report_rebuilds_missing_remediation_queue(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -383,10 +412,10 @@ class CacheSafetyTests(unittest.TestCase):
                 "remediation_db_path": root / "private" / "queue.sqlite3", "remediation_scope_id": "test-tenant",
             }
             first = ReconciliationService(settings)
-            expected_cases = first.data["remediation_queue"]["case_count"]
+            expected_workstreams = first.data["remediation_queue"]["workstream_count"]
             settings["remediation_db_path"].unlink()
             second = ReconciliationService(settings)
-            self.assertEqual(expected_cases, second.data["remediation_queue"]["case_count"])
+            self.assertEqual(expected_workstreams, second.data["remediation_queue"]["workstream_count"])
 
     def test_scope_mismatch_is_quarantined_before_queue_mutation(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -410,7 +439,7 @@ class CacheSafetyTests(unittest.TestCase):
                 "remediation_db_path": root / "private" / "queue.sqlite3", "remediation_scope_id": "tenant-a",
             })
             self.assertEqual("scope_mismatch_quarantined", service.data["meta"]["remediation_observation"]["reason"])
-            self.assertEqual(0, service.data["remediation_queue"]["case_count"])
+            self.assertEqual(0, service.data["remediation_queue"]["workstream_count"])
 
     def test_non_boolean_mcp_coverage_cannot_authorize_revalidation(self):
         with tempfile.TemporaryDirectory() as temporary:

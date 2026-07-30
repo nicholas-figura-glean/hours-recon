@@ -49,4 +49,7 @@ def settings() -> Dict[str, Any]:
         "remediation_mode": os.getenv("HOURS_RECON_REMEDIATION_MODE", "observe_only").lower(),
         "remediation_db_path": ROOT / os.getenv("HOURS_RECON_REMEDIATION_DB_PATH", "var/remediation.sqlite3"),
         "remediation_scope_id": os.getenv("HOURS_RECON_REMEDIATION_SCOPE_ID", "").strip(),
+        "salesforce_web_base_url": os.getenv("HOURS_RECON_SALESFORCE_WEB_BASE_URL", "https://glean.lightning.force.com").strip(),
+        "rocketlane_web_base_url": os.getenv("HOURS_RECON_ROCKETLANE_WEB_BASE_URL", "https://glean.rocketlane.com").strip(),
+        "mcp_workspace_url": os.getenv("HOURS_RECON_MCP_WORKSPACE_URL", "https://app.glean.com/chat").strip(),
     }

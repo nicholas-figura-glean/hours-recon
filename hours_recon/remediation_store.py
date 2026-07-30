@@ -1,4 +1,4 @@
-"""Private SQLite persistence for the Hours Recon remediation workflow."""
+"""Private SQLite persistence for remediation workstreams and account instances."""
 
 from __future__ import annotations
 
@@ -7,12 +7,13 @@ import os
 import sqlite3
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
-from .remediation import PRIORITY_RANK, build_candidates
+from .evidence import TIER_RANK
+from .remediation import METRIC_FIELDS, PRIORITY_RANK, build_workstreams, format_slack_followup
 
-SCHEMA_VERSION = 1
-ACTIVE_GAP_STATUSES = {"open", "acknowledged", "in_progress", "pending_validation", "snoozed"}
+SCHEMA_VERSION = 2
+ACTIVE_WORKSTREAM_STATUSES = {"open", "acknowledged", "in_progress", "pending_validation", "snoozed"}
 
 
 class QueueError(RuntimeError):
@@ -35,6 +36,19 @@ def _json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
+def _loads(value: Any, fallback: Any) -> Any:
+    if value in (None, ""):
+        return fallback
+    try:
+        return json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return fallback
+
+
+def _tier_meets(current: Any, target: Any) -> bool:
+    return TIER_RANK.get(str(current), 99) <= TIER_RANK.get(str(target), 0)
+
+
 class RemediationStore:
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
@@ -53,96 +67,160 @@ class RemediationStore:
         connection = self._connect()
         try:
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, SCHEMA_VERSION}:
+            if version not in {0, 1, SCHEMA_VERSION}:
                 raise QueueError(f"Unsupported remediation database schema version {version}.")
+            if version == 1:
+                # The v2 planner intentionally starts clean: v1 cases had no
+                # workstream grouping or path semantics, so pretending to
+                # migrate their workflow state would create misleading data.
+                connection.executescript(
+                    """
+                    DROP TABLE IF EXISTS observations;
+                    DROP TABLE IF EXISTS events;
+                    DROP TABLE IF EXISTS gaps;
+                    DROP TABLE IF EXISTS cases;
+                    DROP TABLE IF EXISTS queue_runs;
+                    PRAGMA user_version = 0;
+                    """
+                )
+                connection.commit()
+                version = 0
             if version == 0:
                 connection.executescript(
                     """
-                    CREATE TABLE queue_runs (
-                        retrieval_id TEXT NOT NULL,
+                    CREATE TABLE planner_runs (
                         scope_id TEXT NOT NULL,
+                        portfolio_id TEXT NOT NULL,
+                        retrieval_id TEXT NOT NULL,
                         observed_at TEXT NOT NULL,
                         report_as_of TEXT NOT NULL,
                         coverage_complete INTEGER NOT NULL,
                         report_digest TEXT,
-                        candidate_count INTEGER NOT NULL,
-                        PRIMARY KEY(scope_id, retrieval_id)
+                        workstream_count INTEGER NOT NULL,
+                        instance_count INTEGER NOT NULL,
+                        PRIMARY KEY(scope_id, portfolio_id, retrieval_id)
                     );
 
-                    CREATE TABLE cases (
+                    CREATE TABLE workstreams (
                         fingerprint TEXT PRIMARY KEY,
                         scope_id TEXT NOT NULL,
-                        account_id TEXT NOT NULL,
-                        account_name TEXT,
-                        overall_tier TEXT,
+                        portfolio_id TEXT NOT NULL,
+                        policy_version TEXT NOT NULL,
+                        family TEXT NOT NULL,
+                        group_key TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        dimensions_json TEXT NOT NULL,
+                        reason_codes_json TEXT NOT NULL,
                         status TEXT NOT NULL,
                         priority TEXT,
-                        primary_route TEXT,
-                        due_on TEXT,
-                        active_gap_count INTEGER NOT NULL DEFAULT 0,
-                        first_seen TEXT NOT NULL,
-                        last_seen TEXT NOT NULL,
-                        version INTEGER NOT NULL DEFAULT 1,
-                        UNIQUE(scope_id, account_id)
-                    );
-
-                    CREATE TABLE gaps (
-                        fingerprint TEXT PRIMARY KEY,
-                        case_fingerprint TEXT NOT NULL REFERENCES cases(fingerprint) ON DELETE CASCADE,
-                        dimension TEXT NOT NULL,
-                        tier TEXT NOT NULL,
-                        reason_code TEXT,
-                        summary TEXT,
-                        recommended_action TEXT,
-                        priority TEXT NOT NULL,
                         route TEXT NOT NULL,
                         primary_owner TEXT,
-                        required_partner TEXT,
-                        assignee TEXT,
+                        required_partners_json TEXT NOT NULL,
+                        minimum_target_tier TEXT NOT NULL,
                         due_on TEXT,
-                        status TEXT NOT NULL,
+                        paths_json TEXT NOT NULL,
+                        recommended_path_id TEXT NOT NULL,
+                        recommendation_reason TEXT NOT NULL,
+                        selected_path_id TEXT NOT NULL,
+                        selected_target_tier TEXT NOT NULL,
+                        selected_path_json TEXT NOT NULL,
+                        assignee TEXT,
+                        slack_recipient TEXT,
+                        slack_prepared_at TEXT,
+                        slack_copied_at TEXT,
+                        execution_plan_json TEXT,
+                        execution_path_id TEXT,
+                        execution_prepared_at TEXT,
+                        mcp_request_copied_at TEXT,
+                        impact_json TEXT NOT NULL,
+                        affected_instance_count INTEGER NOT NULL DEFAULT 0,
+                        active_instance_count INTEGER NOT NULL DEFAULT 0,
                         first_seen TEXT NOT NULL,
                         last_seen TEXT NOT NULL,
                         last_retrieval_id TEXT NOT NULL,
-                        evidence_hash TEXT NOT NULL,
-                        evidence_json TEXT NOT NULL,
                         regression_count INTEGER NOT NULL DEFAULT 0,
                         waiver_reason TEXT,
                         waiver_expires_on TEXT,
                         waiver_approved_by TEXT,
                         snoozed_until TEXT,
                         version INTEGER NOT NULL DEFAULT 1,
-                        UNIQUE(case_fingerprint, dimension)
+                        UNIQUE(scope_id, portfolio_id, family, group_key)
+                    );
+
+                    CREATE TABLE instances (
+                        fingerprint TEXT PRIMARY KEY,
+                        workstream_fingerprint TEXT NOT NULL REFERENCES workstreams(fingerprint) ON DELETE CASCADE,
+                        scope_id TEXT NOT NULL,
+                        portfolio_id TEXT NOT NULL,
+                        account_id TEXT NOT NULL,
+                        account_name TEXT,
+                        dimension TEXT NOT NULL,
+                        current_tier TEXT NOT NULL,
+                        last_governed_tier TEXT,
+                        reason_code TEXT,
+                        summary TEXT,
+                        governance_status TEXT NOT NULL,
+                        priority TEXT NOT NULL,
+                        minimum_target_tier TEXT NOT NULL,
+                        due_on TEXT,
+                        first_seen TEXT NOT NULL,
+                        last_seen TEXT NOT NULL,
+                        last_retrieval_id TEXT NOT NULL,
+                        evidence_hash TEXT NOT NULL,
+                        evidence_json TEXT NOT NULL,
+                        regression_count INTEGER NOT NULL DEFAULT 0,
+                        version INTEGER NOT NULL DEFAULT 1,
+                        UNIQUE(scope_id, portfolio_id, account_id, dimension)
                     );
 
                     CREATE TABLE observations (
                         scope_id TEXT NOT NULL,
+                        portfolio_id TEXT NOT NULL,
                         retrieval_id TEXT NOT NULL,
-                        gap_fingerprint TEXT NOT NULL REFERENCES gaps(fingerprint) ON DELETE CASCADE,
+                        instance_fingerprint TEXT NOT NULL REFERENCES instances(fingerprint) ON DELETE CASCADE,
+                        workstream_fingerprint TEXT NOT NULL REFERENCES workstreams(fingerprint) ON DELETE CASCADE,
                         observed_at TEXT NOT NULL,
                         evidence_hash TEXT NOT NULL,
                         evidence_json TEXT NOT NULL,
-                        PRIMARY KEY(scope_id, retrieval_id, gap_fingerprint),
-                        FOREIGN KEY(scope_id, retrieval_id) REFERENCES queue_runs(scope_id, retrieval_id) ON DELETE CASCADE
+                        PRIMARY KEY(scope_id, portfolio_id, retrieval_id, instance_fingerprint),
+                        FOREIGN KEY(scope_id, portfolio_id, retrieval_id)
+                            REFERENCES planner_runs(scope_id, portfolio_id, retrieval_id) ON DELETE CASCADE
                     );
 
                     CREATE TABLE events (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        gap_fingerprint TEXT REFERENCES gaps(fingerprint) ON DELETE CASCADE,
-                        case_fingerprint TEXT NOT NULL REFERENCES cases(fingerprint) ON DELETE CASCADE,
+                        workstream_fingerprint TEXT NOT NULL REFERENCES workstreams(fingerprint) ON DELETE CASCADE,
+                        instance_fingerprint TEXT REFERENCES instances(fingerprint) ON DELETE CASCADE,
                         event_type TEXT NOT NULL,
                         actor TEXT NOT NULL,
                         created_at TEXT NOT NULL,
                         payload_json TEXT NOT NULL
                     );
 
-                    CREATE INDEX idx_cases_scope_status ON cases(scope_id, status);
-                    CREATE INDEX idx_gaps_case_status ON gaps(case_fingerprint, status);
-                    CREATE INDEX idx_gaps_route_priority ON gaps(route, priority, status);
-                    PRAGMA user_version = 1;
+                    CREATE INDEX idx_workstreams_scope_portfolio_status
+                        ON workstreams(scope_id, portfolio_id, status);
+                    CREATE INDEX idx_workstreams_route_priority
+                        ON workstreams(scope_id, portfolio_id, route, priority, status);
+                    CREATE INDEX idx_instances_workstream_status
+                        ON instances(workstream_fingerprint, governance_status);
+                    CREATE INDEX idx_instances_owner
+                        ON instances(scope_id, portfolio_id, account_id);
+                    CREATE INDEX idx_events_workstream
+                        ON events(workstream_fingerprint, id);
+                    PRAGMA user_version = 2;
                     """
                 )
                 connection.commit()
+            workstream_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(workstreams)").fetchall()}
+            if version == SCHEMA_VERSION and "slack_copied_at" not in workstream_columns:
+                connection.execute("ALTER TABLE workstreams ADD COLUMN slack_copied_at TEXT")
+            for column in ("execution_plan_json", "execution_path_id", "execution_prepared_at", "mcp_request_copied_at"):
+                if version == SCHEMA_VERSION and column not in workstream_columns:
+                    connection.execute(f"ALTER TABLE workstreams ADD COLUMN {column} TEXT")
+            instance_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(instances)").fetchall()}
+            if version == SCHEMA_VERSION and "last_governed_tier" not in instance_columns:
+                connection.execute("ALTER TABLE instances ADD COLUMN last_governed_tier TEXT")
+            connection.commit()
         finally:
             connection.close()
         os.chmod(self.path, 0o600)
@@ -151,16 +229,28 @@ class RemediationStore:
     def _event(
         connection: sqlite3.Connection,
         *,
-        case_id: str,
-        gap_id: Optional[str],
+        workstream_id: str,
+        instance_id: Optional[str],
         event_type: str,
         actor: str,
         payload: Optional[Mapping[str, Any]] = None,
     ) -> None:
         connection.execute(
-            "INSERT INTO events(gap_fingerprint, case_fingerprint, event_type, actor, created_at, payload_json) VALUES(?,?,?,?,?,?)",
-            (gap_id, case_id, event_type, actor, _utc_now(), _json(dict(payload or {}))),
+            """INSERT INTO events(workstream_fingerprint, instance_fingerprint, event_type, actor, created_at, payload_json)
+               VALUES(?,?,?,?,?,?)""",
+            (workstream_id, instance_id, event_type, actor, _utc_now(), _json(dict(payload or {}))),
         )
+
+    @staticmethod
+    def _current_tiers(report: Mapping[str, Any]) -> Dict[Tuple[str, str], str]:
+        result: Dict[Tuple[str, str], str] = {}
+        for account in report.get("accounts", []):
+            account_id = str(account.get("id") or "")
+            dimensions = (account.get("governance") or {}).get("dimensions") or {}
+            for dimension, evidence in dimensions.items():
+                if account_id and isinstance(evidence, Mapping) and evidence.get("tier"):
+                    result[(account_id, str(dimension))] = str(evidence["tier"])
+        return result
 
     def observe(
         self,
@@ -170,19 +260,26 @@ class RemediationStore:
         scope_id: str,
         coverage_complete: bool,
         report_digest: Optional[str] = None,
+        portfolio_id: str = "local-default",
     ) -> Dict[str, Any]:
         if not retrieval_id:
             raise QueueValidationError("A source retrieval ID is required.")
+        if not scope_id or not portfolio_id:
+            raise QueueValidationError("Scope and portfolio identities are required.")
         coverage_complete = coverage_complete is True
-        candidates = build_candidates(report, scope_id=scope_id)
+        workstreams = build_workstreams(report, scope_id=scope_id, portfolio_id=portfolio_id)
+        instances = [item for workstream in workstreams for item in workstream.get("instances", [])]
         account_ids = {str(item.get("id")) for item in report.get("accounts", []) if item.get("id")}
+        current_tiers = self._current_tiers(report)
         observed_at = _utc_now()
         report_as_of = str(report.get("meta", {}).get("as_of") or "")
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing_run = connection.execute(
-                "SELECT retrieval_id FROM queue_runs WHERE scope_id = ? AND retrieval_id = ?", (scope_id, retrieval_id)
+                """SELECT retrieval_id FROM planner_runs
+                   WHERE scope_id=? AND portfolio_id=? AND retrieval_id=?""",
+                (scope_id, portfolio_id, retrieval_id),
             ).fetchone()
             if existing_run:
                 connection.rollback()
@@ -194,155 +291,213 @@ class RemediationStore:
                 }
 
             connection.execute(
-                "INSERT INTO queue_runs(retrieval_id, scope_id, observed_at, report_as_of, coverage_complete, report_digest, candidate_count) VALUES(?,?,?,?,?,?,?)",
-                (retrieval_id, scope_id, observed_at, report_as_of, int(bool(coverage_complete)), report_digest, len(candidates)),
+                """INSERT INTO planner_runs(
+                       scope_id, portfolio_id, retrieval_id, observed_at, report_as_of,
+                       coverage_complete, report_digest, workstream_count, instance_count
+                   ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                (
+                    scope_id, portfolio_id, retrieval_id, observed_at, report_as_of,
+                    int(coverage_complete), report_digest, len(workstreams), len(instances),
+                ),
             )
-            seen_gap_ids = set()
-            touched_case_ids = set()
+            seen_instance_ids: Set[str] = set()
+            touched_workstream_ids: Set[str] = set()
 
-            for candidate in candidates:
-                case_id = str(candidate["fingerprint"])
-                touched_case_ids.add(case_id)
-                existing_case = connection.execute(
-                    "SELECT fingerprint FROM cases WHERE fingerprint = ?", (case_id,)
+            for candidate in workstreams:
+                workstream_id = str(candidate["fingerprint"])
+                touched_workstream_ids.add(workstream_id)
+                existing = connection.execute(
+                    "SELECT * FROM workstreams WHERE fingerprint=?", (workstream_id,)
                 ).fetchone()
-                if existing_case:
+                candidate_paths = list(candidate.get("paths") or [])
+                recommended_id = str(candidate["recommended_path_id"])
+                recommended_path = next(item for item in candidate_paths if str(item.get("id")) == recommended_id)
+                if existing:
+                    selected_id = str(existing["selected_path_id"] or "")
+                    valid_selected = next((item for item in candidate_paths if str(item.get("id")) == selected_id), None)
+                    if valid_selected is None:
+                        selected_id = recommended_id
+                        selected_path = recommended_path
+                        selected_target = str(recommended_path["target_tier"])
+                        self._event(
+                            connection, workstream_id=workstream_id, instance_id=None,
+                            event_type="selected_path_replaced_by_policy", actor="system",
+                            payload={"retrieval_id": retrieval_id, "selected_path_id": selected_id},
+                        )
+                    else:
+                        # Keep the original selected snapshot for auditability;
+                        # current alternatives remain in paths_json.
+                        selected_path = _loads(existing["selected_path_json"], valid_selected)
+                        selected_target = str(existing["selected_target_tier"] or valid_selected["target_tier"])
+                    old_due = str(existing["due_on"] or "")
+                    candidate_due = str(candidate.get("due_on") or "")
+                    due_on = min(old_due, candidate_due) if old_due and candidate_due else old_due or candidate_due or None
+                    status = str(existing["status"])
+                    event_type = "workstream_updated"
+                    if status == "pending_validation" and coverage_complete:
+                        status = "in_progress"
+                        event_type = "validation_failed"
+                    elif status == "pending_validation":
+                        event_type = "incomplete_retrieval_preserved_validation"
                     connection.execute(
-                        "UPDATE cases SET account_name=?, overall_tier=?, last_seen=?, version=version+1 WHERE fingerprint=?",
-                        (candidate.get("account_name"), candidate.get("overall_tier"), observed_at, case_id),
+                        """UPDATE workstreams SET policy_version=?, title=?, dimensions_json=?, reason_codes_json=?,
+                           status=?, priority=?, route=?, primary_owner=?, required_partners_json=?, minimum_target_tier=?,
+                           due_on=?, paths_json=?, recommended_path_id=?, recommendation_reason=?, selected_path_id=?,
+                           selected_target_tier=?, selected_path_json=?, impact_json=?, affected_instance_count=?,
+                           last_seen=?, last_retrieval_id=?, execution_plan_json=NULL, execution_path_id=NULL,
+                           execution_prepared_at=NULL, mcp_request_copied_at=NULL, slack_prepared_at=NULL,
+                           slack_copied_at=NULL, version=version+1 WHERE fingerprint=?""",
+                        (
+                            candidate["policy_version"], candidate["title"], _json(candidate["dimensions"]),
+                            _json(candidate["reason_codes"]), status, candidate["priority"], candidate["route"],
+                            candidate["primary_owner"], _json(candidate["required_partners"]),
+                            candidate["minimum_target_tier"], due_on, _json(candidate_paths), recommended_id,
+                            candidate["recommendation_reason"], selected_id, selected_target, _json(selected_path),
+                            _json(candidate["impact"]), len(candidate.get("instances", [])), observed_at,
+                            retrieval_id, workstream_id,
+                        ),
+                    )
+                    self._event(
+                        connection, workstream_id=workstream_id, instance_id=None,
+                        event_type=event_type, actor="system", payload={"retrieval_id": retrieval_id},
                     )
                 else:
                     connection.execute(
-                        "INSERT INTO cases(fingerprint, scope_id, account_id, account_name, overall_tier, status, first_seen, last_seen) VALUES(?,?,?,?,?,'open',?,?)",
-                        (case_id, scope_id, candidate["account_id"], candidate.get("account_name"), candidate.get("overall_tier"), observed_at, observed_at),
+                        """INSERT INTO workstreams(
+                               fingerprint, scope_id, portfolio_id, policy_version, family, group_key, title,
+                               dimensions_json, reason_codes_json, status, priority, route, primary_owner,
+                               required_partners_json, minimum_target_tier, due_on, paths_json,
+                               recommended_path_id, recommendation_reason, selected_path_id,
+                               selected_target_tier, selected_path_json, impact_json, affected_instance_count,
+                               active_instance_count, first_seen, last_seen, last_retrieval_id
+                           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (
+                            workstream_id, scope_id, portfolio_id, candidate["policy_version"], candidate["family"],
+                            candidate["group_key"], candidate["title"], _json(candidate["dimensions"]),
+                            _json(candidate["reason_codes"]), "open", candidate["priority"], candidate["route"],
+                            candidate["primary_owner"], _json(candidate["required_partners"]),
+                            candidate["minimum_target_tier"], candidate["due_on"], _json(candidate_paths),
+                            recommended_id, candidate["recommendation_reason"], recommended_id,
+                            recommended_path["target_tier"], _json(recommended_path), _json(candidate["impact"]),
+                            len(candidate.get("instances", [])), len(candidate.get("instances", [])),
+                            observed_at, observed_at, retrieval_id,
+                        ),
                     )
-                    self._event(connection, case_id=case_id, gap_id=None, event_type="case_created", actor="system")
+                    self._event(
+                        connection, workstream_id=workstream_id, instance_id=None,
+                        event_type="workstream_created", actor="system",
+                        payload={"retrieval_id": retrieval_id, "recommended_path_id": recommended_id},
+                    )
 
-                for gap in candidate.get("gaps", []):
-                    gap_id = str(gap["fingerprint"])
-                    seen_gap_ids.add(gap_id)
-                    existing_gap = connection.execute("SELECT * FROM gaps WHERE fingerprint = ?", (gap_id,)).fetchone()
-                    status = "open"
+                for item in candidate.get("instances", []):
+                    instance_id = str(item["fingerprint"])
+                    seen_instance_ids.add(instance_id)
+                    previous = connection.execute(
+                        "SELECT * FROM instances WHERE fingerprint=?", (instance_id,)
+                    ).fetchone()
+                    governance_status = "open"
                     regression_count = 0
-                    waiver_reason = None
-                    waiver_expires_on = None
-                    snoozed_until = None
-                    assignee = None
-                    event_type = "gap_detected"
-                    if existing_gap:
-                        status = str(existing_gap["status"])
-                        regression_count = int(existing_gap["regression_count"])
-                        waiver_reason = existing_gap["waiver_reason"]
-                        waiver_expires_on = existing_gap["waiver_expires_on"]
-                        snoozed_until = existing_gap["snoozed_until"]
-                        assignee = existing_gap["assignee"]
-                        reopened = False
-                        if status == "resolved":
+                    event_type = "instance_detected"
+                    if previous:
+                        old_workstream_id = str(previous["workstream_fingerprint"])
+                        touched_workstream_ids.add(old_workstream_id)
+                        governance_status = str(previous["governance_status"])
+                        regression_count = int(previous["regression_count"])
+                        if governance_status == "governed":
                             if coverage_complete:
-                                status = "open"
+                                governance_status = "open"
                                 regression_count += 1
-                                reopened = True
-                                event_type = "gap_reopened"
+                                event_type = "instance_regressed"
                             else:
-                                event_type = "incomplete_retrieval_preserved_resolution"
-                        elif status == "pending_validation":
-                            if coverage_complete:
-                                status = "in_progress"
-                                event_type = "validation_failed"
-                            else:
-                                event_type = "incomplete_retrieval_preserved_validation"
-                        elif status == "waived":
-                            event_type = "waiver_observed"
-                        elif status == "snoozed":
-                            event_type = "snooze_observed"
+                                event_type = "incomplete_retrieval_preserved_governed"
                         else:
-                            event_type = "gap_updated"
-
-                        existing_due = str(existing_gap["due_on"] or "")
-                        candidate_due = str(gap.get("due_on") or "")
-                        if reopened or not existing_due:
-                            due_on = candidate_due or None
-                        elif candidate_due:
-                            due_on = min(existing_due, candidate_due)
-                        else:
-                            due_on = existing_due
+                            event_type = "instance_updated"
+                        old_due = str(previous["due_on"] or "")
+                        candidate_due = str(item.get("due_on") or "")
+                        due_on = min(old_due, candidate_due) if old_due and candidate_due else old_due or candidate_due or None
                         connection.execute(
-                            """UPDATE gaps SET tier=?, reason_code=?, summary=?, recommended_action=?, priority=?, route=?,
-                               primary_owner=?, required_partner=?, assignee=?, due_on=?, status=?, last_seen=?,
-                               last_retrieval_id=?, evidence_hash=?, evidence_json=?, regression_count=?, waiver_reason=?,
-                               waiver_expires_on=?, snoozed_until=?, version=version+1 WHERE fingerprint=?""",
+                            """UPDATE instances SET workstream_fingerprint=?, account_name=?, current_tier=?, reason_code=?,
+                               summary=?, governance_status=?, priority=?, minimum_target_tier=?, due_on=?, last_seen=?,
+                               last_retrieval_id=?, evidence_hash=?, evidence_json=?, regression_count=?, version=version+1
+                               WHERE fingerprint=?""",
                             (
-                                gap.get("tier"), gap.get("reason_code"), gap.get("summary"), gap.get("recommended_action"),
-                                gap.get("priority"), gap.get("route"), gap.get("primary_owner"), gap.get("required_partner"),
-                                assignee, due_on, status, observed_at, retrieval_id, gap.get("evidence_hash"),
-                                _json(gap.get("evidence") or {}), regression_count, waiver_reason, waiver_expires_on,
-                                snoozed_until, gap_id,
+                                workstream_id, item.get("account_name"), item["current_tier"], item["reason_code"],
+                                item.get("summary"), governance_status, item["priority"], item["minimum_target_tier"],
+                                due_on, observed_at, retrieval_id, item["evidence_hash"], _json(item["evidence"]),
+                                regression_count, instance_id,
                             ),
                         )
+                        if old_workstream_id != workstream_id:
+                            event_type = "instance_regrouped"
                     else:
                         connection.execute(
-                            """INSERT INTO gaps(fingerprint, case_fingerprint, dimension, tier, reason_code, summary,
-                               recommended_action, priority, route, primary_owner, required_partner, due_on, status,
-                               first_seen, last_seen, last_retrieval_id, evidence_hash, evidence_json)
-                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            """INSERT INTO instances(
+                                   fingerprint, workstream_fingerprint, scope_id, portfolio_id, account_id, account_name,
+                                   dimension, current_tier, reason_code, summary, governance_status, priority,
+                                   minimum_target_tier, due_on, first_seen, last_seen, last_retrieval_id,
+                                   evidence_hash, evidence_json
+                               ) VALUES(?,?,?,?,?,?,?,?,?,?,'open',?,?,?,?,?,?,?,?)""",
                             (
-                                gap_id, case_id, gap.get("dimension"), gap.get("tier"), gap.get("reason_code"),
-                                gap.get("summary"), gap.get("recommended_action"), gap.get("priority"), gap.get("route"),
-                                gap.get("primary_owner"), gap.get("required_partner"), gap.get("due_on"), status,
-                                observed_at, observed_at, retrieval_id, gap.get("evidence_hash"), _json(gap.get("evidence") or {}),
+                                instance_id, workstream_id, scope_id, portfolio_id, item["account_id"],
+                                item.get("account_name"), item["dimension"], item["current_tier"], item["reason_code"],
+                                item.get("summary"), item["priority"], item["minimum_target_tier"], item["due_on"],
+                                observed_at, observed_at, retrieval_id, item["evidence_hash"], _json(item["evidence"]),
                             ),
                         )
                     connection.execute(
-                        "INSERT INTO observations(scope_id, retrieval_id, gap_fingerprint, observed_at, evidence_hash, evidence_json) VALUES(?,?,?,?,?,?)",
-                        (scope_id, retrieval_id, gap_id, observed_at, gap.get("evidence_hash"), _json(gap.get("evidence") or {})),
+                        """INSERT INTO observations(
+                               scope_id, portfolio_id, retrieval_id, instance_fingerprint, workstream_fingerprint,
+                               observed_at, evidence_hash, evidence_json
+                           ) VALUES(?,?,?,?,?,?,?,?)""",
+                        (
+                            scope_id, portfolio_id, retrieval_id, instance_id, workstream_id, observed_at,
+                            item["evidence_hash"], _json(item["evidence"]),
+                        ),
                     )
                     self._event(
-                        connection,
-                        case_id=case_id,
-                        gap_id=gap_id,
-                        event_type=event_type,
-                        actor="system",
-                        payload={"retrieval_id": retrieval_id, "tier": gap.get("tier"), "reason_code": gap.get("reason_code")},
+                        connection, workstream_id=workstream_id, instance_id=instance_id,
+                        event_type=event_type, actor="system",
+                        payload={"retrieval_id": retrieval_id, "tier": item["current_tier"], "reason_code": item["reason_code"]},
                     )
 
-            revalidation_performed = False
-            if coverage_complete:
-                revalidation_performed = True
-                if account_ids:
-                    placeholders = ",".join("?" for _ in account_ids)
-                    rows = connection.execute(
-                        f"""SELECT g.fingerprint, g.case_fingerprint, g.status FROM gaps g
-                            JOIN cases c ON c.fingerprint = g.case_fingerprint
-                            WHERE c.scope_id = ? AND c.account_id IN ({placeholders})""",
-                        (scope_id, *sorted(account_ids)),
-                    ).fetchall()
-                    for row in rows:
-                        gap_id = str(row["fingerprint"])
-                        if gap_id in seen_gap_ids or row["status"] == "resolved":
-                            continue
+            if coverage_complete and account_ids:
+                placeholders = ",".join("?" for _ in account_ids)
+                existing_instances = connection.execute(
+                    f"""SELECT * FROM instances WHERE scope_id=? AND portfolio_id=?
+                        AND account_id IN ({placeholders})""",
+                    (scope_id, portfolio_id, *sorted(account_ids)),
+                ).fetchall()
+                for row in existing_instances:
+                    instance_id = str(row["fingerprint"])
+                    if instance_id in seen_instance_ids:
+                        continue
+                    current_tier = current_tiers.get((str(row["account_id"]), str(row["dimension"])))
+                    if not current_tier or not _tier_meets(current_tier, row["minimum_target_tier"]):
+                        continue
+                    touched_workstream_ids.add(str(row["workstream_fingerprint"]))
+                    if row["governance_status"] != "governed" or str(row["current_tier"]) != current_tier:
                         connection.execute(
-                            "UPDATE gaps SET status='resolved', last_seen=?, version=version+1 WHERE fingerprint=?",
-                            (observed_at, gap_id),
+                            """UPDATE instances SET governance_status='governed', current_tier=?, last_governed_tier=?,
+                               last_seen=?, last_retrieval_id=?, version=version+1 WHERE fingerprint=?""",
+                            (current_tier, current_tier, observed_at, retrieval_id, instance_id),
                         )
-                        touched_case_ids.add(str(row["case_fingerprint"]))
                         self._event(
-                            connection,
-                            case_id=str(row["case_fingerprint"]),
-                            gap_id=gap_id,
-                            event_type="gap_resolved_by_revalidation",
-                            actor="system",
-                            payload={"retrieval_id": retrieval_id},
+                            connection, workstream_id=str(row["workstream_fingerprint"]), instance_id=instance_id,
+                            event_type="instance_governed_by_revalidation", actor="system",
+                            payload={"retrieval_id": retrieval_id, "tier": current_tier},
                         )
 
-            for case_id in touched_case_ids:
-                self._recompute_case(connection, case_id)
+            for workstream_id in touched_workstream_ids:
+                self._recompute_workstream(connection, workstream_id, coverage_complete=coverage_complete)
             connection.commit()
             os.chmod(self.path, 0o600)
             return {
                 "new_source_observation": True,
-                "revalidation_performed": revalidation_performed,
+                "revalidation_performed": coverage_complete,
                 "reason": "new_complete_retrieval" if coverage_complete else "new_incomplete_retrieval",
                 "retrieval_id": retrieval_id,
+                "workstream_count": len(workstreams),
+                "instance_count": len(instances),
             }
         except Exception:
             connection.rollback()
@@ -350,204 +505,322 @@ class RemediationStore:
         finally:
             connection.close()
 
-    def _recompute_case(self, connection: sqlite3.Connection, case_id: str) -> None:
+    def _recompute_workstream(
+        self,
+        connection: sqlite3.Connection,
+        workstream_id: str,
+        *,
+        coverage_complete: bool = False,
+    ) -> None:
+        workstream = connection.execute(
+            "SELECT * FROM workstreams WHERE fingerprint=?", (workstream_id,)
+        ).fetchone()
+        if not workstream:
+            return
         rows = connection.execute(
-            "SELECT status, priority, route, due_on FROM gaps WHERE case_fingerprint = ?", (case_id,)
+            "SELECT * FROM instances WHERE workstream_fingerprint=?", (workstream_id,)
         ).fetchall()
-        active = [row for row in rows if row["status"] in ACTIVE_GAP_STATUSES]
-        waived = [row for row in rows if row["status"] == "waived"]
-        if active:
-            status_order = {"open": 0, "in_progress": 1, "acknowledged": 2, "pending_validation": 3, "snoozed": 4}
-            status = min((str(row["status"]) for row in active), key=lambda value: status_order.get(value, 99))
-            strongest = min(active, key=lambda row: (PRIORITY_RANK.get(str(row["priority"]), 99), str(row["route"])))
-            due_values = sorted(str(row["due_on"]) for row in active if row["due_on"])
-            priority = strongest["priority"]
-            primary_route = strongest["route"]
-            due_on = due_values[0] if due_values else None
-        elif waived:
-            status = "waived"
+        active = [row for row in rows if row["governance_status"] == "open"]
+        current_status = str(workstream["status"])
+        if not active:
+            status = "governed"
             priority = None
-            primary_route = None
             due_on = None
         else:
-            status = "resolved"
-            priority = None
-            primary_route = None
-            due_on = None
+            if current_status == "governed" and coverage_complete:
+                status = "open"
+                connection.execute(
+                    "UPDATE workstreams SET regression_count=regression_count+1 WHERE fingerprint=?",
+                    (workstream_id,),
+                )
+                self._event(
+                    connection, workstream_id=workstream_id, instance_id=None,
+                    event_type="workstream_reopened", actor="system",
+                )
+            elif current_status in ACTIVE_WORKSTREAM_STATUSES | {"waived"}:
+                status = current_status
+            else:
+                status = "open"
+            strongest = min(active, key=lambda row: (PRIORITY_RANK.get(str(row["priority"]), 99), str(row["dimension"])))
+            priority = strongest["priority"]
+            due_values = sorted(str(row["due_on"]) for row in active if row["due_on"])
+            due_on = due_values[0] if due_values else None
         connection.execute(
-            """UPDATE cases SET status=?, priority=?, primary_route=?, due_on=?, active_gap_count=?,
-               version=version+1 WHERE fingerprint=?""",
-            (status, priority, primary_route, due_on, len(active), case_id),
+            """UPDATE workstreams SET status=?, priority=?, due_on=?, affected_instance_count=?,
+               active_instance_count=?, version=version+1 WHERE fingerprint=?""",
+            (status, priority, due_on, len(rows), len(active), workstream_id),
         )
 
-    def _expire_temporary_states(self, connection: sqlite3.Connection, *, scope_id: str) -> None:
+    def _expire_temporary_states(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        scope_id: str,
+        portfolio_id: str,
+    ) -> None:
         today = date.today().isoformat()
         rows = connection.execute(
-            """SELECT g.fingerprint, g.case_fingerprint, g.status FROM gaps g
-               JOIN cases c ON c.fingerprint=g.case_fingerprint
-               WHERE c.scope_id=? AND (
-                    (g.status='waived' AND g.waiver_expires_on IS NOT NULL AND g.waiver_expires_on < ?)
-                 OR (g.status='snoozed' AND g.snoozed_until IS NOT NULL AND g.snoozed_until < ?)
+            """SELECT fingerprint, status FROM workstreams
+               WHERE scope_id=? AND portfolio_id=? AND (
+                    (status='waived' AND waiver_expires_on IS NOT NULL AND waiver_expires_on < ?)
+                 OR (status='snoozed' AND snoozed_until IS NOT NULL AND snoozed_until < ?)
                )""",
-            (scope_id, today, today),
+            (scope_id, portfolio_id, today, today),
         ).fetchall()
-        touched = set()
         for row in rows:
             event_type = "waiver_expired" if row["status"] == "waived" else "snooze_expired"
             connection.execute(
-                """UPDATE gaps SET status='open', waiver_reason=NULL, waiver_expires_on=NULL,
+                """UPDATE workstreams SET status='open', waiver_reason=NULL, waiver_expires_on=NULL,
                    waiver_approved_by=NULL, snoozed_until=NULL, version=version+1 WHERE fingerprint=?""",
                 (row["fingerprint"],),
             )
-            touched.add(str(row["case_fingerprint"]))
             self._event(
-                connection, case_id=str(row["case_fingerprint"]), gap_id=str(row["fingerprint"]),
+                connection, workstream_id=str(row["fingerprint"]), instance_id=None,
                 event_type=event_type, actor="system",
             )
-        for case_id in touched:
-            self._recompute_case(connection, case_id)
+            self._recompute_workstream(connection, str(row["fingerprint"]))
 
     @staticmethod
-    def _row_to_gap(row: sqlite3.Row) -> Dict[str, Any]:
+    def _row_to_instance(row: sqlite3.Row, selected_target_tier: str) -> Dict[str, Any]:
         result = dict(row)
-        result["evidence"] = json.loads(result.pop("evidence_json") or "{}")
+        result["evidence"] = _loads(result.pop("evidence_json", "{}"), {})
+        last_governed = result.get("last_governed_tier")
+        validation_tier = last_governed if result.get("governance_status") == "governed" and last_governed else result.get("current_tier")
+        result["validation_tier"] = validation_tier
+        result["unverified_observed_tier"] = (
+            result.get("current_tier")
+            if result.get("governance_status") == "governed" and last_governed and result.get("current_tier") != last_governed
+            else None
+        )
+        result["minimum_target_met"] = _tier_meets(validation_tier, result.get("minimum_target_tier"))
+        result["selected_target_tier"] = selected_target_tier
+        result["selected_target_met"] = _tier_meets(validation_tier, selected_target_tier)
         return result
 
-    def list_cases(
+    @staticmethod
+    def _visible_impact(instances: Sequence[Mapping[str, Any]]) -> Dict[str, float]:
+        by_account: Dict[str, Mapping[str, Any]] = {}
+        for item in instances:
+            evidence = item.get("evidence") or {}
+            by_account.setdefault(str(item.get("account_id")), evidence.get("metric_impact") or {})
+        return {
+            field: round(sum(float(metrics.get(field, 0) or 0) for metrics in by_account.values()), 2)
+            for field in METRIC_FIELDS
+        }
+
+    def _serialize_workstream(
+        self,
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+        *,
+        account_ids: Optional[Iterable[str]] = None,
+        account_id: Optional[str] = None,
+        include_events: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        clauses = ["workstream_fingerprint=?"]
+        values: List[Any] = [row["fingerprint"]]
+        if account_ids is not None:
+            owned = sorted({str(value) for value in account_ids})
+            if not owned:
+                return None
+            clauses.append("account_id IN (" + ",".join("?" for _ in owned) + ")")
+            values.extend(owned)
+        if account_id:
+            clauses.append("account_id=?")
+            values.append(account_id)
+        instance_rows = connection.execute(
+            "SELECT * FROM instances WHERE " + " AND ".join(clauses) +
+            " ORDER BY account_name, dimension",
+            values,
+        ).fetchall()
+        if not instance_rows:
+            return None
+        result = dict(row)
+        for field, fallback in (
+            ("dimensions_json", []), ("reason_codes_json", []), ("required_partners_json", []),
+            ("paths_json", []), ("selected_path_json", {}), ("impact_json", {}),
+            ("execution_plan_json", None),
+        ):
+            result[field.removesuffix("_json")] = _loads(result.pop(field, None), fallback)
+        target = str(result.get("selected_target_tier") or "T2")
+        instances = [self._row_to_instance(item, target) for item in instance_rows]
+        result["instances"] = instances
+        result["affected_account_count"] = len({str(item["account_id"]) for item in instances})
+        result["affected_instance_count"] = len(instances)
+        result["active_instance_count"] = sum(1 for item in instances if item["governance_status"] == "open")
+        result["impact"] = self._visible_impact(instances)
+        result["dimensions"] = sorted({str(item["dimension"]) for item in instances})
+        result["reason_codes"] = sorted({str(item.get("reason_code") or "") for item in instances})
+        result["minimum_target_met"] = all(bool(item["minimum_target_met"]) for item in instances)
+        result["selected_target_met"] = all(bool(item["selected_target_met"]) for item in instances)
+        if include_events:
+            event_rows = connection.execute(
+                """SELECT event_type, actor, created_at, payload_json, instance_fingerprint
+                   FROM events WHERE workstream_fingerprint=? ORDER BY id DESC LIMIT 200""",
+                (row["fingerprint"],),
+            ).fetchall()
+            result["events"] = [
+                {
+                    "event_type": event["event_type"],
+                    "actor": event["actor"],
+                    "created_at": event["created_at"],
+                    "instance_fingerprint": event["instance_fingerprint"],
+                    "payload": _loads(event["payload_json"], {}),
+                }
+                for event in event_rows
+            ]
+        return result
+
+    def list_workstreams(
         self,
         *,
         scope_id: str,
+        portfolio_id: str = "local-default",
         status: Optional[str] = None,
         route: Optional[str] = None,
         priority: Optional[str] = None,
         account_id: Optional[str] = None,
         account_ids: Optional[Iterable[str]] = None,
     ) -> List[Dict[str, Any]]:
-        clauses = ["c.scope_id = ?"]
-        values: List[Any] = [scope_id]
-        # Ownership boundary: scope_id is tenant-wide (one Salesforce org +
-        # Rocketlane workspace) and is shared by every requester, so it cannot
-        # isolate one AIOM's accounts from another's. When the caller supplies
-        # the accounts held by the current requester, restrict the queue to
-        # them so another requester's cases never leak into this dashboard.
-        # None means "no ownership filter"; an empty collection means "no owned
-        # accounts", which must match nothing rather than everything.
-        if account_ids is not None:
-            owned = [str(value) for value in account_ids]
-            if owned:
-                clauses.append("c.account_id IN (" + ",".join("?" for _ in owned) + ")")
-                values.extend(owned)
-            else:
-                clauses.append("1 = 0")
+        clauses = ["scope_id=?", "portfolio_id=?"]
+        values: List[Any] = [scope_id, portfolio_id]
         if status:
-            clauses.append("c.status = ?")
+            clauses.append("status=?")
             values.append(status)
-        if priority:
-            clauses.append("c.priority = ?")
-            values.append(priority)
-        if account_id:
-            clauses.append("c.account_id = ?")
-            values.append(account_id)
         if route:
-            clauses.append("EXISTS (SELECT 1 FROM gaps rg WHERE rg.case_fingerprint=c.fingerprint AND rg.route=? AND rg.status != 'resolved')")
+            clauses.append("route=?")
             values.append(route)
-        where = " WHERE " + " AND ".join(clauses)
+        if priority:
+            clauses.append("priority=?")
+            values.append(priority)
+        visible_accounts: Optional[List[str]] = None
+        if account_ids is not None:
+            visible_accounts = sorted({str(value) for value in account_ids})
+            if visible_accounts:
+                clauses.append(
+                    "EXISTS (SELECT 1 FROM instances vi WHERE vi.workstream_fingerprint=workstreams.fingerprint "
+                    "AND vi.account_id IN (" + ",".join("?" for _ in visible_accounts) + "))"
+                )
+                values.extend(visible_accounts)
+            else:
+                clauses.append("1=0")
+        if account_id:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM instances ai WHERE ai.workstream_fingerprint=workstreams.fingerprint AND ai.account_id=?)"
+            )
+            values.append(account_id)
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            self._expire_temporary_states(connection, scope_id=scope_id)
+            self._expire_temporary_states(connection, scope_id=scope_id, portfolio_id=portfolio_id)
             connection.commit()
-            case_rows = connection.execute(
-                "SELECT c.* FROM cases c" + where +
-                " ORDER BY CASE c.priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 9 END, c.due_on, c.account_name",
+            rows = connection.execute(
+                "SELECT * FROM workstreams WHERE " + " AND ".join(clauses) +
+                " ORDER BY CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 9 END, due_on, title",
                 values,
             ).fetchall()
             result = []
-            for case_row in case_rows:
-                case = dict(case_row)
-                gap_rows = connection.execute(
-                    """SELECT * FROM gaps WHERE case_fingerprint=?
-                       ORDER BY CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 9 END, dimension""",
-                    (case["fingerprint"],),
-                ).fetchall()
-                case["gaps"] = [self._row_to_gap(row) for row in gap_rows]
-                result.append(case)
+            for row in rows:
+                item = self._serialize_workstream(
+                    connection, row, account_ids=visible_accounts, account_id=account_id,
+                )
+                if item:
+                    result.append(item)
             return result
         finally:
             connection.close()
 
-    def get_case(
+    def get_workstream(
         self,
         fingerprint: str,
         *,
         scope_id: str,
+        portfolio_id: str = "local-default",
         account_ids: Optional[Iterable[str]] = None,
     ) -> Optional[Dict[str, Any]]:
-        case = next(
-            (
-                item
-                for item in self.list_cases(scope_id=scope_id, account_ids=account_ids)
-                if item["fingerprint"] == fingerprint
-            ),
-            None,
-        )
-        if not case:
-            return None
         connection = self._connect()
         try:
-            event_rows = connection.execute(
-                "SELECT event_type, actor, created_at, payload_json, gap_fingerprint FROM events WHERE case_fingerprint=? ORDER BY id DESC LIMIT 200",
-                (fingerprint,),
-            ).fetchall()
-            case["events"] = [{**dict(row), "payload": json.loads(row["payload_json"] or "{}")} for row in event_rows]
-            for event in case["events"]:
-                event.pop("payload_json", None)
-            return case
+            row = connection.execute(
+                "SELECT * FROM workstreams WHERE fingerprint=? AND scope_id=? AND portfolio_id=?",
+                (fingerprint, scope_id, portfolio_id),
+            ).fetchone()
+            if not row:
+                return None
+            return self._serialize_workstream(connection, row, account_ids=account_ids, include_events=True)
         finally:
             connection.close()
 
-    def summary(self, *, scope_id: str, account_ids: Optional[Iterable[str]] = None) -> Dict[str, Any]:
-        cases = self.list_cases(scope_id=scope_id, account_ids=account_ids)
-        active_cases = [item for item in cases if item["status"] not in {"resolved", "waived"}]
-        active_gaps = [gap for case in active_cases for gap in case["gaps"] if gap["status"] in ACTIVE_GAP_STATUSES]
+    def summary(
+        self,
+        *,
+        scope_id: str,
+        portfolio_id: str = "local-default",
+        account_ids: Optional[Iterable[str]] = None,
+    ) -> Dict[str, Any]:
+        workstreams = self.list_workstreams(
+            scope_id=scope_id, portfolio_id=portfolio_id, account_ids=account_ids,
+        )
+        active = [item for item in workstreams if item["status"] in ACTIVE_WORKSTREAM_STATUSES]
+        active_instances = [
+            instance for workstream in active for instance in workstream["instances"]
+            if instance["governance_status"] == "open"
+        ]
         return {
             "schema_version": SCHEMA_VERSION,
             "mode": "observe_only",
             "scope_id": scope_id,
-            "case_count": len(cases),
-            "active_case_count": len(active_cases),
-            "active_gap_count": len(active_gaps),
-            "p0_gap_count": sum(1 for item in active_gaps if item["priority"] == "P0"),
-            "p1_gap_count": sum(1 for item in active_gaps if item["priority"] == "P1"),
-            "p2_gap_count": sum(1 for item in active_gaps if item["priority"] == "P2"),
-            "cases": cases,
+            "portfolio_id": portfolio_id,
+            "workstream_count": len(workstreams),
+            "active_workstream_count": len(active),
+            "active_instance_count": len(active_instances),
+            "governed_instance_count": sum(
+                1 for workstream in workstreams for instance in workstream["instances"]
+                if instance["governance_status"] == "governed"
+            ),
+            "p0_workstream_count": sum(1 for item in active if item["priority"] == "P0"),
+            "p1_workstream_count": sum(1 for item in active if item["priority"] == "P1"),
+            "p2_workstream_count": sum(1 for item in active if item["priority"] == "P2"),
+            "workstreams": workstreams,
         }
 
-    def latest_run(self, *, scope_id: str) -> Optional[Dict[str, Any]]:
+    def latest_run(self, *, scope_id: str, portfolio_id: str = "local-default") -> Optional[Dict[str, Any]]:
         connection = self._connect()
         try:
             row = connection.execute(
-                "SELECT * FROM queue_runs WHERE scope_id=? ORDER BY observed_at DESC LIMIT 1", (scope_id,)
+                """SELECT * FROM planner_runs WHERE scope_id=? AND portfolio_id=?
+                   ORDER BY observed_at DESC LIMIT 1""",
+                (scope_id, portfolio_id),
             ).fetchone()
             return dict(row) if row else None
         finally:
             connection.close()
 
-    def health(self, *, scope_id: str) -> Dict[str, Any]:
+    def health(self, *, scope_id: str, portfolio_id: str = "local-default") -> Dict[str, Any]:
         connection = self._connect()
         try:
             connection.execute("SELECT 1").fetchone()
             return {
                 "available": True,
                 "schema_version": int(connection.execute("PRAGMA user_version").fetchone()[0]),
-                "latest_run": self.latest_run(scope_id=scope_id),
+                "latest_run": self.latest_run(scope_id=scope_id, portfolio_id=portfolio_id),
             }
         finally:
             connection.close()
 
+    @staticmethod
+    def _validate_future_date(value: Any, label: str) -> str:
+        raw = str(value or "")
+        try:
+            parsed = date.fromisoformat(raw)
+        except ValueError as exc:
+            raise QueueValidationError(f"A valid {label} date is required.") from exc
+        if parsed <= date.today():
+            raise QueueValidationError(f"{label.capitalize()} date must be in the future.")
+        return raw
+
     def action(
         self,
-        gap_id: str,
+        workstream_id: str,
         *,
         scope_id: str,
         action: str,
@@ -555,85 +828,139 @@ class RemediationStore:
         actor: str = "local_dashboard",
         payload: Optional[Mapping[str, Any]] = None,
         account_ids: Optional[Iterable[str]] = None,
+        portfolio_id: str = "local-default",
     ) -> Dict[str, Any]:
         data = dict(payload or {})
+        owned = sorted({str(value) for value in account_ids}) if account_ids is not None else None
         connection = self._connect()
+        slack_recipient: Optional[str] = None
         try:
             connection.execute("BEGIN IMMEDIATE")
-            self._expire_temporary_states(connection, scope_id=scope_id)
-            # Enforce the same ownership boundary on writes: a requester may only
-            # act on gaps for accounts they hold. Unowned gaps are reported as
-            # unknown so the queue never confirms another requester's records.
-            query = (
-                "SELECT g.* FROM gaps g JOIN cases c ON c.fingerprint=g.case_fingerprint "
-                "WHERE g.fingerprint=? AND c.scope_id=?"
-            )
-            params: List[Any] = [gap_id, scope_id]
-            if account_ids is not None:
-                owned = [str(value) for value in account_ids]
+            self._expire_temporary_states(connection, scope_id=scope_id, portfolio_id=portfolio_id)
+            query = "SELECT * FROM workstreams WHERE fingerprint=? AND scope_id=? AND portfolio_id=?"
+            params: List[Any] = [workstream_id, scope_id, portfolio_id]
+            if owned is not None:
                 if owned:
-                    query += " AND c.account_id IN (" + ",".join("?" for _ in owned) + ")"
+                    query += (
+                        " AND EXISTS (SELECT 1 FROM instances oi WHERE oi.workstream_fingerprint=workstreams.fingerprint "
+                        "AND oi.account_id IN (" + ",".join("?" for _ in owned) + "))"
+                    )
                     params.extend(owned)
                 else:
-                    query += " AND 1 = 0"
+                    query += " AND 1=0"
             row = connection.execute(query, params).fetchone()
             if not row:
-                raise QueueValidationError("Unknown remediation gap.")
+                raise QueueValidationError("Unknown remediation workstream.")
             if int(row["version"]) != int(expected_version):
-                raise QueueConflict("The remediation gap changed; reload before applying this action.")
+                raise QueueConflict("The remediation workstream changed; reload before applying this action.")
+
             current = str(row["status"])
             new_status = current
             updates: Dict[str, Any] = {}
             event_payload: Dict[str, Any] = {}
             if action == "acknowledge":
                 if current not in {"open", "snoozed"}:
-                    raise QueueValidationError(f"Cannot acknowledge a {current} gap.")
+                    raise QueueValidationError(f"Cannot acknowledge a {current} workstream.")
                 new_status = "acknowledged"
-            elif action == "start":
+            elif action in {"start", "resume"}:
                 if current not in {"open", "acknowledged", "snoozed", "pending_validation"}:
-                    raise QueueValidationError(f"Cannot start a {current} gap.")
+                    raise QueueValidationError(f"Cannot start a {current} workstream.")
                 new_status = "in_progress"
+                updates["snoozed_until"] = None
             elif action == "ready_for_validation":
                 if current not in {"acknowledged", "in_progress"}:
-                    raise QueueValidationError(f"Cannot validate a {current} gap.")
+                    raise QueueValidationError(f"Cannot validate a {current} workstream.")
                 new_status = "pending_validation"
-            elif action == "assign":
-                if current not in ACTIVE_GAP_STATUSES:
-                    raise QueueValidationError(f"Cannot assign a {current} gap.")
-                assignee = str(data.get("assignee") or "").strip()
-                if not assignee or len(assignee) > 200:
-                    raise QueueValidationError("A valid assignee is required.")
-                updates["assignee"] = assignee
-                event_payload = {"assignee": assignee}
+            elif action == "select_path":
+                path_id = str(data.get("path_id") or "").strip()
+                paths = _loads(row["paths_json"], [])
+                selected = next((item for item in paths if str(item.get("id")) == path_id), None)
+                if not selected:
+                    raise QueueValidationError("Select a valid remediation path.")
+                updates.update({
+                    "selected_path_id": path_id,
+                    "selected_target_tier": selected["target_tier"],
+                    "selected_path_json": _json(selected),
+                    "execution_plan_json": None,
+                    "execution_path_id": None,
+                    "execution_prepared_at": None,
+                    "mcp_request_copied_at": None,
+                    "slack_prepared_at": None,
+                    "slack_copied_at": None,
+                })
+                event_payload = {"path_id": path_id, "target_tier": selected["target_tier"], "execution_plan_invalidated": True}
+            elif action == "prepare_execution":
+                plan = data.get("execution_plan")
+                if not isinstance(plan, Mapping):
+                    raise QueueValidationError("A server-generated execution plan is required.")
+                selected_path = plan.get("selected_path")
+                plan_path_id = str(selected_path.get("id") if isinstance(selected_path, Mapping) else "")
+                if str(plan.get("workstream_id") or "") != workstream_id or plan_path_id != str(row["selected_path_id"]):
+                    raise QueueValidationError("The execution plan does not match the selected workstream path.")
+                if plan.get("source_write_performed") is not False:
+                    raise QueueValidationError("Execution preparation cannot claim that a source write occurred.")
+                serialized_plan = _json(plan)
+                if len(serialized_plan.encode("utf-8")) > 500_000:
+                    raise QueueValidationError("The execution plan is too large.")
+                updates.update({
+                    "execution_plan_json": serialized_plan,
+                    "execution_path_id": plan_path_id,
+                    "execution_prepared_at": _utc_now(),
+                    "mcp_request_copied_at": None,
+                    "slack_prepared_at": None,
+                    "slack_copied_at": None,
+                })
+                event_payload = {
+                    "execution_id": str(plan.get("execution_id") or ""),
+                    "path_id": plan_path_id,
+                    "execution_mode": str(plan.get("execution_mode") or ""),
+                    "delivery": "prepared_not_executed",
+                }
+            elif action == "record_mcp_request_copy":
+                if not row["execution_prepared_at"] or not row["execution_plan_json"]:
+                    raise QueueValidationError("Prepare MCP next steps before recording a copy.")
+                updates["mcp_request_copied_at"] = _utc_now()
+                event_payload = {
+                    "execution_path_id": row["execution_path_id"],
+                    "delivery": "copied_not_executed",
+                }
+            elif action == "prepare_slack":
+                slack_recipient = str(data.get("recipient") or "").strip()
+                if not slack_recipient or len(slack_recipient) > 200:
+                    raise QueueValidationError("A valid Slack recipient or team label is required.")
+                updates.update({
+                    "assignee": slack_recipient,
+                    "slack_recipient": slack_recipient,
+                    "slack_prepared_at": _utc_now(),
+                    "slack_copied_at": None,
+                })
+                event_payload = {"recipient": slack_recipient, "delivery": "prepared_not_sent"}
+            elif action == "record_slack_copy":
+                if not row["slack_prepared_at"]:
+                    raise QueueValidationError("Prepare a Slack follow-up before recording a copy.")
+                updates["slack_copied_at"] = _utc_now()
+                event_payload = {"recipient": row["slack_recipient"], "delivery": "copied_not_sent"}
             elif action == "snooze":
-                if current not in ACTIVE_GAP_STATUSES:
-                    raise QueueValidationError(f"Cannot snooze a {current} gap.")
-                until = str(data.get("until") or "")
-                try:
-                    parsed = date.fromisoformat(until)
-                except ValueError as exc:
-                    raise QueueValidationError("A valid snooze date is required.") from exc
-                if parsed <= date.today():
-                    raise QueueValidationError("Snooze date must be in the future.")
+                if current not in ACTIVE_WORKSTREAM_STATUSES:
+                    raise QueueValidationError(f"Cannot snooze a {current} workstream.")
+                until = self._validate_future_date(data.get("until"), "snooze")
                 new_status = "snoozed"
                 updates["snoozed_until"] = until
                 event_payload = {"until": until}
             elif action == "waive":
-                if current not in ACTIVE_GAP_STATUSES:
-                    raise QueueValidationError(f"Cannot waive a {current} gap.")
+                if current not in ACTIVE_WORKSTREAM_STATUSES:
+                    raise QueueValidationError(f"Cannot waive a {current} workstream.")
                 reason = str(data.get("reason") or "").strip()
                 approved_by = str(data.get("approved_by") or "").strip()
-                expires_on = str(data.get("expires_on") or "")
-                try:
-                    parsed = date.fromisoformat(expires_on)
-                except ValueError as exc:
-                    raise QueueValidationError("A valid waiver expiration date is required.") from exc
-                if not reason or len(reason) > 1000 or not approved_by or len(approved_by) > 200 or parsed <= date.today():
+                expires_on = self._validate_future_date(data.get("expires_on"), "waiver expiration")
+                if not reason or len(reason) > 1000 or not approved_by or len(approved_by) > 200:
                     raise QueueValidationError("Waivers require a reason, approver, and future expiration date.")
                 new_status = "waived"
-                updates["waiver_reason"] = reason
-                updates["waiver_expires_on"] = expires_on
-                updates["waiver_approved_by"] = approved_by
+                updates.update({
+                    "waiver_reason": reason,
+                    "waiver_expires_on": expires_on,
+                    "waiver_approved_by": approved_by,
+                })
                 event_payload = {"reason": reason, "expires_on": expires_on, "approved_by": approved_by}
             else:
                 raise QueueValidationError("Unsupported remediation action.")
@@ -643,22 +970,35 @@ class RemediationStore:
             for column, value in updates.items():
                 assignments.append(f"{column}=?")
                 values.append(value)
-            values.append(gap_id)
-            connection.execute(f"UPDATE gaps SET {', '.join(assignments)} WHERE fingerprint=?", values)
-            self._event(
-                connection,
-                case_id=str(row["case_fingerprint"]),
-                gap_id=gap_id,
-                event_type=f"action_{action}",
-                actor=actor,
-                payload=event_payload,
+            values.append(workstream_id)
+            connection.execute(
+                f"UPDATE workstreams SET {', '.join(assignments)} WHERE fingerprint=?", values,
             )
-            self._recompute_case(connection, str(row["case_fingerprint"]))
+            self._event(
+                connection, workstream_id=workstream_id, instance_id=None,
+                event_type=f"action_{action}", actor=actor, payload=event_payload,
+            )
             connection.commit()
-            updated = connection.execute("SELECT * FROM gaps WHERE fingerprint=?", (gap_id,)).fetchone()
-            return self._row_to_gap(updated)
         except Exception:
             connection.rollback()
             raise
         finally:
             connection.close()
+
+        workstream = self.get_workstream(
+            workstream_id, scope_id=scope_id, portfolio_id=portfolio_id, account_ids=owned,
+        )
+        if not workstream:
+            raise QueueError("The updated remediation workstream is unavailable.")
+        result: Dict[str, Any] = {"workstream": workstream}
+        if slack_recipient is not None:
+            result["slack_message"] = format_slack_followup(workstream, slack_recipient)
+            result["delivery"] = "prepared_not_sent"
+        elif action == "record_slack_copy":
+            result["delivery"] = "copied_not_sent"
+        elif action == "prepare_execution":
+            result["execution_workspace"] = workstream.get("execution_plan")
+            result["execution"] = "prepared_not_executed"
+        elif action == "record_mcp_request_copy":
+            result["execution"] = "copied_not_executed"
+        return result

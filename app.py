@@ -57,22 +57,22 @@ class HoursReconHandler(BaseHTTPRequestHandler):
         if path == "/api/status":
             self._json(200, self.service.status())
             return
-        if path == "/api/remediation/cases":
+        if path == "/api/remediation/workstreams":
             query = parse_qs(urlparse(self.path).query)
             allowed = {key: values[0] for key, values in query.items() if key in {"status", "route", "priority", "account_id"} and values}
             try:
-                self._json(200, {"cases": self.service.list_remediation_cases(allowed)})
+                self._json(200, {"workstreams": self.service.list_remediation_workstreams(allowed)})
             except QueueError as exc:
                 self._json(503, {"error": str(exc)})
             return
-        if path.startswith("/api/remediation/cases/"):
+        if path.startswith("/api/remediation/workstreams/"):
             fingerprint = unquote(path.rsplit("/", 1)[-1])
-            if not re.fullmatch(r"hrc1_[a-f0-9]{64}", fingerprint):
-                self._json(400, {"error": "Invalid remediation case ID."})
+            if not re.fullmatch(r"hrw2_[a-f0-9]{64}", fingerprint):
+                self._json(400, {"error": "Invalid remediation workstream ID."})
                 return
             try:
-                case = self.service.get_remediation_case(fingerprint)
-                self._json(200, {"case": case}) if case else self._json(404, {"error": "Remediation case not found."})
+                workstream = self.service.get_remediation_workstream(fingerprint)
+                self._json(200, {"workstream": workstream}) if workstream else self._json(404, {"error": "Remediation workstream not found."})
             except QueueError as exc:
                 self._json(503, {"error": str(exc)})
             return
@@ -123,7 +123,7 @@ class HoursReconHandler(BaseHTTPRequestHandler):
                     "preserved_last_success": True,
                 })
             return
-        match = re.fullmatch(r"/api/remediation/gaps/(hrg1_[a-f0-9]{64})/actions", path)
+        match = re.fullmatch(r"/api/remediation/workstreams/(hrw2_[a-f0-9]{64})/actions", path)
         if match:
             if not secrets.compare_digest(self.headers.get("X-Hours-Recon-Action-Token", ""), self.service.action_token):
                 self._json(403, {"error": "Invalid remediation action token."})
@@ -132,10 +132,10 @@ class HoursReconHandler(BaseHTTPRequestHandler):
                 body = self._read_json_body()
                 action = str(body.pop("action", ""))
                 expected_version = int(body.pop("expected_version"))
-                gap = self.service.remediation_action(
+                result = self.service.remediation_action(
                     match.group(1), action=action, expected_version=expected_version, payload=body,
                 )
-                self._json(200, {"gap": gap})
+                self._json(200, result)
             except QueueConflict as exc:
                 self._json(409, {"error": str(exc)})
             except (QueueValidationError, ValueError, TypeError, KeyError) as exc:

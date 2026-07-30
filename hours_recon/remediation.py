@@ -1,14 +1,33 @@
-"""Build deterministic remediation candidates from Tier 3/4 evidence gaps."""
+"""Build deterministic remediation workstreams from Tier 3/4 evidence gaps."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import date, timedelta
-from typing import Any, Dict, Iterable, List, Mapping
+from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Sequence, Tuple
+
+from .remediation_policy import (
+    MINIMUM_GOVERNED_TIER,
+    POLICY_VERSION,
+    path_options,
+    rank_paths,
+    route_for_dimension,
+    validate_paths,
+)
 
 PRIORITY_RANK = {"P0": 0, "P1": 1, "P2": 2}
 DEFAULT_SLA_DAYS = {"P0": 5, "P1": 10, "P2": 20}
+METRIC_FIELDS = (
+    "sold_hours",
+    "billed_hours",
+    "remaining_hours",
+    "at_risk_hours",
+    "expired_unused_hours",
+    "future_entitlement_hours",
+    "overage_hours",
+)
 
 
 def stable_fingerprint(prefix: str, identity: Mapping[str, Any]) -> str:
@@ -16,6 +35,8 @@ def stable_fingerprint(prefix: str, identity: Mapping[str, Any]) -> str:
     return prefix + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+# Retained as deterministic v1 identity helpers for callers that need to
+# recognize old local records. The v2 store does not write these identities.
 def case_fingerprint(scope_id: str, account_id: str) -> str:
     return stable_fingerprint("hrc1_", {
         "schema": "hours-recon-case/v1",
@@ -33,8 +54,28 @@ def gap_fingerprint(case_id: str, dimension: str) -> str:
     })
 
 
+def workstream_fingerprint(scope_id: str, portfolio_id: str, family: str, group_key: str) -> str:
+    return stable_fingerprint("hrw2_", {
+        "schema": "hours-recon-workstream/v2",
+        "scope_id": scope_id,
+        "portfolio_id": portfolio_id,
+        "family": family,
+        "group_key": group_key,
+    })
+
+
+def instance_fingerprint(scope_id: str, portfolio_id: str, account_id: str, dimension: str) -> str:
+    return stable_fingerprint("hri2_", {
+        "schema": "hours-recon-instance/v2",
+        "scope_id": scope_id,
+        "portfolio_id": portfolio_id,
+        "account_id": account_id,
+        "dimension": dimension,
+    })
+
+
 def evidence_hash(evidence: Mapping[str, Any]) -> str:
-    return stable_fingerprint("hre1_", evidence)
+    return stable_fingerprint("hre2_", evidence)
 
 
 def add_business_days(start: date, days: int) -> date:
@@ -70,117 +111,265 @@ def _priority(account: Mapping[str, Any], gap: Mapping[str, Any]) -> str:
     return "P2"
 
 
-def _route(dimension: str) -> Dict[str, str]:
-    routes = {
-        "entitlement_source": {
-            "route": "entitlement_data",
-            "primary_owner": "Opportunity owner",
-            "required_partner": "Deal Desk / RevOps",
-        },
-        "hours_mapping": {
-            "route": "entitlement_data",
-            "primary_owner": "Opportunity owner",
-            "required_partner": "Deal Desk / RevOps + Hours Recon owner",
-        },
-        "service_period": {
-            "route": "entitlement_data",
-            "primary_owner": "Opportunity owner",
-            "required_partner": "AIOM owner + Deal Desk / RevOps",
-        },
-        "project_linkage": {
-            "route": "project_mapping",
-            "primary_owner": "Rocketlane project owner",
-            "required_partner": "CS Ops",
-        },
-        "time_quality": {
-            "route": "time_quality",
-            "primary_owner": "Rocketlane project owner / time-entry author",
-            "required_partner": "Rocketlane admin when policy or connector-related",
-        },
-    }
-    return routes.get(dimension, {
-        "route": "data_governance",
-        "primary_owner": "Hours Recon owner",
-        "required_partner": "Source-system owner",
-    })
+def _clean_key(value: Any, maximum: int = 180) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip()).casefold()
+    return text[:maximum]
 
 
-def build_candidates(report: Mapping[str, Any], *, scope_id: str) -> List[Dict[str, Any]]:
-    """Return one account case candidate containing one item per weak dimension."""
-    as_of = date.fromisoformat(str(report.get("meta", {}).get("as_of")))
-    candidates: List[Dict[str, Any]] = []
-    for account in sorted(report.get("accounts", []), key=lambda item: str(item.get("id"))):
-        governance = account.get("governance") or {}
-        gaps = list(governance.get("gaps") or [])
-        if not gaps:
+def _weak_package_keys(account: Mapping[str, Any], dimension: str) -> List[Tuple[str, str]]:
+    values: List[Tuple[str, str]] = []
+    for package in account.get("packages", []):
+        if dimension == "hours_mapping" and str(package.get("inference_source") or "") in {"product_code", "explicit_hours", "growth_tier"}:
             continue
+        if dimension == "entitlement_source" and str(package.get("line_item_source") or "") in {"opportunity_line_item", "approved_quote", "synced_quote"}:
+            continue
+        raw = package.get("product_code") or package.get("mapping_key") or package.get("line_item_name")
+        clean = _clean_key(raw)
+        if clean and not clean.startswith(("line_item:", "opportunity:")):
+            label = str(package.get("product_code") or package.get("line_item_name") or package.get("mapping_key"))
+            values.append((clean, label))
+    for unresolved in account.get("package_exceptions", []):
+        raw = unresolved.get("product_code") or unresolved.get("line_item_name")
+        clean = _clean_key(raw)
+        if clean:
+            label = str(unresolved.get("product_code") or unresolved.get("line_item_name"))
+            values.append((clean, label))
+    return sorted(set(values))
+
+
+def _group_identity(account: Mapping[str, Any], gap: Mapping[str, Any]) -> Tuple[str, str, str]:
+    account_id = str(account.get("id") or "")
+    account_name = str(account.get("name") or account_id)
+    dimension = str(gap.get("dimension") or "data_governance")
+    reason = str(gap.get("reason_code") or "unknown")
+    details = dict(gap.get("details") or {})
+
+    if reason == "incomplete_source_coverage":
+        missing = sorted({str(value) for value in details.get("missing_coverage", []) if value}) or ["unverified"]
+        label = ", ".join(missing)
+        return "source_coverage", "coverage:" + "|".join(missing), f"Complete source retrieval coverage for {label}"
+
+    if dimension in {"hours_mapping", "entitlement_source"}:
+        keys = _weak_package_keys(account, dimension)
+        if len(keys) == 1:
+            key, label = keys[0]
+            action = "Govern hours mapping" if dimension == "hours_mapping" else "Govern entitlement source"
+            return dimension, f"product:{key}", f"{action} for {label}"
+
+    if dimension == "service_period":
+        weak_opportunities = sorted({
+            str(package.get("opportunity_id"))
+            for package in account.get("packages", [])
+            if package.get("opportunity_id")
+            and str(package.get("service_period_source") or "close_date_plus_one_year") not in {"line_item_explicit", "opportunity_explicit", "partial_explicit"}
+        })
+        suffix = f":opportunity:{weak_opportunities[0]}" if len(weak_opportunities) == 1 else ""
+        return dimension, f"account:{account_id}{suffix}", f"Record contractual service periods for {account_name}"
+
+    titles = {
+        "project_linkage": f"Establish stable Rocketlane linkage for {account_name}",
+        "time_quality": f"Correct Rocketlane time evidence for {account_name}",
+        "entitlement_source": f"Govern entitlement evidence for {account_name}",
+        "hours_mapping": f"Govern hours mapping for {account_name}",
+    }
+    return dimension, f"account:{account_id}", titles.get(dimension, f"Correct {dimension.replace('_', ' ')} for {account_name}")
+
+
+def _impact_for_instances(instances: Sequence[Mapping[str, Any]]) -> Dict[str, float]:
+    # A coverage workstream can have several dimensions for one account. Count
+    # each account's report metrics only once so impact is never inflated.
+    by_account: Dict[str, Mapping[str, Any]] = {}
+    for instance in instances:
+        evidence = instance.get("evidence") or {}
+        by_account.setdefault(str(instance.get("account_id")), evidence.get("metric_impact") or {})
+    return {
+        field: round(sum(float(metrics.get(field, 0) or 0) for metrics in by_account.values()), 2)
+        for field in METRIC_FIELDS
+    }
+
+
+def build_workstreams(
+    report: Mapping[str, Any],
+    *,
+    scope_id: str,
+    portfolio_id: str = "local-default",
+) -> List[Dict[str, Any]]:
+    """Build root-cause workstreams with stable account/dimension instances."""
+    raw_as_of = str(report.get("meta", {}).get("as_of") or "")
+    try:
+        as_of = date.fromisoformat(raw_as_of)
+    except ValueError as exc:
+        raise ValueError("The report requires a valid meta.as_of date for remediation planning.") from exc
+
+    grouped: MutableMapping[Tuple[str, str], Dict[str, Any]] = {}
+    for account in sorted(report.get("accounts", []), key=lambda item: str(item.get("id"))):
         account_id = str(account.get("id") or "")
         if not account_id:
             continue
-        case_id = case_fingerprint(scope_id, account_id)
-        gap_candidates = []
-        for raw_gap in sorted(gaps, key=lambda item: str(item.get("dimension"))):
-            dimension = str(raw_gap.get("dimension") or "unknown")
-            priority = _priority(account, raw_gap)
-            routing = _route(dimension)
+        governance = dict(account.get("governance") or {})
+        for raw_gap in sorted(governance.get("gaps") or [], key=lambda item: str(item.get("dimension"))):
+            gap = dict(raw_gap)
+            dimension = str(gap.get("dimension") or "data_governance")
+            reason = str(gap.get("reason_code") or "unknown")
+            family, group_key, title = _group_identity(account, gap)
+            priority = _priority(account, gap)
+            routing = route_for_dimension(dimension, reason)
             evidence = {
                 "account_id": account_id,
                 "account_name": account.get("name"),
                 "overall_tier": governance.get("overall_tier"),
                 "dimension": dimension,
-                "tier": raw_gap.get("tier"),
-                "reason_code": raw_gap.get("reason_code"),
-                "summary": raw_gap.get("summary"),
-                "recommended_action": raw_gap.get("recommended_action"),
-                "refs": raw_gap.get("refs") or [],
-                "details": raw_gap.get("details") or {},
-                "metric_impact": {
-                    key: account.get(key, 0)
-                    for key in (
-                        "sold_hours", "billed_hours", "remaining_hours", "at_risk_hours",
-                        "expired_unused_hours", "overage_hours",
-                    )
-                },
+                "tier": gap.get("tier"),
+                "reason_code": reason,
+                "summary": gap.get("summary"),
+                "recommended_action": gap.get("recommended_action"),
+                "refs": gap.get("refs") or [],
+                "details": gap.get("details") or {},
+                "metric_impact": {field: account.get(field, 0) for field in METRIC_FIELDS},
                 "report_as_of": as_of.isoformat(),
-                "policy_version": governance.get("policy_version"),
+                "evidence_policy_version": governance.get("policy_version"),
+                "remediation_policy_version": POLICY_VERSION,
+                "grouping": {"family": family, "group_key": group_key, "title": title},
             }
-            gap_candidates.append({
-                "fingerprint": gap_fingerprint(case_id, dimension),
+            instance = {
+                "fingerprint": instance_fingerprint(scope_id, portfolio_id, account_id, dimension),
+                "account_id": account_id,
+                "account_name": account.get("name"),
                 "dimension": dimension,
-                "tier": raw_gap.get("tier"),
-                "reason_code": raw_gap.get("reason_code"),
-                "summary": raw_gap.get("summary"),
-                "recommended_action": raw_gap.get("recommended_action"),
+                "current_tier": gap.get("tier"),
+                "reason_code": reason,
+                "summary": gap.get("summary"),
                 "priority": priority,
-                "route": routing["route"],
-                "primary_owner": routing["primary_owner"],
-                "required_partner": routing["required_partner"],
+                "minimum_target_tier": MINIMUM_GOVERNED_TIER,
                 "due_on": add_business_days(as_of, DEFAULT_SLA_DAYS[priority]).isoformat(),
                 "evidence": evidence,
                 "evidence_hash": evidence_hash(evidence),
+            }
+            key = (family, group_key)
+            group = grouped.setdefault(key, {
+                "family": family,
+                "group_key": group_key,
+                "title": title,
+                "routes": [],
+                "instances": [],
             })
-        candidates.append({
-            "fingerprint": case_id,
+            group["routes"].append(routing)
+            group["instances"].append(instance)
+
+    workstreams: List[Dict[str, Any]] = []
+    for (family, group_key), group in sorted(grouped.items()):
+        instances = sorted(group["instances"], key=lambda item: (str(item["account_name"]), str(item["dimension"])))
+        priorities = [str(item["priority"]) for item in instances]
+        priority = min(priorities, key=lambda value: PRIORITY_RANK.get(value, 99))
+        impact = _impact_for_instances(instances)
+        account_count = len({str(item["account_id"]) for item in instances})
+        dimensions = sorted({str(item["dimension"]) for item in instances})
+        reasons = sorted({str(item["reason_code"]) for item in instances})
+        representative = instances[0]
+        paths = path_options(
+            str(representative["dimension"]),
+            str(representative["reason_code"]),
+            (representative.get("evidence") or {}).get("details") or {},
+        )
+        validate_paths(paths)
+        ranked, recommended_id, recommendation_reason = rank_paths(
+            paths,
+            affected_accounts=account_count,
+            priority=priority,
+            impact=impact,
+        )
+        # Coverage may combine dimensions, but all instances share the same
+        # source-retrieval route. Other groups use their representative route.
+        route = group["routes"][0]
+        workstreams.append({
+            "fingerprint": workstream_fingerprint(scope_id, portfolio_id, family, group_key),
             "scope_id": scope_id,
-            "account_id": account_id,
-            "account_name": account.get("name"),
-            "overall_tier": governance.get("overall_tier"),
-            "gaps": gap_candidates,
+            "portfolio_id": portfolio_id,
+            "policy_version": POLICY_VERSION,
+            "family": family,
+            "group_key": group_key,
+            "title": group["title"],
+            "dimensions": dimensions,
+            "reason_codes": reasons,
+            "priority": priority,
+            "route": route["route"],
+            "primary_owner": route["primary_owner"],
+            "required_partners": route["required_partners"],
+            "minimum_target_tier": MINIMUM_GOVERNED_TIER,
+            "due_on": min(str(item["due_on"]) for item in instances),
+            "affected_account_count": account_count,
+            "impact": impact,
+            "paths": ranked,
+            "recommended_path_id": recommended_id,
+            "recommendation_reason": recommendation_reason,
+            "instances": instances,
         })
-    return candidates
+    return sorted(workstreams, key=lambda item: (PRIORITY_RANK.get(str(item["priority"]), 99), str(item["due_on"]), str(item["title"])))
 
 
-def priority_sort_key(value: str) -> int:
-    return PRIORITY_RANK.get(str(value), 99)
-
-
-def summarize_candidates(candidates: Iterable[Mapping[str, Any]]) -> Dict[str, int]:
-    rows = list(candidates)
-    gaps = [gap for case in rows for gap in case.get("gaps", [])]
+def summarize_workstreams(workstreams: Iterable[Mapping[str, Any]]) -> Dict[str, int]:
+    rows = list(workstreams)
+    instances = [item for workstream in rows for item in workstream.get("instances", [])]
     return {
-        "case_count": len(rows),
-        "gap_count": len(gaps),
-        "p0_count": sum(1 for item in gaps if item.get("priority") == "P0"),
-        "p1_count": sum(1 for item in gaps if item.get("priority") == "P1"),
-        "p2_count": sum(1 for item in gaps if item.get("priority") == "P2"),
+        "workstream_count": len(rows),
+        "instance_count": len(instances),
+        "p0_workstream_count": sum(1 for item in rows if item.get("priority") == "P0"),
+        "p1_workstream_count": sum(1 for item in rows if item.get("priority") == "P1"),
+        "p2_workstream_count": sum(1 for item in rows if item.get("priority") == "P2"),
     }
+
+
+def _slack_safe(value: Any, maximum: int = 500) -> str:
+    text = re.sub(r"[\r\n\t]+", " ", str(value or "")).strip()
+    return text.replace("<", "‹").replace(">", "›")[:maximum]
+
+
+def selected_path(workstream: Mapping[str, Any]) -> Dict[str, Any]:
+    snapshot = workstream.get("selected_path")
+    if isinstance(snapshot, Mapping) and snapshot.get("id"):
+        return dict(snapshot)
+    selected_id = str(workstream.get("selected_path_id") or workstream.get("recommended_path_id") or "")
+    paths = [dict(item) for item in workstream.get("paths", [])]
+    return next((item for item in paths if str(item.get("id")) == selected_id), paths[0] if paths else {})
+
+
+def format_slack_followup(workstream: Mapping[str, Any], recipient: str) -> str:
+    """Create copy-ready Slack text without sending or implying delivery."""
+    recipient = _slack_safe(recipient, 200)
+    if not recipient:
+        raise ValueError("A Slack recipient or team label is required.")
+    execution_plan = workstream.get("execution_plan")
+    if isinstance(execution_plan, Mapping):
+        draft = execution_plan.get("slack_draft")
+        template = draft.get("message") if isinstance(draft, Mapping) else None
+        if isinstance(template, str) and "{{recipient}}" in template:
+            return template.replace("{{recipient}}", recipient)
+    path = selected_path(workstream)
+    if not path:
+        raise ValueError("The workstream does not have a selected remediation path.")
+    instances = list(workstream.get("instances", []))
+    account_names = sorted({_slack_safe(item.get("account_name") or item.get("account_id"), 120) for item in instances})
+    shown = account_names[:8]
+    affected = ", ".join(shown) + (f" (+{len(account_names) - len(shown)} more)" if len(account_names) > len(shown) else "")
+    impact = dict(workstream.get("impact") or {})
+    impact_parts = []
+    for label, field in (("sold", "sold_hours"), ("remaining", "remaining_hours"), ("at risk", "at_risk_hours"), ("overage", "overage_hours")):
+        value = float(impact.get(field, 0) or 0)
+        if value:
+            impact_parts.append(f"{value:g}h {label}")
+    impact_text = " · ".join(impact_parts) or "No non-zero hour exposure in the current report"
+    steps = "\n".join(f"{index}. {_slack_safe(step, 500)}" for index, step in enumerate(path.get("steps", []), 1))
+    partners = ", ".join(_slack_safe(value, 120) for value in path.get("contributors", [])) or "None listed"
+    return (
+        f"Hi {recipient} — could you help with *{_slack_safe(workstream.get('title'), 300)}*?\n\n"
+        f"*Why this matters:* {_slack_safe(workstream.get('recommendation_reason'), 600)}\n"
+        f"*Target:* {path.get('target_tier')} (T2 is the minimum governed outcome)\n"
+        f"*Selected path:* {_slack_safe(path.get('title'), 300)} · Effort {path.get('effort')} · {_slack_safe(path.get('durability'), 30)} durability\n"
+        f"*Affected accounts:* {affected or 'None listed'}\n"
+        f"*Current impact:* {impact_text}\n"
+        f"*Primary owner:* {_slack_safe(path.get('primary_owner') or workstream.get('primary_owner'), 160)}\n"
+        f"*Partners:* {partners}\n"
+        f"*Due:* {_slack_safe(workstream.get('due_on') or 'Not set', 40)}\n\n"
+        f"*Proposed steps*\n{steps}\n\n"
+        "When the source changes are complete, please let me know so I can run a fresh, complete pull for validation."
+    )

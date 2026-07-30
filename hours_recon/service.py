@@ -17,7 +17,8 @@ from .evidence import attach_governance
 from .matching import match_projects
 from .mcp_snapshot import McpSnapshotError, load_mcp_snapshot
 from .reconcile import reconcile
-from .remediation_store import QueueError, RemediationStore
+from .remediation_execution import build_execution_workspace
+from .remediation_store import QueueError, QueueValidationError, RemediationStore
 from .rocketlane import RocketlaneClient
 from .salesforce import SalesforceClient
 from .storage import read_cache, write_cache
@@ -135,71 +136,101 @@ class ReconciliationService:
             or "local-default"
         )
 
-    def _owned_account_ids(self, result: Optional[Mapping[str, Any]] = None) -> List[str]:
-        """Account IDs held by the current requester in the active report.
+    def _active_portfolio_id(self, result: Optional[Mapping[str, Any]] = None) -> str:
+        """Return the requester-bound portfolio identity used by planner v2.
 
-        The remediation store is keyed by a tenant-wide scope_id shared across
-        requesters, so it cannot by itself distinguish accounts one AIOM owns
-        from another's. The active report is requester-bound (AIOM-filtered
-        Salesforce pull / requester-verified MCP snapshot), so its account set
-        is the authoritative ownership boundary for the remediation queue.
+        The connector scope identifies the shared Salesforce/Rocketlane tenant;
+        it does not identify which AIOM's account portfolio is currently loaded.
+        Keeping both identities prevents systemic workstreams from crossing a
+        requester boundary while leaving room for explicit sharing in a future
+        authenticated multiplayer deployment.
         """
+        source = result or self._data
+        meta = source.get("meta", {}) if isinstance(source, Mapping) else {}
+        requester = meta.get("requester") if isinstance(meta.get("requester"), Mapping) else {}
+        return str(
+            meta.get("mcp_requester_email")
+            or requester.get("email")
+            or self.settings.get("mcp_requester_email")
+            or self.settings.get("requester_email")
+            or "local-default"
+        ).strip().lower()
+
+    def _owned_account_ids(self, result: Optional[Mapping[str, Any]] = None) -> List[str]:
+        """Account IDs held by the current requester in the active report."""
         source = result if result is not None else self._data
         accounts = source.get("accounts", []) if isinstance(source, Mapping) else []
         return sorted({str(account.get("id")) for account in accounts if account.get("id")})
 
+    def _unavailable_remediation_summary(self) -> Dict[str, Any]:
+        return {
+            "schema_version": 2,
+            "mode": self.settings.get("remediation_mode", "off"),
+            "available": False,
+            "error": self.remediation_error,
+            "workstreams": [],
+            "workstream_count": 0,
+            "active_workstream_count": 0,
+            "active_instance_count": 0,
+            "governed_instance_count": 0,
+        }
+
     def _attach_remediation(self, result: Dict[str, Any]) -> None:
         if not self.remediation_store:
-            result["remediation_queue"] = {
-                "schema_version": 1,
-                "mode": self.settings.get("remediation_mode", "off"),
-                "available": False,
-                "error": self.remediation_error,
-                "cases": [],
-                "active_case_count": 0,
-                "active_gap_count": 0,
-            }
+            result["remediation_queue"] = self._unavailable_remediation_summary()
             return
         try:
             scope_id = self._active_scope_id(result)
+            portfolio_id = self._active_portfolio_id(result)
             summary = self.remediation_store.summary(
-                scope_id=scope_id, account_ids=self._owned_account_ids(result)
+                scope_id=scope_id,
+                portfolio_id=portfolio_id,
+                account_ids=self._owned_account_ids(result),
             )
             summary["available"] = True
             summary["action_token"] = self.action_token
-            by_account = {str(item["account_id"]): item for item in summary.get("cases", [])}
+            by_account: Dict[str, List[Dict[str, Any]]] = {}
+            for workstream in summary.get("workstreams", []):
+                for instance in workstream.get("instances", []):
+                    by_account.setdefault(str(instance["account_id"]), []).append({
+                        "workstream_fingerprint": workstream["fingerprint"],
+                        "title": workstream["title"],
+                        "status": workstream["status"],
+                        "priority": workstream["priority"],
+                        "route": workstream["route"],
+                        "due_on": workstream["due_on"],
+                        "dimension": instance["dimension"],
+                        "current_tier": instance["validation_tier"],
+                        "unverified_observed_tier": instance["unverified_observed_tier"],
+                        "minimum_target_met": instance["minimum_target_met"],
+                        "selected_target_met": instance["selected_target_met"],
+                    })
             for account in result.get("accounts", []):
-                case = by_account.get(str(account.get("id")))
-                if case:
-                    account["remediation"] = {
-                        "case_fingerprint": case["fingerprint"],
-                        "status": case["status"],
-                        "priority": case["priority"],
-                        "primary_route": case["primary_route"],
-                        "due_on": case["due_on"],
-                        "active_gap_count": case["active_gap_count"],
-                        "version": case["version"],
-                    }
-                else:
-                    account["remediation"] = None
+                linked = by_account.get(str(account.get("id")), [])
+                active = [item for item in linked if item["status"] not in {"governed", "waived"}]
+                account["remediation"] = {
+                    "workstreams": linked,
+                    "workstream_count": len(linked),
+                    "active_workstream_count": len(active),
+                    "highest_priority": min(
+                        (item["priority"] for item in active if item.get("priority")),
+                        key=lambda value: {"P0": 0, "P1": 1, "P2": 2}.get(str(value), 99),
+                        default=None,
+                    ),
+                } if linked else None
             result["remediation_queue"] = summary
         except Exception as exc:
             self.remediation_error = f"{type(exc).__name__}: {exc}"
-            result["remediation_queue"] = {
-                "schema_version": 1,
-                "mode": "observe_only",
-                "available": False,
-                "error": self.remediation_error,
-                "cases": [],
-                "active_case_count": 0,
-                "active_gap_count": 0,
-            }
+            result["remediation_queue"] = self._unavailable_remediation_summary()
 
     def status(self) -> Dict[str, Any]:
         queue_health: Dict[str, Any]
         if self.remediation_store:
             try:
-                queue_health = self.remediation_store.health(scope_id=self._active_scope_id())
+                queue_health = self.remediation_store.health(
+                    scope_id=self._active_scope_id(),
+                    portfolio_id=self._active_portfolio_id(),
+                )
             except Exception as exc:
                 queue_health = {"available": False, "error": f"{type(exc).__name__}: {exc}"}
         else:
@@ -261,6 +292,7 @@ class ReconciliationService:
                 result,
                 retrieval_id=retrieval_id,
                 scope_id=scope_id,
+                portfolio_id=self._active_portfolio_id(result),
                 coverage_complete=coverage_complete,
                 report_digest=digest,
             )
@@ -274,12 +306,13 @@ class ReconciliationService:
                 "error": self.remediation_error,
             }
 
-    def list_remediation_cases(self, filters: Optional[Mapping[str, str]] = None) -> List[Dict[str, Any]]:
+    def list_remediation_workstreams(self, filters: Optional[Mapping[str, str]] = None) -> List[Dict[str, Any]]:
         if not self.remediation_store:
-            raise QueueError("The remediation queue is unavailable.")
+            raise QueueError("The remediation planner is unavailable.")
         values = dict(filters or {})
-        return self.remediation_store.list_cases(
+        return self.remediation_store.list_workstreams(
             scope_id=self._active_scope_id(),
+            portfolio_id=self._active_portfolio_id(),
             account_ids=self._owned_account_ids(),
             status=values.get("status"),
             route=values.get("route"),
@@ -287,32 +320,48 @@ class ReconciliationService:
             account_id=values.get("account_id"),
         )
 
-    def get_remediation_case(self, fingerprint: str) -> Optional[Dict[str, Any]]:
+    def get_remediation_workstream(self, fingerprint: str) -> Optional[Dict[str, Any]]:
         if not self.remediation_store:
-            raise QueueError("The remediation queue is unavailable.")
-        return self.remediation_store.get_case(
+            raise QueueError("The remediation planner is unavailable.")
+        return self.remediation_store.get_workstream(
             fingerprint,
             scope_id=self._active_scope_id(),
+            portfolio_id=self._active_portfolio_id(),
             account_ids=self._owned_account_ids(),
         )
 
     def remediation_action(
         self,
-        gap_id: str,
+        workstream_id: str,
         *,
         action: str,
         expected_version: int,
         payload: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         if not self.remediation_store:
-            raise QueueError("The remediation queue is unavailable.")
+            raise QueueError("The remediation planner is unavailable.")
+        action_payload = dict(payload or {})
+        if action == "prepare_execution":
+            workstream = self.get_remediation_workstream(workstream_id)
+            if not workstream:
+                raise QueueValidationError("Unknown remediation workstream.")
+            # Never trust a browser-supplied plan. Build it from the current,
+            # requester-scoped report and selected path on the server.
+            action_payload["execution_plan"] = build_execution_workspace(
+                workstream,
+                self._data,
+                salesforce_web_base_url=self.settings.get("salesforce_web_base_url", ""),
+                rocketlane_web_base_url=self.settings.get("rocketlane_web_base_url", ""),
+                mcp_workspace_url=self.settings.get("mcp_workspace_url", ""),
+            )
         return self.remediation_store.action(
-            gap_id,
+            workstream_id,
             scope_id=self._active_scope_id(),
+            portfolio_id=self._active_portfolio_id(),
             account_ids=self._owned_account_ids(),
             action=action,
             expected_version=expected_version,
-            payload=payload,
+            payload=action_payload,
         )
 
     def refresh(self) -> Dict[str, Any]:

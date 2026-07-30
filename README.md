@@ -17,7 +17,9 @@ A local, read-only AIOM dashboard that reconciles hours sold in Salesforce with 
 - Preserves unmatched accounts, unknown packages, and excess negative corrections instead of silently dropping them.
 - Scores entitlement source, hours mapping, service period, project linkage, and time quality independently from Tier 1 through Tier 4.
 - Keeps current reported totals unchanged in observe-only mode while separating governed and provisional exposure.
-- Opens one private, deduplicated remediation case per account whenever any evidence dimension is Tier 3 or Tier 4.
+- Converts Tier 3/4 evidence into private, deterministic remediation workstreams, grouping shared root causes across accounts while retaining an independently validated account/dimension instance.
+- Ranks transparent T2 and T1 remediation paths by effort, durability, breadth, impact, dependencies, and automatic validation; T2 is the minimum governed outcome and T1 is an optional stronger target.
+- Opens a selected-path execution workspace with source record links, approval-gated MCP change packets, connector capability boundaries, and owner-specific Slack handoffs without writing or sending from the local app.
 
 ## Requirements
 
@@ -169,7 +171,7 @@ For a governed Tier 2 cross-system mapping, configure stable Rocketlane customer
 
 A Rocketlane project carrying the exact Salesforce Account ID is Tier 1. A configured customer-ID crosswalk is Tier 2. Normalized names and aliases remain Tier 3 and launch remediation in observe-only mode.
 
-## Governance and remediation workflow
+## Governance and remediation planner
 
 The default integration mode is observe-only:
 
@@ -187,22 +189,59 @@ Five evidence dimensions are scored independently:
 4. Salesforce-to-Rocketlane project linkage
 5. Rocketlane project and time-entry quality
 
-The weakest dimension controls the account tier. Tier 1 and Tier 2 are governed; Tier 3 and Tier 4 are provisional. Observe-only mode does not replace the existing portfolio totals. It adds governed/provisional shadow metrics and opens a local remediation workflow for every Tier 3/4 dimension.
+The weakest dimension controls the account tier. Tier 1 and Tier 2 are governed; Tier 3 and Tier 4 are provisional. Observe-only mode does not replace portfolio totals. It adds governed/provisional shadow metrics and feeds each Tier 3/4 dimension into remediation planner v2.
 
-Each Salesforce Account has one deterministic case containing dimension-level gaps. Repeated imports of the same source retrieval update nothing and do not create duplicates. A new retrieval can resolve or reopen a gap only when all coverage flags are literal `true`, `through_date` equals the report date, `scope_id` is accompanied by literal `scope_verified: true` after connector-identity validation, and that value exactly matches the configured `HOURS_RECON_REMEDIATION_SCOPE_ID`. Without both sides of that verification, the queue may observe gaps but cannot resolve, reopen, or fail validation. A resolved gap that later returns is reopened with regression history. Marking a gap ready for validation never promotes it by itself.
+### Workstreams, instances, and paths
 
-The local workflow supports `open`, `acknowledged`, `in_progress`, `pending_validation`, `snoozed`, `waived`, and `resolved` gap states. Waivers require a reason and expiration date and remain provisional.
+The planner separates three concepts:
+
+- A **workstream** is an assignable root cause. Shared ProductCode issues and incomplete retrieval coverage can group multiple accounts; account-specific service-period, project-linkage, and time-quality work remains isolated when there is no safe shared key.
+- An **instance** is one account/dimension observation under a workstream. It retains its own evidence, current tier, priority, due date, regression count, and validation result.
+- A **path** is a versioned set of ordered steps, owners, contributors, dependencies, effort, durability, execution scope, target tier, and automatic validation checks.
+
+Hours mapping, service period, and project linkage have detailed T2/T1 path catalogs. Entitlement source and time quality use the same framework with conservative paths that can be expanded independently. The recommendation policy is deterministic and versioned in `hours_recon/remediation_policy.py`; it does not ask a language model to choose a path. It normally selects the lowest-effort durable T2 path. A T1 path can rank first when it requires no additional effort, fixes a shared root cause across several accounts, or provides materially stronger evidence for high-impact exposure with only one added effort band. The dashboard always shows the rationale and every alternative.
+
+T2 is the minimum governed result. If a user selects a T1 path but a complete refresh reaches T2, the governance remediation closes as `governed` and the remaining T1 target is shown as an optional, non-blocking improvement. Reaching T1 satisfies both targets.
+
+### Observation and validation lifecycle
+
+Repeated imports of the same source `retrieval_id` are idempotent. A new retrieval can govern or reopen an instance only when all coverage flags are literal `true`, `through_date` equals the report date, `scope_id` has literal `scope_verified: true` after connector identity validation, and that value exactly matches `HOURS_RECON_REMEDIATION_SCOPE_ID`. Without both sides of that verification, the planner may observe new gaps but cannot govern a prior instance, reopen a regression, or fail pending validation. If an incomplete pull observes a weaker tier after an instance was governed, the dashboard retains the last validated tier and labels the weaker value as an unverified observation until a complete pull confirms or clears it.
+
+The local workstream lifecycle supports `open`, `acknowledged`, `in_progress`, `pending_validation`, `snoozed`, `waived`, and `governed`. Waivers require a reason, approver, and expiration date and do not change the underlying evidence tier. Marking work ready for validation never promotes evidence by itself; only a fresh complete pull can do that.
+
+Workstream and instance fingerprints include both the verified connector scope and the requester-bound portfolio identity. The active report's Account IDs remain a final read/write boundary. This preserves local single-user behavior while preventing a shared tenant scope from mixing one requester's work into another's dashboard.
+
+### Selected-path execution workspace
+
+Selecting a path now opens **MCP execution workspace**. The workspace derives its targets from the requester-scoped report and includes:
+
+- direct Salesforce Account/Opportunity and Rocketlane project/time-entry links;
+- the exact connector tools that can support the path (`update_salesforce_opportunity`, `update_project`, or `update_time_entry`);
+- unresolved business inputs and connector limitations;
+- mandatory read-before-write, schema/field validation, exact before/after review, explicit confirmation, and post-write readback instructions;
+- a copy-ready MCP request that can be opened in the configured Glean workspace; and
+- a prefilled Slack handoff for the responsible AE, AISM, project owner, time-entry author, Deal Desk partner, or other source owner.
+
+The capability map is conservative. For example, the Rocketlane T1 identity path can propose `externalReferenceId = <Salesforce Account ID>` through `update_project`; the T2 customer crosswalk remains a reviewed local config change. Rocketlane time-entry activity/project metadata can be MCP-assisted, while approval-state changes remain delegated because the connector does not expose approval status as an update field. Unsupported Product/Opportunity Product writes are delegated rather than guessed.
+
+The browser records execution preparation and successful MCP-request copy separately as `prepared_not_executed` and `copied_not_executed`. Slack preparation and successful clipboard write remain separate `prepared_not_sent` and `copied_not_sent` events. The local app never invokes Salesforce, Rocketlane, or Slack MCP tools itself: Glean performs read/schema preflight and asks for confirmation immediately before every connector write. A write response never governs an instance; only a subsequent complete verified source refresh can validate the selected target.
+
+### Local database reset
+
+Planner v2 intentionally performs a clean reset of a schema-v1 remediation database on first startup. V1 case/gap workflow state is not migrated because it cannot accurately represent shared workstreams or selected T1/T2 paths. Report data and source snapshots are unaffected. New v2 workflow history then persists in the configured database.
 
 Read-only and local workflow endpoints:
 
 - `GET /api/data`
 - `GET /api/status`
-- `GET /api/remediation/cases`
-- `GET /api/remediation/cases/{case_id}`
-- `POST /api/remediation/gaps/{gap_id}/actions`
+- `GET /api/remediation/workstreams`
+- `GET /api/remediation/workstreams/{workstream_id}`
+- `POST /api/remediation/workstreams/{workstream_id}/actions`
 - `POST /api/refresh`
 
-The remediation database and its parent directory use owner-only permissions. Dashboard mutations require an ephemeral per-process action token and responses deny framing to reduce local CSRF/clickjacking risk. The application remains a loopback-only, single-user tool rather than a multi-user authorization system. No remediation action writes to Salesforce or Rocketlane.
+Supported workstream actions include `acknowledge`, `start`, `resume`, `ready_for_validation`, `select_path`, `prepare_execution`, `record_mcp_request_copy`, `prepare_slack`, `record_slack_copy`, `snooze`, and `waive`.
+
+The remediation database and its parent directory use owner-only permissions. Dashboard mutations require an ephemeral per-process action token and responses deny framing to reduce local CSRF/clickjacking risk. The application remains a loopback-only, single-user tool rather than a multi-user authorization system. No local remediation action writes to Salesforce, Rocketlane, or Slack; source writes occur only in an authenticated Glean MCP session after explicit confirmation.
 
 ## Calculation rules
 
@@ -228,7 +267,7 @@ Risk bands for unused hours:
 python3 -m unittest discover -v
 ```
 
-The suite covers package inference, canonical ProductCode mappings, explicit service periods, evidence-tier weakest-link behavior, governed/provisional conservation, aliases and match provenance, remediation fingerprints and lifecycle, queue idempotency, regression reopening, private persistence, collision safety, fuzzy suggestions, FIFO allocation, pre-entitlement timing, future-entitlement isolation, inclusive expiration, overage, billable filtering, weekly activity, risk boundaries, deterministic ordering, JSON output, and total rollups.
+The suite covers package inference, canonical ProductCode mappings, explicit service periods, evidence-tier weakest-link behavior, governed/provisional conservation, aliases and match provenance, remediation path validation and ranking, systemic grouping with account instances, deterministic fingerprints, T2 closure with optional T1 targets, retrieval idempotency, regression reopening, clean v1 reset, requester/scope isolation, Slack preparation versus copy tracking, private persistence, collision safety, fuzzy suggestions, FIFO allocation, pre-entitlement timing, future-entitlement isolation, inclusive expiration, overage, billable filtering, weekly activity, risk boundaries, deterministic ordering, JSON output, and total rollups.
 
 ## Repository layout
 
@@ -240,9 +279,11 @@ hours_recon/inference.py     Package inference and exact SKU mappings
 hours_recon/evidence.py      Tier scoring and governed/provisional partitions
 hours_recon/matching.py      Conservative matching with provenance
 hours_recon/reconcile.py     FIFO, risk, weekly checks, totals
-hours_recon/remediation.py   Case/gap policy and deterministic identities
-hours_recon/remediation_store.py  Private SQLite workflow persistence
-hours_recon/service.py       Refresh, cache, governance, and queue orchestration
+hours_recon/remediation_policy.py  Versioned path catalog and recommendation policy
+hours_recon/remediation.py   Workstream grouping, identities, impact, and Slack formatting
+hours_recon/remediation_execution.py  MCP packets, source links, capability boundaries, and owner handoffs
+hours_recon/remediation_store.py  Private SQLite planner persistence
+hours_recon/service.py       Refresh, cache, governance, and planner orchestration
 static/index.html            Interactive dashboard
 config/                      Package and account mappings
 tests/                       Unit and integration-shape tests
