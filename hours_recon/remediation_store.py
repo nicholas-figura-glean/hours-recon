@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 from datetime import date, datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 from urllib.parse import urlsplit
@@ -136,6 +137,7 @@ class RemediationStore:
                         slack_permalink TEXT,
                         slack_sent_at TEXT,
                         slack_sent_path_id TEXT,
+                        slack_outbox_id TEXT,
                         slack_client_msg_id TEXT,
                         slack_message_sha256 TEXT,
                         execution_plan_json TEXT,
@@ -183,6 +185,26 @@ class RemediationStore:
                         UNIQUE(scope_id, portfolio_id, account_id, dimension)
                     );
 
+                    CREATE TABLE slack_outbox (
+                        id TEXT PRIMARY KEY,
+                        workstream_fingerprint TEXT NOT NULL REFERENCES workstreams(fingerprint) ON DELETE CASCADE,
+                        scope_id TEXT NOT NULL,
+                        portfolio_id TEXT NOT NULL,
+                        execution_id TEXT NOT NULL,
+                        path_id TEXT NOT NULL,
+                        recipient_query TEXT NOT NULL,
+                        recipient_id TEXT,
+                        message_text TEXT NOT NULL,
+                        message_sha256 TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        queued_at TEXT NOT NULL,
+                        claimed_at TEXT,
+                        sent_at TEXT,
+                        permalink TEXT,
+                        error TEXT,
+                        version INTEGER NOT NULL DEFAULT 1
+                    );
+
                     CREATE TABLE observations (
                         scope_id TEXT NOT NULL,
                         portfolio_id TEXT NOT NULL,
@@ -217,6 +239,10 @@ class RemediationStore:
                         ON instances(scope_id, portfolio_id, account_id);
                     CREATE INDEX idx_events_workstream
                         ON events(workstream_fingerprint, id);
+                    CREATE INDEX idx_slack_outbox_scope_status
+                        ON slack_outbox(scope_id, portfolio_id, status, queued_at);
+                    CREATE UNIQUE INDEX idx_slack_outbox_one_active
+                        ON slack_outbox(workstream_fingerprint) WHERE status IN ('pending', 'sending', 'needs_review');
                     PRAGMA user_version = 2;
                     """
                 )
@@ -224,7 +250,7 @@ class RemediationStore:
             workstream_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(workstreams)").fetchall()}
             for column in (
                 "slack_copied_at", "slack_recipient_id", "slack_channel_id", "slack_message_ts",
-                "slack_permalink", "slack_sent_at", "slack_sent_path_id", "slack_client_msg_id",
+                "slack_permalink", "slack_sent_at", "slack_sent_path_id", "slack_outbox_id", "slack_client_msg_id",
                 "slack_message_sha256", "execution_plan_json", "execution_path_id",
                 "execution_prepared_at", "mcp_request_copied_at",
             ):
@@ -233,6 +259,33 @@ class RemediationStore:
             instance_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(instances)").fetchall()}
             if version == SCHEMA_VERSION and "last_governed_tier" not in instance_columns:
                 connection.execute("ALTER TABLE instances ADD COLUMN last_governed_tier TEXT")
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS slack_outbox (
+                    id TEXT PRIMARY KEY,
+                    workstream_fingerprint TEXT NOT NULL REFERENCES workstreams(fingerprint) ON DELETE CASCADE,
+                    scope_id TEXT NOT NULL,
+                    portfolio_id TEXT NOT NULL,
+                    execution_id TEXT NOT NULL,
+                    path_id TEXT NOT NULL,
+                    recipient_query TEXT NOT NULL,
+                    recipient_id TEXT,
+                    message_text TEXT NOT NULL,
+                    message_sha256 TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    queued_at TEXT NOT NULL,
+                    claimed_at TEXT,
+                    sent_at TEXT,
+                    permalink TEXT,
+                    error TEXT,
+                    version INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE INDEX IF NOT EXISTS idx_slack_outbox_scope_status
+                    ON slack_outbox(scope_id, portfolio_id, status, queued_at);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_slack_outbox_one_active
+                    ON slack_outbox(workstream_fingerprint) WHERE status IN ('pending', 'sending', 'needs_review');
+                """
+            )
             connection.commit()
         finally:
             connection.close()
@@ -353,6 +406,12 @@ class RemediationStore:
                     elif status == "pending_validation":
                         event_type = "incomplete_retrieval_preserved_validation"
                     connection.execute(
+                        """UPDATE slack_outbox SET status='cancelled', message_text='',
+                           error='Superseded by a new source observation', version=version+1
+                           WHERE workstream_fingerprint=? AND status='pending'""",
+                        (workstream_id,),
+                    )
+                    connection.execute(
                         """UPDATE workstreams SET policy_version=?, title=?, dimensions_json=?, reason_codes_json=?,
                            status=?, priority=?, route=?, primary_owner=?, required_partners_json=?, minimum_target_tier=?,
                            due_on=?, paths_json=?, recommended_path_id=?, recommendation_reason=?, selected_path_id=?,
@@ -361,7 +420,7 @@ class RemediationStore:
                            execution_prepared_at=NULL, mcp_request_copied_at=NULL, slack_prepared_at=NULL,
                            slack_copied_at=NULL, slack_recipient_id=NULL, slack_channel_id=NULL,
                            slack_message_ts=NULL, slack_permalink=NULL, slack_sent_at=NULL,
-                           slack_sent_path_id=NULL, slack_client_msg_id=NULL, slack_message_sha256=NULL,
+                           slack_sent_path_id=NULL, slack_outbox_id=NULL, slack_client_msg_id=NULL, slack_message_sha256=NULL,
                            version=version+1 WHERE fingerprint=?""",
                         (
                             candidate["policy_version"], candidate["title"], _json(candidate["dimensions"]),
@@ -542,6 +601,12 @@ class RemediationStore:
             status = "governed"
             priority = None
             due_on = None
+            connection.execute(
+                """UPDATE slack_outbox SET status='cancelled', message_text='',
+                   error='Workstream governed by source revalidation', version=version+1
+                   WHERE workstream_fingerprint=? AND status='pending'""",
+                (workstream_id,),
+            )
         else:
             if current_status == "governed" and coverage_complete:
                 status = "open"
@@ -669,6 +734,12 @@ class RemediationStore:
         result["reason_codes"] = sorted({str(item.get("reason_code") or "") for item in instances})
         result["minimum_target_met"] = all(bool(item["minimum_target_met"]) for item in instances)
         result["selected_target_met"] = all(bool(item["selected_target_met"]) for item in instances)
+        outbox_row = connection.execute(
+            """SELECT id, recipient_query, status, queued_at, claimed_at, sent_at, permalink, error, version
+               FROM slack_outbox WHERE workstream_fingerprint=? ORDER BY queued_at DESC LIMIT 1""",
+            (row["fingerprint"],),
+        ).fetchone()
+        result["slack_outbox"] = dict(outbox_row) if outbox_row else None
         if include_events:
             event_rows = connection.execute(
                 """SELECT event_type, actor, created_at, payload_json, instance_fingerprint
@@ -834,6 +905,398 @@ class RemediationStore:
             raise QueueValidationError(f"{label.capitalize()} date must be in the future.")
         return raw
 
+    @staticmethod
+    def _serialize_outbox(row: sqlite3.Row) -> Dict[str, Any]:
+        return dict(row)
+
+    @staticmethod
+    def _select_outbox(
+        connection: sqlite3.Connection,
+        outbox_id: str,
+        *,
+        scope_id: str,
+        portfolio_id: str,
+        account_ids: Optional[Iterable[str]],
+    ) -> Optional[sqlite3.Row]:
+        query = "SELECT * FROM slack_outbox WHERE id=? AND scope_id=? AND portfolio_id=?"
+        values: List[Any] = [outbox_id, scope_id, portfolio_id]
+        if account_ids is not None:
+            owned = sorted({str(value) for value in account_ids})
+            if not owned:
+                query += " AND 1=0"
+            else:
+                query += (
+                    " AND EXISTS (SELECT 1 FROM instances oi WHERE "
+                    "oi.workstream_fingerprint=slack_outbox.workstream_fingerprint AND oi.account_id IN ("
+                    + ",".join("?" for _ in owned) + "))"
+                )
+                values.extend(owned)
+        return connection.execute(query, values).fetchone()
+
+    def list_slack_outbox(
+        self,
+        *,
+        scope_id: str,
+        portfolio_id: str = "local-default",
+        status: Optional[str] = "pending",
+        account_ids: Optional[Iterable[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        allowed = {"pending", "sending", "needs_review", "sent", "cancelled"}
+        if status and status not in allowed:
+            raise QueueValidationError("Select a valid Slack outbox status.")
+        connection = self._connect()
+        try:
+            query = "SELECT * FROM slack_outbox WHERE scope_id=? AND portfolio_id=?"
+            values: List[Any] = [scope_id, portfolio_id]
+            if status:
+                query += " AND status=?"
+                values.append(status)
+            if account_ids is not None:
+                owned = sorted({str(value) for value in account_ids})
+                if not owned:
+                    query += " AND 1=0"
+                else:
+                    query += (
+                        " AND EXISTS (SELECT 1 FROM instances oi WHERE "
+                        "oi.workstream_fingerprint=slack_outbox.workstream_fingerprint AND oi.account_id IN ("
+                        + ",".join("?" for _ in owned) + "))"
+                    )
+                    values.extend(owned)
+            query += " ORDER BY queued_at, id"
+            return [self._serialize_outbox(row) for row in connection.execute(query, values).fetchall()]
+        finally:
+            connection.close()
+
+    def queue_slack_message(
+        self,
+        workstream_id: str,
+        *,
+        scope_id: str,
+        portfolio_id: str,
+        account_ids: Optional[Iterable[str]],
+        expected_version: int,
+        execution_id: str,
+        path_id: str,
+        recipient_query: str,
+        message: str,
+    ) -> Dict[str, Any]:
+        recipient = str(recipient_query or "").strip()
+        reviewed_message = str(message or "").strip()
+        if not recipient or len(recipient) > 200:
+            raise QueueValidationError("Enter a Slack user, email, @handle, channel, or Slack ID.")
+        if not reviewed_message or len(reviewed_message) > 4000:
+            raise QueueValidationError("Review a Slack message between 1 and 4,000 characters before queueing.")
+        message_digest = sha256(reviewed_message.encode("utf-8")).hexdigest()
+        outbox_id = "hro1_" + sha256(
+            f"{workstream_id}\n{execution_id}\n{path_id}\n{recipient.casefold()}\n{message_digest}".encode("utf-8")
+        ).hexdigest()
+        owned = sorted({str(value) for value in account_ids}) if account_ids is not None else None
+        connection = self._connect()
+        outbox: Optional[Dict[str, Any]] = None
+        idempotent = False
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            query = "SELECT * FROM workstreams WHERE fingerprint=? AND scope_id=? AND portfolio_id=?"
+            params: List[Any] = [workstream_id, scope_id, portfolio_id]
+            if owned is not None:
+                if owned:
+                    query += (
+                        " AND EXISTS (SELECT 1 FROM instances oi WHERE oi.workstream_fingerprint=workstreams.fingerprint "
+                        "AND oi.account_id IN (" + ",".join("?" for _ in owned) + "))"
+                    )
+                    params.extend(owned)
+                else:
+                    query += " AND 1=0"
+            workstream = connection.execute(query, params).fetchone()
+            if not workstream:
+                raise QueueValidationError("Unknown remediation workstream.")
+            existing_same = connection.execute("SELECT * FROM slack_outbox WHERE id=?", (outbox_id,)).fetchone()
+            if existing_same and str(existing_same["status"]) in {"pending", "sending", "needs_review", "sent"}:
+                outbox = self._serialize_outbox(existing_same)
+                idempotent = True
+                connection.commit()
+            else:
+                if int(workstream["version"]) != int(expected_version):
+                    raise QueueConflict("The remediation workstream changed; reload before queueing the Slack message.")
+                stored_plan = _loads(workstream["execution_plan_json"], {})
+                if (
+                    not stored_plan
+                    or str(workstream["execution_path_id"] or "") != path_id
+                    or str(stored_plan.get("execution_id") or "") != execution_id
+                ):
+                    raise QueueValidationError("Open the selected remediation path and review its current Slack handoff before queueing.")
+                active = connection.execute(
+                    """SELECT * FROM slack_outbox WHERE workstream_fingerprint=?
+                       AND status IN ('pending','sending','needs_review') ORDER BY queued_at DESC LIMIT 1""",
+                    (workstream_id,),
+                ).fetchone()
+                if active and str(active["status"]) in {"sending", "needs_review"}:
+                    raise QueueConflict(
+                        "The existing Slack MCP delivery must be reconciled before another message can be queued."
+                    )
+                if active:
+                    connection.execute(
+                        "UPDATE slack_outbox SET status='cancelled', message_text='', version=version+1 WHERE id=?",
+                        (active["id"],),
+                    )
+                    self._event(
+                        connection, workstream_id=workstream_id, instance_id=None,
+                        event_type="slack_mcp_queue_superseded", actor="local_dashboard",
+                        payload={"outbox_id": str(active["id"])},
+                    )
+                queued_at = _utc_now()
+                if existing_same:
+                    connection.execute(
+                        """UPDATE slack_outbox SET execution_id=?, path_id=?, recipient_query=?, recipient_id=NULL,
+                           message_text=?, message_sha256=?, status='pending', queued_at=?, claimed_at=NULL,
+                           sent_at=NULL, permalink=NULL, error=NULL, version=version+1 WHERE id=?""",
+                        (execution_id, path_id, recipient, reviewed_message, message_digest, queued_at, outbox_id),
+                    )
+                else:
+                    connection.execute(
+                        """INSERT INTO slack_outbox(
+                               id, workstream_fingerprint, scope_id, portfolio_id, execution_id, path_id,
+                               recipient_query, message_text, message_sha256, status, queued_at
+                           ) VALUES(?,?,?,?,?,?,?,?,?,'pending',?)""",
+                        (
+                            outbox_id, workstream_id, scope_id, portfolio_id, execution_id, path_id,
+                            recipient, reviewed_message, message_digest, queued_at,
+                        ),
+                    )
+                connection.execute(
+                    """UPDATE workstreams SET assignee=?, slack_recipient=?, slack_prepared_at=?,
+                       slack_copied_at=NULL, version=version+1 WHERE fingerprint=?""",
+                    (recipient, recipient, queued_at, workstream_id),
+                )
+                self._event(
+                    connection, workstream_id=workstream_id, instance_id=None,
+                    event_type="slack_mcp_queued", actor="local_dashboard",
+                    payload={
+                        "outbox_id": outbox_id, "recipient": recipient, "path_id": path_id,
+                        "message_sha256": message_digest, "delivery": "queued_not_sent",
+                    },
+                )
+                connection.commit()
+                outbox = self._serialize_outbox(
+                    connection.execute("SELECT * FROM slack_outbox WHERE id=?", (outbox_id,)).fetchone()
+                )
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        workstream_result = self.get_workstream(
+            workstream_id, scope_id=scope_id, portfolio_id=portfolio_id, account_ids=owned,
+        )
+        if not workstream_result or not outbox:
+            raise QueueError("The queued Slack MCP handoff is unavailable.")
+        return {
+            "workstream": workstream_result,
+            "outbox": outbox,
+            "delivery": "already_" + str(outbox["status"]) if idempotent else "queued_not_sent",
+        }
+
+    def claim_slack_outbox(
+        self,
+        outbox_id: str,
+        *,
+        scope_id: str,
+        portfolio_id: str,
+        expected_version: int,
+        account_ids: Optional[Iterable[str]] = None,
+    ) -> Dict[str, Any]:
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._select_outbox(
+                connection, outbox_id, scope_id=scope_id, portfolio_id=portfolio_id, account_ids=account_ids,
+            )
+            if not row:
+                raise QueueValidationError("Unknown Slack outbox item.")
+            if int(row["version"]) != int(expected_version):
+                raise QueueConflict("The Slack outbox item changed; list pending messages again.")
+            if str(row["status"]) != "pending":
+                raise QueueValidationError(f"Cannot claim a {row['status']} Slack outbox item.")
+            claimed_at = _utc_now()
+            connection.execute(
+                "UPDATE slack_outbox SET status='sending', claimed_at=?, version=version+1 WHERE id=?",
+                (claimed_at, outbox_id),
+            )
+            self._event(
+                connection, workstream_id=str(row["workstream_fingerprint"]), instance_id=None,
+                event_type="slack_mcp_claimed", actor="glean_pi",
+                payload={"outbox_id": outbox_id, "delivery": "sending_not_confirmed"},
+            )
+            connection.commit()
+            updated = connection.execute("SELECT * FROM slack_outbox WHERE id=?", (outbox_id,)).fetchone()
+            return self._serialize_outbox(updated)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def complete_slack_outbox(
+        self,
+        outbox_id: str,
+        *,
+        scope_id: str,
+        portfolio_id: str,
+        expected_version: int,
+        recipient_id: str,
+        permalink: str,
+        account_ids: Optional[Iterable[str]] = None,
+    ) -> Dict[str, Any]:
+        resolved_recipient = str(recipient_id or "").strip().upper()
+        message_link = str(permalink or "").strip()
+        parsed = urlsplit(message_link)
+        if not re.fullmatch(r"[A-Z][A-Z0-9]{2,}", resolved_recipient):
+            raise QueueValidationError("Slack MCP returned an invalid recipient ID.")
+        if parsed.scheme != "https" or not (parsed.hostname or "").lower().endswith(".slack.com"):
+            raise QueueValidationError("Slack MCP returned an invalid message permalink.")
+        archive_match = re.search(r"/archives/([A-Z0-9]+)/p(\d{10})(\d{6})", parsed.path)
+        channel_id = archive_match.group(1) if archive_match else None
+        message_ts = f"{archive_match.group(2)}.{archive_match.group(3)}" if archive_match else None
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._select_outbox(
+                connection, outbox_id, scope_id=scope_id, portfolio_id=portfolio_id, account_ids=account_ids,
+            )
+            if not row:
+                raise QueueValidationError("Unknown Slack outbox item.")
+            if int(row["version"]) != int(expected_version):
+                raise QueueConflict("The Slack outbox item changed; do not record delivery twice.")
+            if str(row["status"]) not in {"sending", "needs_review"}:
+                raise QueueValidationError(f"Cannot complete a {row['status']} Slack outbox item.")
+            sent_at = _utc_now()
+            connection.execute(
+                """UPDATE slack_outbox SET status='sent', recipient_id=?, message_text='', sent_at=?, permalink=?,
+                   error=NULL, version=version+1 WHERE id=?""",
+                (resolved_recipient, sent_at, message_link, outbox_id),
+            )
+            connection.execute(
+                """UPDATE workstreams SET slack_recipient_id=?, slack_channel_id=?, slack_message_ts=?,
+                   slack_permalink=?, slack_sent_at=?, slack_sent_path_id=?, slack_outbox_id=?,
+                   slack_message_sha256=?, version=version+1 WHERE fingerprint=?""",
+                (
+                    resolved_recipient, channel_id, message_ts, message_link, sent_at, row["path_id"],
+                    outbox_id, row["message_sha256"], row["workstream_fingerprint"],
+                ),
+            )
+            self._event(
+                connection, workstream_id=str(row["workstream_fingerprint"]), instance_id=None,
+                event_type="slack_mcp_sent", actor="glean_pi_slack_mcp",
+                payload={
+                    "outbox_id": outbox_id, "recipient": row["recipient_query"],
+                    "recipient_id": resolved_recipient, "permalink": message_link,
+                    "message_sha256": row["message_sha256"], "path_id": row["path_id"],
+                    "delivery": "sent",
+                },
+            )
+            connection.commit()
+            updated = connection.execute("SELECT * FROM slack_outbox WHERE id=?", (outbox_id,)).fetchone()
+            return self._serialize_outbox(updated)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def mark_slack_outbox_uncertain(
+        self,
+        outbox_id: str,
+        *,
+        scope_id: str,
+        portfolio_id: str,
+        expected_version: int,
+        error: str,
+        account_ids: Optional[Iterable[str]] = None,
+    ) -> Dict[str, Any]:
+        reason = str(error or "").strip()[:500]
+        if not reason:
+            raise QueueValidationError("Describe why Slack MCP delivery needs review.")
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._select_outbox(
+                connection, outbox_id, scope_id=scope_id, portfolio_id=portfolio_id, account_ids=account_ids,
+            )
+            if not row:
+                raise QueueValidationError("Unknown Slack outbox item.")
+            if int(row["version"]) != int(expected_version):
+                raise QueueConflict("The Slack outbox item changed; list it again before updating.")
+            if str(row["status"]) != "sending":
+                raise QueueValidationError(f"Cannot flag a {row['status']} Slack outbox item for review.")
+            connection.execute(
+                "UPDATE slack_outbox SET status='needs_review', error=?, version=version+1 WHERE id=?",
+                (reason, outbox_id),
+            )
+            connection.execute(
+                "UPDATE workstreams SET version=version+1 WHERE fingerprint=?",
+                (row["workstream_fingerprint"],),
+            )
+            self._event(
+                connection, workstream_id=str(row["workstream_fingerprint"]), instance_id=None,
+                event_type="slack_mcp_delivery_uncertain", actor="glean_pi_slack_mcp",
+                payload={"outbox_id": outbox_id, "error": reason, "delivery": "needs_review"},
+            )
+            connection.commit()
+            updated = connection.execute("SELECT * FROM slack_outbox WHERE id=?", (outbox_id,)).fetchone()
+            return self._serialize_outbox(updated)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def retry_slack_outbox(
+        self,
+        outbox_id: str,
+        *,
+        scope_id: str,
+        portfolio_id: str,
+        expected_version: int,
+        confirmed_not_delivered: bool,
+        account_ids: Optional[Iterable[str]] = None,
+    ) -> Dict[str, Any]:
+        if confirmed_not_delivered is not True:
+            raise QueueValidationError("Confirm that Slack was checked and the message was not delivered before retrying.")
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._select_outbox(
+                connection, outbox_id, scope_id=scope_id, portfolio_id=portfolio_id, account_ids=account_ids,
+            )
+            if not row:
+                raise QueueValidationError("Unknown Slack outbox item.")
+            if int(row["version"]) != int(expected_version):
+                raise QueueConflict("The Slack outbox item changed; list it again before retrying.")
+            if str(row["status"]) != "needs_review":
+                raise QueueValidationError(f"Cannot retry a {row['status']} Slack outbox item.")
+            connection.execute(
+                """UPDATE slack_outbox SET status='pending', claimed_at=NULL, error=NULL,
+                   version=version+1 WHERE id=?""",
+                (outbox_id,),
+            )
+            connection.execute(
+                "UPDATE workstreams SET version=version+1 WHERE fingerprint=?",
+                (row["workstream_fingerprint"],),
+            )
+            self._event(
+                connection, workstream_id=str(row["workstream_fingerprint"]), instance_id=None,
+                event_type="slack_mcp_retry_authorized", actor="glean_pi_slack_mcp",
+                payload={"outbox_id": outbox_id, "delivery": "pending_retry"},
+            )
+            connection.commit()
+            updated = connection.execute("SELECT * FROM slack_outbox WHERE id=?", (outbox_id,)).fetchone()
+            return self._serialize_outbox(updated)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def action(
         self,
         workstream_id: str,
@@ -893,6 +1356,12 @@ class RemediationStore:
                 selected = next((item for item in paths if str(item.get("id")) == path_id), None)
                 if not selected:
                     raise QueueValidationError("Select a valid remediation path.")
+                connection.execute(
+                    """UPDATE slack_outbox SET status='cancelled', message_text='',
+                       error='Superseded by a selected-path change', version=version+1
+                       WHERE workstream_fingerprint=? AND status='pending'""",
+                    (workstream_id,),
+                )
                 updates.update({
                     "selected_path_id": path_id,
                     "selected_target_tier": selected["target_tier"],
@@ -909,6 +1378,7 @@ class RemediationStore:
                     "slack_permalink": None,
                     "slack_sent_at": None,
                     "slack_sent_path_id": None,
+                    "slack_outbox_id": None,
                     "slack_client_msg_id": None,
                     "slack_message_sha256": None,
                 })
@@ -964,50 +1434,6 @@ class RemediationStore:
                     raise QueueValidationError("Prepare a Slack follow-up before recording a copy.")
                 updates["slack_copied_at"] = _utc_now()
                 event_payload = {"recipient": row["slack_recipient"], "delivery": "copied_not_sent"}
-            elif action == "record_slack_sent":
-                if not row["slack_prepared_at"] or not row["slack_recipient"]:
-                    raise QueueValidationError("Prepare a Slack follow-up before recording delivery.")
-                recipient_id = str(data.get("recipient_id") or "").strip().upper()
-                channel_id = str(data.get("channel_id") or "").strip().upper()
-                message_ts = str(data.get("message_ts") or "").strip()
-                permalink = str(data.get("permalink") or "").strip()
-                client_msg_id = str(data.get("client_msg_id") or "").strip().lower()
-                message_sha256 = str(data.get("message_sha256") or "").strip().lower()
-                parsed_permalink = urlsplit(permalink)
-                if not re.fullmatch(r"[A-Z][A-Z0-9]{2,}", recipient_id):
-                    raise QueueValidationError("Slack returned an invalid recipient ID.")
-                if not re.fullmatch(r"[CDG][A-Z0-9]{2,}", channel_id):
-                    raise QueueValidationError("Slack returned an invalid conversation ID.")
-                if not re.fullmatch(r"\d+\.\d+", message_ts):
-                    raise QueueValidationError("Slack returned an invalid message timestamp.")
-                if parsed_permalink.scheme != "https" or not (parsed_permalink.hostname or "").lower().endswith(".slack.com"):
-                    raise QueueValidationError("Slack returned an invalid message permalink.")
-                if not re.fullmatch(r"[0-9a-f-]{36}", client_msg_id):
-                    raise QueueValidationError("Slack returned an invalid client message ID.")
-                if not re.fullmatch(r"[0-9a-f]{64}", message_sha256):
-                    raise QueueValidationError("Slack returned an invalid message digest.")
-                sent_at = _utc_now()
-                updates.update({
-                    "slack_recipient_id": recipient_id,
-                    "slack_channel_id": channel_id,
-                    "slack_message_ts": message_ts,
-                    "slack_permalink": permalink,
-                    "slack_sent_at": sent_at,
-                    "slack_sent_path_id": row["selected_path_id"],
-                    "slack_client_msg_id": client_msg_id,
-                    "slack_message_sha256": message_sha256,
-                })
-                event_payload = {
-                    "recipient": row["slack_recipient"],
-                    "recipient_id": recipient_id,
-                    "channel_id": channel_id,
-                    "message_ts": message_ts,
-                    "permalink": permalink,
-                    "client_msg_id": client_msg_id,
-                    "message_sha256": message_sha256,
-                    "path_id": row["selected_path_id"],
-                    "delivery": "sent",
-                }
             elif action == "snooze":
                 if current not in ACTIVE_WORKSTREAM_STATUSES:
                     raise QueueValidationError(f"Cannot snooze a {current} workstream.")
@@ -1064,8 +1490,6 @@ class RemediationStore:
             result["delivery"] = "prepared_not_sent"
         elif action == "record_slack_copy":
             result["delivery"] = "copied_not_sent"
-        elif action == "record_slack_sent":
-            result["delivery"] = "sent"
         elif action == "prepare_execution":
             result["execution_workspace"] = workstream.get("execution_plan")
             result["execution"] = "prepared_not_executed"

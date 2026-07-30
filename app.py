@@ -57,6 +57,19 @@ class HoursReconHandler(BaseHTTPRequestHandler):
         if path == "/api/status":
             self._json(200, self.service.status())
             return
+        if path == "/api/remediation/slack/outbox":
+            if not secrets.compare_digest(self.headers.get("X-Hours-Recon-Action-Token", ""), self.service.action_token):
+                self._json(403, {"error": "Invalid remediation action token."})
+                return
+            query = parse_qs(urlparse(self.path).query)
+            status = str((query.get("status") or ["pending"])[0])
+            try:
+                self._json(200, {"outbox": self.service.list_slack_outbox(status)})
+            except QueueValidationError as exc:
+                self._json(400, {"error": str(exc)})
+            except QueueError as exc:
+                self._json(503, {"error": str(exc)})
+            return
         if path == "/api/remediation/workstreams":
             query = parse_qs(urlparse(self.path).query)
             allowed = {key: values[0] for key, values in query.items() if key in {"status", "route", "priority", "account_id"} and values}
@@ -108,7 +121,7 @@ class HoursReconHandler(BaseHTTPRequestHandler):
         if self._reject_invalid_host():
             return
         if not self._origin_allowed():
-            self._json(403, {"error": "Cross-origin refresh requests are not allowed."})
+            self._json(403, {"error": "Cross-origin mutation requests are not allowed."})
             return
         path = urlparse(self.path).path
         if path == "/api/refresh":
@@ -123,25 +136,48 @@ class HoursReconHandler(BaseHTTPRequestHandler):
                     "preserved_last_success": True,
                 })
             return
-        slack_match = re.fullmatch(r"/api/remediation/workstreams/(hrw2_[a-f0-9]{64})/slack/send", path)
-        if slack_match:
+        slack_queue_match = re.fullmatch(r"/api/remediation/workstreams/(hrw2_[a-f0-9]{64})/slack/queue", path)
+        outbox_match = re.fullmatch(r"/api/remediation/slack/outbox/(hro1_[a-f0-9]{64})/(claim|sent|uncertain|retry)", path)
+        if slack_queue_match or outbox_match:
             if not secrets.compare_digest(self.headers.get("X-Hours-Recon-Action-Token", ""), self.service.action_token):
                 self._json(403, {"error": "Invalid remediation action token."})
                 return
             try:
                 body = self._read_json_body()
-                result = self.service.send_remediation_slack(
-                    slack_match.group(1),
-                    expected_version=int(body.get("expected_version")),
-                    recipient_query=str(body.get("recipient") or ""),
-                    reviewed_message=str(body.get("message") or ""),
-                    confirmed=body.get("confirmed") is True,
-                )
+                if slack_queue_match:
+                    result = self.service.queue_remediation_slack(
+                        slack_queue_match.group(1),
+                        expected_version=int(body.get("expected_version")),
+                        recipient_query=str(body.get("recipient") or ""),
+                        reviewed_message=str(body.get("message") or ""),
+                        confirmed=body.get("confirmed") is True,
+                    )
+                else:
+                    outbox_id, operation = outbox_match.groups()
+                    expected_version = int(body.get("expected_version"))
+                    if operation == "claim":
+                        result = self.service.claim_slack_outbox(outbox_id, expected_version=expected_version)
+                    elif operation == "sent":
+                        result = self.service.complete_slack_outbox(
+                            outbox_id, expected_version=expected_version,
+                            recipient_id=str(body.get("recipient_id") or ""),
+                            permalink=str(body.get("permalink") or ""),
+                        )
+                    elif operation == "uncertain":
+                        result = self.service.mark_slack_outbox_uncertain(
+                            outbox_id, expected_version=expected_version,
+                            error=str(body.get("error") or ""),
+                        )
+                    else:
+                        result = self.service.retry_slack_outbox(
+                            outbox_id, expected_version=expected_version,
+                            confirmed_not_delivered=body.get("confirmed_not_delivered") is True,
+                        )
                 self._json(200, result)
             except QueueConflict as exc:
                 self._json(409, {"error": str(exc)})
             except (QueueValidationError, ValueError, TypeError, KeyError) as exc:
-                self._json(400, {"error": str(exc) or "Invalid Slack delivery request."})
+                self._json(400, {"error": str(exc) or "Invalid Slack MCP outbox request."})
             except QueueError as exc:
                 self._json(503, {"error": str(exc)})
             return

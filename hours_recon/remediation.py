@@ -334,7 +334,7 @@ def selected_path(workstream: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def format_slack_followup(workstream: Mapping[str, Any], recipient: str) -> str:
-    """Create a concise reviewed Slack handoff for copying or direct delivery."""
+    """Create a concise reviewed Slack handoff for copying or Slack MCP queueing."""
     recipient = _slack_safe(recipient, 200)
     if not recipient:
         raise ValueError("A Slack recipient or team label is required.")

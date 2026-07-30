@@ -224,21 +224,22 @@ Selecting a path now opens **MCP execution workspace**. The workspace derives it
 
 The capability map is conservative. For example, the Rocketlane T1 identity path can propose `externalReferenceId = <Salesforce Account ID>` through `update_project`; the T2 customer crosswalk remains a reviewed local config change. Rocketlane time-entry activity/project metadata can be MCP-assisted, while approval-state changes remain delegated because the connector does not expose approval status as an update field. Unsupported Product/Opportunity Product writes are delegated rather than guessed.
 
-The browser records execution preparation and successful MCP-request copy separately as `prepared_not_executed` and `copied_not_executed`. Slack preparation, optional clipboard copy, and confirmed API delivery remain distinct `prepared_not_sent`, `copied_not_sent`, and `sent` events. Direct delivery requires a final browser confirmation and only records `sent` after Slack returns a channel ID, message timestamp, and safe workspace permalink. Recipient names are resolved exactly; ambiguous matches stop rather than guess. The final reviewed/edited body sent to Slack is not persisted—only its SHA-256 digest and Slack delivery evidence are retained (the deterministic prefilled template remains part of the execution plan).
+The browser records execution preparation and successful MCP-request copy separately as `prepared_not_executed` and `copied_not_executed`. Slack preparation, optional clipboard copy, MCP queueing, claiming, uncertain delivery, and confirmed delivery remain distinct states. Queueing never claims that a message was sent. A Slack MCP item is marked `sent` only after Glean Pi receives and records a real `*.slack.com` message permalink.
 
 Salesforce and Rocketlane source actions still run through Glean MCP: Glean performs read/schema preflight and asks for confirmation immediately before every connector write. A source write response never governs an instance; only a subsequent complete verified source refresh can validate the selected target.
 
-#### Direct Slack setup
+#### Slack delivery through Glean Pi
 
-Create a dedicated Slack app, install it to the workspace, and put its bot token only in the local `.env` file:
+No Slack app, bot token, user OAuth token, password, or browser cookie is required. The Slack card accepts a display name, email, `@handle`, `#channel`, or Slack ID and stores the exact reviewed message in the owner-only remediation database. Messages use a short greeting, up to three findings, four actions, the most relevant source links, and the due date without decorative Slack formatting.
 
-```bash
-HOURS_RECON_SLACK_BOT_TOKEN=xoxb-...
-```
+1. Review the recipient and message in the dashboard.
+2. Choose **Queue for Slack MCP**. This stores a `pending` outbox item but does not send it.
+3. Tell Glean Pi: **“send pending Hours Recon messages.”**
+4. The `hours-recon-slack-send` skill resolves each recipient exactly, atomically claims the item, sends it once through the user's connected Slack MCP identity, and records the returned permalink.
 
-Required bot scopes are `chat:write`, `im:write`, and `users:read`. Add `users:read.email` to resolve email addresses and `channels:read` / `groups:read` to resolve `#channel` names. The bot must be invited to private channels; `chat:write.public` is optional if it should post to public channels without joining them. Restart Hours Recon after adding or rotating the token. The token stays server-side and is never returned by `/api/data` or `/api/status`.
+Items are processed sequentially. A claim changes the status to `sending` before the external tool call so a crash cannot cause an automatic duplicate retry. An uncertain tool result becomes `needs_review` and blocks replacement messages until reconciled. A review item can be completed with a found permalink, or reset to pending only after the user explicitly confirms Slack was checked and no copy was delivered. Ambiguous recipients remain pending and are never guessed. **Copy instead** remains available as a fallback.
 
-The Slack card accepts a display name, email, `@handle`, `#channel`, or Slack ID. It shows the full editable message before delivery, asks for final confirmation, and returns an **Open message** permalink when Slack confirms the send. **Copy instead** remains available as a fallback. Messages use a short greeting, the current issue, up to four actions, the most relevant source links, and the due date without decorative Slack formatting.
+The reviewed message body remains in SQLite only while delivery is pending, sending, or needs review so Pi can send/reconcile it; sent and cancelled rows clear the body. The database and parent directory are mode `0600`/`0700`. Event history stores only the message digest, outbox ID, recipient, status, and final permalink. The helper CLI is `scripts/hours_recon_slack_outbox.py`; normal users should invoke the skill through natural language rather than operating the CLI directly.
 
 ### Local database reset
 
@@ -251,12 +252,14 @@ Read-only and local workflow endpoints:
 - `GET /api/remediation/workstreams`
 - `GET /api/remediation/workstreams/{workstream_id}`
 - `POST /api/remediation/workstreams/{workstream_id}/actions`
-- `POST /api/remediation/workstreams/{workstream_id}/slack/send`
+- `POST /api/remediation/workstreams/{workstream_id}/slack/queue`
+- `GET /api/remediation/slack/outbox?status=pending`
+- `POST /api/remediation/slack/outbox/{outbox_id}/{claim|sent|uncertain|retry}`
 - `POST /api/refresh`
 
 Supported workstream actions include `acknowledge`, `start`, `resume`, `ready_for_validation`, `select_path`, `prepare_execution`, `record_mcp_request_copy`, `prepare_slack`, `record_slack_copy`, `snooze`, and `waive`.
 
-The remediation database and its parent directory use owner-only permissions. Dashboard mutations and Slack sends require an ephemeral per-process action token, same-origin requests, and loopback binding; responses deny framing to reduce local CSRF/clickjacking risk. The application remains a local single-user tool rather than a multi-user authorization system. No local remediation action writes to Salesforce or Rocketlane; those source writes occur only in an authenticated Glean MCP session after explicit confirmation. Slack delivery is the sole direct external write and requires its own final confirmation.
+The remediation database and its parent directory use owner-only permissions. Dashboard mutations and outbox transitions require an ephemeral per-process action token, same-origin requests, and loopback binding; responses deny framing to reduce local CSRF/clickjacking risk. The application remains a local single-user tool rather than a multi-user authorization system. The local process never stores SaaS credentials and never sends Salesforce, Rocketlane, or Slack writes. Those external actions occur only through the user's authenticated Glean MCP session after explicit instruction.
 
 ## Calculation rules
 
@@ -282,7 +285,7 @@ Risk bands for unused hours:
 python3 -m unittest discover -v
 ```
 
-The suite covers package inference, canonical ProductCode mappings, explicit service periods, evidence-tier weakest-link behavior, governed/provisional conservation, aliases and match provenance, remediation path validation and ranking, systemic grouping with account instances, deterministic fingerprints, T2 closure with optional T1 targets, retrieval idempotency, regression reopening, clean v1 reset, requester/scope isolation, exact Slack recipient resolution, ambiguous-recipient rejection, direct-send evidence, preparation/copy/send tracking, private persistence, collision safety, fuzzy suggestions, FIFO allocation, pre-entitlement timing, future-entitlement isolation, inclusive expiration, overage, billable filtering, weekly activity, risk boundaries, deterministic ordering, JSON output, and total rollups.
+The suite covers package inference, canonical ProductCode mappings, explicit service periods, evidence-tier weakest-link behavior, governed/provisional conservation, aliases and match provenance, remediation path validation and ranking, systemic grouping with account instances, deterministic fingerprints, T2 closure with optional T1 targets, retrieval idempotency, regression reopening, clean v1 reset, requester/scope isolation, Slack MCP queue idempotency, claim-before-send transitions, uncertain-delivery duplicate prevention, safe permalink evidence, preparation/copy/send tracking, private persistence, collision safety, fuzzy suggestions, FIFO allocation, pre-entitlement timing, future-entitlement isolation, inclusive expiration, overage, billable filtering, weekly activity, risk boundaries, deterministic ordering, JSON output, and total rollups.
 
 ## Repository layout
 
@@ -297,9 +300,10 @@ hours_recon/reconcile.py     FIFO, risk, weekly checks, totals
 hours_recon/remediation_policy.py  Versioned path catalog and recommendation policy
 hours_recon/remediation.py   Workstream grouping, identities, impact, and Slack formatting
 hours_recon/remediation_execution.py  MCP packets, source links, capability boundaries, and owner handoffs
-hours_recon/slack.py        Slack recipient resolution and direct bot delivery
-hours_recon/remediation_store.py  Private SQLite planner persistence
+hours_recon/remediation_store.py  Private SQLite planner and Slack outbox persistence
 hours_recon/service.py       Refresh, cache, governance, and planner orchestration
+scripts/hours_recon_slack_outbox.py  Loopback outbox helper used by the Pi skill
+.glean/skills/hours-recon-slack-send/  Authenticated Slack MCP send playbook
 static/index.html            Interactive dashboard
 config/                      Package and account mappings
 tests/                       Unit and integration-shape tests

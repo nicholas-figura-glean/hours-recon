@@ -578,7 +578,9 @@
         const instances = (item.instances || []).map(instance => `<article class="instance-item">${tierBadge(instance.validation_tier || instance.current_tier, instance.governance_status)}<div><strong>${escapeHtml(instance.account_name || instance.account_id)} · ${escapeHtml(titleCase(instance.dimension))}</strong><p>${escapeHtml(instance.summary || '')}</p><p>Reason: ${escapeHtml(instance.reason_code || '—')}${instance.unverified_observed_tier ? ` · Latest incomplete observation: ${escapeHtml(instance.unverified_observed_tier)} (not revalidated)` : ''}${instance.regression_count ? ` · Regressions: ${fmt(instance.regression_count)}` : ''}</p></div><button class="button tiny secondary" type="button" data-open-account-id="${escapeHtml(instance.account_id)}">View evidence</button></article>`).join('');
         const paths = (item.paths || []).map(path => renderPathOption(path, item)).join('');
         const statusLabel = item.status === 'governed' ? 'Governed' : item.status === 'waived' ? 'Waived' : `${priority} · ${titleCase(item.status)}`;
-        const copied = item.slack_sent_at ? `Slack sent ${new Date(item.slack_sent_at).toLocaleString()}${item.slack_permalink ? ` · ${item.slack_permalink}` : ''}` : (item.slack_copied_at ? `Slack follow-up copied ${new Date(item.slack_copied_at).toLocaleString()}; not sent.` : (item.mcp_request_copied_at ? `MCP request copied ${new Date(item.mcp_request_copied_at).toLocaleString()}; no source write is implied.` : ''));
+        const outbox = item.slack_outbox || {};
+        const outboxState = outbox.status === 'pending' ? `Slack MCP handoff queued ${new Date(outbox.queued_at).toLocaleString()}; tell Pi “send pending Hours Recon messages.”` : (outbox.status === 'sending' ? 'Slack MCP handoff claimed by Pi; delivery is in progress.' : (outbox.status === 'needs_review' ? `Slack MCP delivery needs review${outbox.error ? `: ${outbox.error}` : '.'}` : ''));
+        const copied = outboxState || (item.slack_sent_at ? `Slack sent ${new Date(item.slack_sent_at).toLocaleString()}${item.slack_permalink ? ` · ${item.slack_permalink}` : ''}` : (item.slack_copied_at ? `Slack follow-up copied ${new Date(item.slack_copied_at).toLocaleString()}; not sent.` : (item.mcp_request_copied_at ? `MCP request copied ${new Date(item.mcp_request_copied_at).toLocaleString()}; no source write is implied.` : '')));
         const selectedAlternate = item.selected_path_id !== item.recommended_path_id;
         const recommendationHeading = selectedAlternate ? 'Selected alternate path' : 'Why this path';
         const recommendationText = selectedAlternate ? `Policy recommends a different path: ${item.recommendation_reason || ''} The selected alternate remains valid and drives the current target.` : (item.recommendation_reason || '');
@@ -643,10 +645,10 @@
       const notices = executionList(workspace.notices || []);
       const limitations = executionList(workspace.limitations || [], 'No additional connector limitations.');
       const inputs = executionList(workspace.required_inputs || [], 'No additional business input is required beyond confirmation.');
-      const slackConfigured = state.data?.remediation_queue?.slack_delivery?.configured === true;
-      const slackSetupNote = slackConfigured ? 'Review the recipient and message. Sending posts it immediately after one final confirmation.' : 'Direct delivery is not configured. Add the Slack bot token and restart Hours Recon, or use Copy instead.';
+      const slackMcpAvailable = state.data?.remediation_queue?.slack_delivery?.available === true;
+      const slackSetupNote = slackMcpAvailable ? 'Review and queue this message, then tell Glean Pi “send pending Hours Recon messages.” Pi will send it through your connected Slack identity and return the message link.' : 'The local remediation queue is unavailable. Use Copy instead.';
       $('#executionSubtitle').textContent = `${workspace.selected_path?.title || 'Selected path'} · ${modeLabel}`;
-      $('#executionContent').innerHTML = `<div class="execution-banner"><strong>Approval boundary:</strong> Hours Recon prepared this workspace but did not write Salesforce or Rocketlane. Glean MCP must re-read the records and ask for explicit confirmation immediately before every supported write.</div><div class="execution-grid"><div class="execution-column"><section><h2>Proposed source actions</h2><div class="execution-column">${operations}</div></section><section><h2>Affected records</h2><div class="execution-column">${recordCards}</div></section></div><aside class="execution-column"><article class="execution-card"><h3>Before execution</h3><strong>Required inputs</strong>${inputs}<strong>Connector boundaries</strong>${limitations}<strong>Safety</strong>${notices}</article><article class="execution-card execution-copy"><h3>MCP execution request</h3><p class="source-note">Copy this into Glean. The request requires read-before-write, exact payload review, and confirmation.</p><textarea id="mcpRequest" readonly aria-label="MCP execution request"></textarea><div class="execution-button-row"><button class="button" id="copyMcpRequest" type="button">Copy MCP request</button><a class="button secondary" id="openMcpWorkspace" target="_blank" rel="noreferrer">Open Glean for MCP</a><span class="execution-feedback" id="mcpCopyFeedback"></span></div></article><article class="execution-card execution-copy slack"><h3>Send owner follow-up in Slack</h3><p class="source-note">${escapeHtml(slackSetupNote)} ${workspace.recipient_suggestions?.length ? `Suggested from source ownership: ${escapeHtml(workspace.recipient_suggestions.join(' · '))}.` : ''}</p><div class="field"><label for="executionRecipient">Slack user, email, @handle, channel, or Slack ID</label><input id="executionRecipient" value="${escapeHtml(workspace.default_recipient || workspace.recipient_role || '')}"></div><textarea id="slackDraft" aria-label="Reviewed Slack message"></textarea><div class="execution-button-row"><button class="button" id="sendSlackDraft" type="button" ${slackConfigured ? '' : 'disabled'}>Send in Slack</button><button class="button secondary" id="copySlackDraft" type="button">Copy instead</button><span class="execution-feedback" id="slackCopyFeedback"></span></div></article></aside></div>`;
+      $('#executionContent').innerHTML = `<div class="execution-banner"><strong>Approval boundary:</strong> Hours Recon prepared this workspace but did not write Salesforce or Rocketlane. Glean MCP must re-read the records and ask for explicit confirmation immediately before every supported write.</div><div class="execution-grid"><div class="execution-column"><section><h2>Proposed source actions</h2><div class="execution-column">${operations}</div></section><section><h2>Affected records</h2><div class="execution-column">${recordCards}</div></section></div><aside class="execution-column"><article class="execution-card"><h3>Before execution</h3><strong>Required inputs</strong>${inputs}<strong>Connector boundaries</strong>${limitations}<strong>Safety</strong>${notices}</article><article class="execution-card execution-copy"><h3>MCP execution request</h3><p class="source-note">Copy this into Glean. The request requires read-before-write, exact payload review, and confirmation.</p><textarea id="mcpRequest" readonly aria-label="MCP execution request"></textarea><div class="execution-button-row"><button class="button" id="copyMcpRequest" type="button">Copy MCP request</button><a class="button secondary" id="openMcpWorkspace" target="_blank" rel="noreferrer">Open Glean for MCP</a><span class="execution-feedback" id="mcpCopyFeedback"></span></div></article><article class="execution-card execution-copy slack"><h3>Owner follow-up via Slack MCP</h3><p class="source-note">${escapeHtml(slackSetupNote)} ${workspace.recipient_suggestions?.length ? `Suggested from source ownership: ${escapeHtml(workspace.recipient_suggestions.join(' · '))}.` : ''}</p><div class="field"><label for="executionRecipient">Slack user, email, @handle, channel, or Slack ID</label><input id="executionRecipient" value="${escapeHtml(workspace.default_recipient || workspace.recipient_role || '')}"></div><textarea id="slackDraft" aria-label="Reviewed Slack message"></textarea><div class="execution-button-row"><button class="button" id="queueSlackDraft" type="button" ${slackMcpAvailable ? '' : 'disabled'}>Queue for Slack MCP</button><button class="button secondary" id="copySlackDraft" type="button">Copy instead</button><span class="execution-feedback" id="slackCopyFeedback"></span></div></article></aside></div>`;
       $('#mcpRequest').value = workspace.mcp_request || '';
       const template = workspace.slack_draft?.message || '';
       const updateSlackPreview = () => { $('#slackDraft').value = template.replaceAll('{{recipient}}', $('#executionRecipient').value.trim() || workspace.recipient_role || 'source owner'); };
@@ -656,7 +658,7 @@
       try { const parsed = new URL(workspace.mcp_workspace_url); if (parsed.protocol === 'https:') mcpUrl = parsed.href; } catch (error) { /* Use the safe default. */ }
       $('#openMcpWorkspace').href = mcpUrl;
       $('#copyMcpRequest').addEventListener('click', copyMcpRequest);
-      $('#sendSlackDraft').addEventListener('click', sendExecutionSlackDraft);
+      $('#queueSlackDraft').addEventListener('click', queueExecutionSlackDraft);
       $('#copySlackDraft').addEventListener('click', copyExecutionSlackDraft);
       $('#executionDialog').showModal();
     }
@@ -695,13 +697,6 @@
       } finally { button.disabled = false; }
     }
 
-    function safeSlackPermalink(value) {
-      try {
-        const parsed = new URL(value);
-        return parsed.protocol === 'https:' && parsed.hostname.endsWith('.slack.com') ? parsed.href : '';
-      } catch (error) { return ''; }
-    }
-
     async function refreshExecutionVersion(current) {
       try {
         const response = await fetch(`/api/remediation/workstreams/${encodeURIComponent(current.workstreamId)}`);
@@ -713,20 +708,20 @@
       } catch (error) { /* The original delivery error remains more useful. */ }
     }
 
-    async function sendExecutionSlackDraft() {
-      const button = $('#sendSlackDraft');
+    async function queueExecutionSlackDraft() {
+      const button = $('#queueSlackDraft');
       const current = state.execution;
       if (!current) return;
       const recipient = $('#executionRecipient').value.trim();
       const message = $('#slackDraft').value.trim();
       if (!recipient) { setError('Enter a Slack user, email, @handle, channel, or Slack ID.'); return; }
-      if (!message) { setError('Review the Slack message before sending.'); return; }
-      if (!window.confirm(`Send this reviewed message to ${recipient} now?`)) return;
+      if (!message) { setError('Review the Slack message before queueing.'); return; }
+      if (!window.confirm(`Queue this reviewed message for ${recipient}? It will not be sent until you tell Glean Pi to send pending Hours Recon messages.`)) return;
       button.disabled = true;
       setError('');
-      $('#slackCopyFeedback').textContent = 'Sending…';
+      $('#slackCopyFeedback').textContent = 'Queueing…';
       try {
-        const response = await fetch(`/api/remediation/workstreams/${encodeURIComponent(current.workstreamId)}/slack/send`, {
+        const response = await fetch(`/api/remediation/workstreams/${encodeURIComponent(current.workstreamId)}/slack/queue`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -735,17 +730,16 @@
           body: JSON.stringify({ expected_version: current.version, recipient, message, confirmed: true }),
         });
         const result = await response.json();
-        if (!response.ok) throw new Error(result.error || `Slack delivery failed (${response.status})`);
+        if (!response.ok) throw new Error(result.error || `Slack MCP queueing failed (${response.status})`);
         current.version = Number(result.workstream.version);
         syncRemediationWorkstream(result.workstream);
         $('#slackDraft').value = result.slack_message || message;
-        const permalink = safeSlackPermalink(result.slack_delivery?.permalink);
-        $('#slackCopyFeedback').innerHTML = permalink ? `Sent · <a href="${escapeHtml(permalink)}" target="_blank" rel="noreferrer">Open message</a>` : 'Sent';
-        if (result.warning) setError(result.warning);
+        const status = result.outbox?.status || 'pending';
+        $('#slackCopyFeedback').textContent = status === 'sent' ? 'Already sent' : 'Queued · tell Pi “send pending Hours Recon messages”';
       } catch (error) {
         $('#slackCopyFeedback').textContent = '';
         await refreshExecutionVersion(current);
-        setError(`${error.message} No delivery is recorded unless Slack returned a message permalink.`);
+        setError(`${error.message} Nothing was sent by the dashboard.`);
       } finally { button.disabled = false; }
     }
 

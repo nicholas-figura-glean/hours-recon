@@ -422,8 +422,44 @@ def _slack_message(
     steps = [_safe_text(step, 500) for step in path.get("steps", []) if _safe_text(step, 500)]
     step_lines = "\n".join(f"{index}. {step}" for index, step in enumerate(steps[:4], 1)) or "1. Review and correct the linked source record."
     link_lines = "\n".join(f"- {_safe_text(link.get('label'), 180)}: {link.get('url')}" for link in unique_links[:6])
-    due_line = f"\nDue: {_safe_text(workstream.get('due_on'), 40)}" if workstream.get("due_on") else ""
+    due = _safe_text(workstream.get("due_on"), 40)
+    due_line = f"\nDue: {due}" if due else ""
     records_section = f"\n\nRecords\n{link_lines}" if link_lines else ""
+
+    if path_id == "project_linkage.salesforce_account_id.t1":
+        exact_changes = [
+            (str(project_id), str(record.get("account_id") or ""), _safe_text(record.get("account_name"), 120))
+            for record in records
+            for project_id in record.get("project_ids", [])
+            if project_id and record.get("account_id")
+        ]
+        if exact_changes:
+            verified_lines = []
+            change_lines = []
+            for project_id, account_id, account_name in exact_changes[:4]:
+                verified_lines.append(
+                    f"- Rocketlane project {project_id} currently links to {account_name or 'the account'} "
+                    "only by normalized customer name; it does not store the Salesforce Account ID."
+                )
+                verified_lines.append(f"- The verified Salesforce Account ID is {account_id}.")
+                change_lines.append(f"- Set Rocketlane project {project_id} `externalReferenceId` to `{account_id}`.")
+            verified_lines = list(dict.fromkeys(verified_lines))[:3]
+            deadline = f" by {due}" if due else ""
+            return (
+                f"Hi {{{{recipient}}}} — I’m working a read-only Hours Recon preflight for {accounts}.\n\n"
+                "I verified\n"
+                + "\n".join(verified_lines)
+                + "\n\nRequested change\n"
+                + "\n".join(change_lines)
+                + "\n- If you find a conflicting ID or ambiguous alias, flag it rather than guessing or overwriting it.\n\n"
+                "Hours Recon itself is read-only, so it won’t update Rocketlane directly. "
+                "Can you confirm whether you’re the right owner for this linkage? "
+                f"If yes, please complete the change{deadline}; if not, please point me to the correct owner."
+                f"{records_section}\n\n"
+                "After it’s updated, reply here so I can refresh Hours Recon and verify the direct ID match.\n\n"
+                "— sent via Glean Pi"
+            )
+
     request = _safe_text(path.get("title") or workstream.get("title"), 300)
     request = request[:1].lower() + request[1:]
     return (
