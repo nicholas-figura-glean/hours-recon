@@ -52,4 +52,8 @@ def settings() -> Dict[str, Any]:
         "salesforce_web_base_url": os.getenv("HOURS_RECON_SALESFORCE_WEB_BASE_URL", "https://glean.lightning.force.com").strip(),
         "rocketlane_web_base_url": os.getenv("HOURS_RECON_ROCKETLANE_WEB_BASE_URL", "https://glean.rocketlane.com").strip(),
         "mcp_workspace_url": os.getenv("HOURS_RECON_MCP_WORKSPACE_URL", "https://app.glean.com/chat").strip(),
+        # Optional direct Slack delivery. The token remains server-side and is
+        # never included in status, report, or remediation API payloads.
+        "slack_bot_token": os.getenv("HOURS_RECON_SLACK_BOT_TOKEN", "").strip(),
+        "slack_api_base_url": "https://slack.com/api",
     }

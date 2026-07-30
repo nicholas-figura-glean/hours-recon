@@ -17,6 +17,7 @@ from hours_recon.reconcile import reconcile
 from hours_recon.rocketlane import RocketlaneClient
 from hours_recon.sample_data import build_demo_sources
 from hours_recon.service import ReconciliationService
+from hours_recon.slack import SlackClient, SlackRecipientError
 from hours_recon.storage import write_cache
 
 PACKAGES = load_json(ROOT / "config" / "packages.json")
@@ -89,6 +90,60 @@ class ConnectorSafetyTests(unittest.TestCase):
         self.assertEqual("true", captured["includeArchive.eq"])
 
 
+class SlackClientTests(unittest.TestCase):
+    def test_resolves_an_exact_human_owner_without_fuzzy_sending(self):
+        users = {
+            "ok": True,
+            "members": [
+                {"id": "U123ABC", "name": "alex.aism", "real_name": "Alex Owner", "profile": {"display_name": "Alex AISM"}},
+                {"id": "U999BOT", "name": "helper", "is_bot": True, "profile": {"display_name": "Helper"}},
+            ],
+            "response_metadata": {"next_cursor": ""},
+        }
+        with patch("hours_recon.slack.request_json", return_value=users):
+            recipient = SlackClient("xoxb-test").resolve_recipient("Alex AISM")
+        self.assertEqual({"kind": "user", "id": "U123ABC", "label": "@alex.aism"}, recipient)
+
+    def test_rejects_an_ambiguous_owner_instead_of_guessing(self):
+        users = {
+            "ok": True,
+            "members": [
+                {"id": "U111AAA", "name": "alex.one", "real_name": "Alex Owner", "profile": {}},
+                {"id": "U222BBB", "name": "alex.two", "real_name": "Alex Owner", "profile": {}},
+            ],
+            "response_metadata": {"next_cursor": ""},
+        }
+        with patch("hours_recon.slack.request_json", return_value=users):
+            with self.assertRaisesRegex(SlackRecipientError, "ambiguous"):
+                SlackClient("xoxb-test").resolve_recipient("Alex Owner")
+
+    def test_sends_a_dm_and_returns_slack_delivery_evidence(self):
+        calls = []
+
+        def fake_request(method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            if url.endswith("/conversations.open"):
+                return {"ok": True, "channel": {"id": "D123ABC"}}
+            if url.endswith("/chat.postMessage"):
+                return {"ok": True, "channel": "D123ABC", "ts": "1770000000.123456"}
+            if url.endswith("/chat.getPermalink"):
+                return {"ok": True, "permalink": "https://example.slack.com/archives/D123ABC/p1770000000123456"}
+            raise AssertionError(url)
+
+        with patch("hours_recon.slack.request_json", side_effect=fake_request):
+            delivery = SlackClient("xoxb-test").send_message(
+                {"kind": "user", "id": "U123ABC", "label": "@alex"},
+                "A concise message",
+                client_msg_id="28aa0503-1594-5a85-8807-7bd4a078ec35",
+            )
+        self.assertEqual("D123ABC", delivery["channel_id"])
+        self.assertEqual("1770000000.123456", delivery["message_ts"])
+        post = next(kwargs for _, url, kwargs in calls if url.endswith("/chat.postMessage"))
+        self.assertEqual("A concise message", post["body"]["text"])
+        self.assertFalse(post["body"]["unfurl_links"])
+        self.assertNotIn("Authorization", delivery)
+
+
 class DashboardMarkupTests(unittest.TestCase):
     def test_account_detail_renders_matched_projects(self):
         html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
@@ -110,15 +165,17 @@ class DashboardMarkupTests(unittest.TestCase):
         self.assertIn("data-remediation-action=\"select_path\"", html)
         self.assertIn("function renderExecutionWorkspace(workspace, workstream)", html)
         self.assertIn("function copyMcpRequest()", html)
-        self.assertIn("function copyExecutionSlackDraft()", html)
-        self.assertIn("Copy reviewed Slack draft", html)
+        self.assertIn("function sendExecutionSlackDraft()", html)
+        self.assertIn("/slack/send", html)
+        self.assertIn("Send in Slack", html)
+        self.assertIn("Copy instead", html)
         self.assertIn("data-remediation-action=\"snooze\"", html)
         self.assertIn("data-remediation-action=\"waive\"", html)
         self.assertIn("function loadWorkstreamHistory(button)", html)
         self.assertIn("const workstreams = queue.workstreams || []", html)
         self.assertIn("record_mcp_request_copy", html)
         self.assertIn("record_slack_copy", html)
-        self.assertIn("Nothing was marked as copied or sent", html)
+        self.assertIn("No delivery is recorded unless Slack returned a message permalink", html)
         self.assertIn("no source write is implied", html)
         self.assertIn("X-Hours-Recon-Action-Token", html)
         app_source = (ROOT / "app.py").read_text(encoding="utf-8")

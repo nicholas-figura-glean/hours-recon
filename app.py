@@ -123,6 +123,28 @@ class HoursReconHandler(BaseHTTPRequestHandler):
                     "preserved_last_success": True,
                 })
             return
+        slack_match = re.fullmatch(r"/api/remediation/workstreams/(hrw2_[a-f0-9]{64})/slack/send", path)
+        if slack_match:
+            if not secrets.compare_digest(self.headers.get("X-Hours-Recon-Action-Token", ""), self.service.action_token):
+                self._json(403, {"error": "Invalid remediation action token."})
+                return
+            try:
+                body = self._read_json_body()
+                result = self.service.send_remediation_slack(
+                    slack_match.group(1),
+                    expected_version=int(body.get("expected_version")),
+                    recipient_query=str(body.get("recipient") or ""),
+                    reviewed_message=str(body.get("message") or ""),
+                    confirmed=body.get("confirmed") is True,
+                )
+                self._json(200, result)
+            except QueueConflict as exc:
+                self._json(409, {"error": str(exc)})
+            except (QueueValidationError, ValueError, TypeError, KeyError) as exc:
+                self._json(400, {"error": str(exc) or "Invalid Slack delivery request."})
+            except QueueError as exc:
+                self._json(503, {"error": str(exc)})
+            return
         match = re.fullmatch(r"/api/remediation/workstreams/(hrw2_[a-f0-9]{64})/actions", path)
         if match:
             if not secrets.compare_digest(self.headers.get("X-Hours-Recon-Action-Token", ""), self.service.action_token):

@@ -2,8 +2,8 @@
 
 The dashboard never invokes an MCP connector directly. It prepares a bounded
 change packet that a Glean MCP session can re-read, validate, and execute only
-after explicit user confirmation. Unsupported mutations become delegated Slack
-handoffs rather than implied automation.
+after explicit user confirmation. Unsupported source mutations become reviewed
+Slack handoffs rather than implied automation; delivery is handled separately.
 """
 
 from __future__ import annotations
@@ -169,10 +169,17 @@ def _findings(instance: Mapping[str, Any]) -> List[str]:
         value = details.get(key)
         if isinstance(value, (int, float)) and value:
             findings.append(f"{int(value) if float(value).is_integer() else value} {label}")
-    for key in ("match_bases", "mapping_sources", "period_sources", "missing_coverage"):
+    detail_labels = {
+        "match_bases": "Current project match uses",
+        "mapping_sources": "Current hours mapping uses",
+        "period_sources": "Current service dates use",
+        "missing_coverage": "Missing source coverage",
+    }
+    for key, label in detail_labels.items():
         values = details.get(key)
         if isinstance(values, Sequence) and not isinstance(values, (str, bytes)) and values:
-            findings.append(f"{key.replace('_', ' ')}: {', '.join(_safe_text(value, 100) for value in values)}")
+            readable = ", ".join(_safe_text(value, 100).replace("_", " ") for value in values)
+            findings.append(f"{label}: {readable}")
     if not findings and instance.get("summary"):
         findings.append(_safe_text(instance.get("summary"), 600))
     return findings
@@ -393,7 +400,6 @@ def _slack_message(
     workstream: Mapping[str, Any],
     path: Mapping[str, Any],
     records: Sequence[Mapping[str, Any]],
-    recipient_role: str,
 ) -> str:
     accounts = ", ".join(_safe_text(record.get("account_name"), 120) for record in records) or "the affected account"
     findings = []
@@ -401,19 +407,32 @@ def _slack_message(
     for record in records:
         findings.extend(record.get("findings", []))
         links.extend(record.get("links", []))
-    finding_lines = "\n".join(f"• {_safe_text(value, 500)}" for value in findings[:12]) or "• Review the evidence referenced in Hours Recon."
-    step_lines = "\n".join(f"{index}. {_safe_text(step, 500)}" for index, step in enumerate(path.get("steps", []), 1))
-    link_lines = "\n".join(f"• {_safe_text(link.get('label'), 180)}: {link.get('url')}" for link in links[:16]) or "• Open the affected record from Hours Recon."
+    findings = list(dict.fromkeys(
+        _safe_text(value, 500).replace("_", " ") for value in findings if _safe_text(value, 500)
+    ))
+    unique_links = list({str(link.get("url")): link for link in links if link.get("url")}.values())
+    path_id = str(path.get("id") or "")
+    if path_id.startswith("project_linkage."):
+        unique_links = [link for link in unique_links if "Salesforce Account" in str(link.get("label")) or "overview" in str(link.get("label"))]
+    elif path_id.startswith("time_quality."):
+        unique_links = [link for link in unique_links if "overview" in str(link.get("label")) or "time entries" in str(link.get("label"))]
+    elif path_id.startswith(("hours_mapping.", "service_period.", "entitlement_source.")):
+        unique_links = [link for link in unique_links if "Salesforce" in str(link.get("label"))]
+    finding_lines = "\n".join(f"- {value}" for value in findings[:3]) or "- Review the current Hours Recon evidence."
+    steps = [_safe_text(step, 500) for step in path.get("steps", []) if _safe_text(step, 500)]
+    step_lines = "\n".join(f"{index}. {step}" for index, step in enumerate(steps[:4], 1)) or "1. Review and correct the linked source record."
+    link_lines = "\n".join(f"- {_safe_text(link.get('label'), 180)}: {link.get('url')}" for link in unique_links[:6])
+    due_line = f"\nDue: {_safe_text(workstream.get('due_on'), 40)}" if workstream.get("due_on") else ""
+    records_section = f"\n\nRecords\n{link_lines}" if link_lines else ""
+    request = _safe_text(path.get("title") or workstream.get("title"), 300)
+    request = request[:1].lower() + request[1:]
     return (
-        f"Hi {{{{recipient}}}} — I need your help with *{_safe_text(workstream.get('title'), 300)}* for {accounts}.\n\n"
-        f"*Selected remediation path:* {_safe_text(path.get('title'), 300)} ({path.get('target_tier')} target)\n"
-        f"*Why:* {_safe_text(path.get('outcome'), 700)}\n"
-        f"*Requested owner:* {_safe_text(recipient_role, 180)}\n"
-        f"*Due:* {_safe_text(workstream.get('due_on') or 'Not set', 40)}\n\n"
-        f"*Current findings*\n{finding_lines}\n\n"
-        f"*What to do*\n{step_lines}\n\n"
-        f"*Where to make or verify the change*\n{link_lines}\n\n"
-        "Please let me know when the source change is complete. I’ll run a fresh, complete Salesforce/Rocketlane pull to validate the result; selecting this path or copying this draft does not mark the source as fixed."
+        f"Hi {{{{recipient}}}} — could you help {request} for {accounts}?\n\n"
+        f"What needs attention\n{finding_lines}\n\n"
+        f"What to do\n{step_lines}"
+        f"{records_section}{due_line}\n\n"
+        "Reply here when it’s done so I can refresh Hours Recon and verify the change.\n\n"
+        "— sent via Glean Pi"
     )
 
 
@@ -527,7 +546,7 @@ def build_execution_workspace(
         "handoff_recommended": execution_mode in {"delegated", "mcp_assisted"} or recipient_role != "Hours Recon owner",
         "slack_draft": {
             "recipient_role": recipient_role,
-            "message": _slack_message(workstream=workstream, path=path, records=records, recipient_role=recipient_role),
+            "message": _slack_message(workstream=workstream, path=path, records=records),
             "delivery": "prepared_not_sent",
         },
         "mcp_workspace_url": mcp_url,

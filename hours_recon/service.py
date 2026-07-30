@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import copy
+import re
 import secrets
 from datetime import date, datetime, timezone
 from hashlib import sha256
 from threading import Lock
 from time import monotonic
 from typing import Any, Dict, List, Mapping, Optional
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .dates import business_today
 from .demo import demo_report
@@ -18,8 +19,9 @@ from .matching import match_projects
 from .mcp_snapshot import McpSnapshotError, load_mcp_snapshot
 from .reconcile import reconcile
 from .remediation_execution import build_execution_workspace
-from .remediation_store import QueueError, QueueValidationError, RemediationStore
+from .remediation_store import QueueConflict, QueueError, QueueValidationError, RemediationStore
 from .rocketlane import RocketlaneClient
+from .slack import SlackApiError, SlackClient, SlackRecipientError
 from .salesforce import SalesforceClient
 from .storage import read_cache, write_cache
 
@@ -30,10 +32,16 @@ class ReconciliationService:
     def __init__(self, app_settings: Mapping[str, Any]) -> None:
         self.settings = dict(app_settings)
         self.lock = Lock()
+        self.slack_send_lock = Lock()
         self.last_refresh_attempt = None
         self.remediation_store: Optional[RemediationStore] = None
         self.remediation_error: Optional[str] = None
         self.action_token = secrets.token_urlsafe(32)
+        slack_token = str(self.settings.get("slack_bot_token") or "").strip()
+        self.slack_client: Optional[SlackClient] = (
+            SlackClient(slack_token, api_base_url=self.settings.get("slack_api_base_url", "https://slack.com/api"))
+            if slack_token else None
+        )
         configured_mode = self.settings["mode"]
         remediation_mode = self.settings.get("remediation_mode", "off")
         if remediation_mode == "observe_only" and configured_mode != "demo":
@@ -162,6 +170,13 @@ class ReconciliationService:
         accounts = source.get("accounts", []) if isinstance(source, Mapping) else []
         return sorted({str(account.get("id")) for account in accounts if account.get("id")})
 
+    def _slack_delivery_status(self) -> Dict[str, Any]:
+        return {
+            "configured": self.slack_client is not None,
+            "sender": "Hours Recon Slack app",
+            "supports": ["direct_message", "channel"],
+        }
+
     def _unavailable_remediation_summary(self) -> Dict[str, Any]:
         return {
             "schema_version": 2,
@@ -173,6 +188,7 @@ class ReconciliationService:
             "active_workstream_count": 0,
             "active_instance_count": 0,
             "governed_instance_count": 0,
+            "slack_delivery": self._slack_delivery_status(),
         }
 
     def _attach_remediation(self, result: Dict[str, Any]) -> None:
@@ -189,6 +205,7 @@ class ReconciliationService:
             )
             summary["available"] = True
             summary["action_token"] = self.action_token
+            summary["slack_delivery"] = self._slack_delivery_status()
             by_account: Dict[str, List[Dict[str, Any]]] = {}
             for workstream in summary.get("workstreams", []):
                 for instance in workstream.get("instances", []):
@@ -244,6 +261,7 @@ class ReconciliationService:
             "governance_policy_version": self._data.get("governance", {}).get("policy_version"),
             "remediation_mode": self.settings.get("remediation_mode", "off"),
             "remediation_queue": queue_health,
+            "slack_delivery": self._slack_delivery_status(),
         }
 
     def _load_mcp_report(self) -> Dict[str, Any]:
@@ -354,6 +372,8 @@ class ReconciliationService:
                 rocketlane_web_base_url=self.settings.get("rocketlane_web_base_url", ""),
                 mcp_workspace_url=self.settings.get("mcp_workspace_url", ""),
             )
+        if action == "record_slack_sent":
+            raise QueueValidationError("Slack delivery can only be recorded from a confirmed Slack API response.")
         return self.remediation_store.action(
             workstream_id,
             scope_id=self._active_scope_id(),
@@ -363,6 +383,97 @@ class ReconciliationService:
             expected_version=expected_version,
             payload=action_payload,
         )
+
+    @staticmethod
+    def _reviewed_slack_message(value: Any) -> str:
+        message = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+        if "\x00" in message:
+            raise QueueValidationError("The Slack message contains an invalid null character.")
+        message = "\n".join(line.rstrip() for line in message.split("\n")).strip()
+        message = re.sub(r"\n{3,}", "\n\n", message)
+        attribution = "— sent via Glean Pi"
+        if attribution not in message:
+            message = f"{message}\n\n{attribution}" if message else attribution
+        if len(message) < len(attribution) + 2 or len(message) > 4000:
+            raise QueueValidationError("Review a Slack message between 1 and 4,000 characters before sending.")
+        return message
+
+    def send_remediation_slack(
+        self,
+        workstream_id: str,
+        *,
+        expected_version: int,
+        recipient_query: str,
+        reviewed_message: str,
+        confirmed: bool,
+    ) -> Dict[str, Any]:
+        """Resolve and send a reviewed Slack handoff, then persist Slack evidence."""
+        if confirmed is not True:
+            raise QueueValidationError("Confirm the reviewed Slack message immediately before sending.")
+        if not self.remediation_store:
+            raise QueueError("The remediation planner is unavailable.")
+        if not self.slack_client:
+            raise QueueValidationError(
+                "Direct Slack delivery is not configured. Set HOURS_RECON_SLACK_BOT_TOKEN and restart Hours Recon."
+            )
+        if not self.slack_send_lock.acquire(blocking=False):
+            raise QueueConflict("Another Slack delivery is in progress. Wait for it to finish before retrying.")
+        try:
+            workstream = self.get_remediation_workstream(workstream_id)
+            if not workstream:
+                raise QueueValidationError("Unknown remediation workstream.")
+            if int(workstream.get("version", -1)) != int(expected_version):
+                raise QueueConflict("The remediation workstream changed; reload before sending.")
+            if not workstream.get("execution_plan") or workstream.get("execution_path_id") != workstream.get("selected_path_id"):
+                raise QueueValidationError("Open the selected remediation path and review its current Slack handoff before sending.")
+            try:
+                recipient = self.slack_client.resolve_recipient(recipient_query)
+            except SlackRecipientError as exc:
+                raise QueueValidationError(str(exc)) from exc
+            prepared = self.remediation_store.action(
+                workstream_id,
+                scope_id=self._active_scope_id(),
+                portfolio_id=self._active_portfolio_id(),
+                account_ids=self._owned_account_ids(),
+                action="prepare_slack",
+                expected_version=expected_version,
+                payload={"recipient": recipient["label"]},
+            )
+            message = self._reviewed_slack_message(reviewed_message or prepared.get("slack_message"))
+            message_digest = sha256(message.encode("utf-8")).hexdigest()
+            execution_id = str((workstream.get("execution_plan") or {}).get("execution_id") or "")
+            client_msg_id = str(uuid5(
+                NAMESPACE_URL,
+                f"hours-recon:{workstream_id}:{execution_id}:{recipient['id']}:{message_digest}",
+            ))
+            try:
+                delivery = self.slack_client.send_message(recipient, message, client_msg_id=client_msg_id)
+            except SlackApiError as exc:
+                raise QueueError(str(exc)) from exc
+            delivery_payload = {**delivery, "message_sha256": message_digest}
+            try:
+                recorded = self.remediation_store.action(
+                    workstream_id,
+                    scope_id=self._active_scope_id(),
+                    portfolio_id=self._active_portfolio_id(),
+                    account_ids=self._owned_account_ids(),
+                    action="record_slack_sent",
+                    expected_version=int(prepared["workstream"]["version"]),
+                    payload=delivery_payload,
+                )
+            except QueueError:
+                return {
+                    "workstream": prepared["workstream"],
+                    "delivery": "sent_audit_failed",
+                    "slack_delivery": delivery_payload,
+                    "slack_message": message,
+                    "warning": "Slack confirmed delivery, but Hours Recon could not persist the audit record.",
+                }
+            recorded["slack_message"] = message
+            recorded["slack_delivery"] = delivery_payload
+            return recorded
+        finally:
+            self.slack_send_lock.release()
 
     def refresh(self) -> Dict[str, Any]:
         now = monotonic()

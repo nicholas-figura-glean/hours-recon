@@ -334,7 +334,7 @@ def selected_path(workstream: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def format_slack_followup(workstream: Mapping[str, Any], recipient: str) -> str:
-    """Create copy-ready Slack text without sending or implying delivery."""
+    """Create a concise reviewed Slack handoff for copying or direct delivery."""
     recipient = _slack_safe(recipient, 200)
     if not recipient:
         raise ValueError("A Slack recipient or team label is required.")
@@ -351,25 +351,18 @@ def format_slack_followup(workstream: Mapping[str, Any], recipient: str) -> str:
     account_names = sorted({_slack_safe(item.get("account_name") or item.get("account_id"), 120) for item in instances})
     shown = account_names[:8]
     affected = ", ".join(shown) + (f" (+{len(account_names) - len(shown)} more)" if len(account_names) > len(shown) else "")
-    impact = dict(workstream.get("impact") or {})
-    impact_parts = []
-    for label, field in (("sold", "sold_hours"), ("remaining", "remaining_hours"), ("at risk", "at_risk_hours"), ("overage", "overage_hours")):
-        value = float(impact.get(field, 0) or 0)
-        if value:
-            impact_parts.append(f"{value:g}h {label}")
-    impact_text = " · ".join(impact_parts) or "No non-zero hour exposure in the current report"
-    steps = "\n".join(f"{index}. {_slack_safe(step, 500)}" for index, step in enumerate(path.get("steps", []), 1))
-    partners = ", ".join(_slack_safe(value, 120) for value in path.get("contributors", [])) or "None listed"
+    steps = [
+        _slack_safe(step, 500) for step in path.get("steps", [])
+        if _slack_safe(step, 500)
+    ]
+    step_text = "\n".join(f"{index}. {step}" for index, step in enumerate(steps[:4], 1))
+    due_line = f"\nDue: {_slack_safe(workstream.get('due_on'), 40)}" if workstream.get("due_on") else ""
     return (
-        f"Hi {recipient} — could you help with *{_slack_safe(workstream.get('title'), 300)}*?\n\n"
-        f"*Why this matters:* {_slack_safe(workstream.get('recommendation_reason'), 600)}\n"
-        f"*Target:* {path.get('target_tier')} (T2 is the minimum governed outcome)\n"
-        f"*Selected path:* {_slack_safe(path.get('title'), 300)} · Effort {path.get('effort')} · {_slack_safe(path.get('durability'), 30)} durability\n"
-        f"*Affected accounts:* {affected or 'None listed'}\n"
-        f"*Current impact:* {impact_text}\n"
-        f"*Primary owner:* {_slack_safe(path.get('primary_owner') or workstream.get('primary_owner'), 160)}\n"
-        f"*Partners:* {partners}\n"
-        f"*Due:* {_slack_safe(workstream.get('due_on') or 'Not set', 40)}\n\n"
-        f"*Proposed steps*\n{steps}\n\n"
-        "When the source changes are complete, please let me know so I can run a fresh, complete pull for validation."
+        f"Hi {recipient} — could you help with {_slack_safe(path.get('title') or workstream.get('title'), 300)} "
+        f"for {affected or 'the affected account'}?\n\n"
+        f"What needs attention\n- {_slack_safe(workstream.get('recommendation_reason'), 600)}\n\n"
+        f"What to do\n{step_text or '1. Review and correct the source evidence.'}"
+        f"{due_line}\n\n"
+        "Reply here when it’s done so I can refresh Hours Recon and verify the change.\n\n"
+        "— sent via Glean Pi"
     )

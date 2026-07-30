@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from urllib.parse import urlsplit
 
 from .evidence import TIER_RANK
 from .remediation import METRIC_FIELDS, PRIORITY_RANK, build_workstreams, format_slack_followup
@@ -128,6 +130,14 @@ class RemediationStore:
                         slack_recipient TEXT,
                         slack_prepared_at TEXT,
                         slack_copied_at TEXT,
+                        slack_recipient_id TEXT,
+                        slack_channel_id TEXT,
+                        slack_message_ts TEXT,
+                        slack_permalink TEXT,
+                        slack_sent_at TEXT,
+                        slack_sent_path_id TEXT,
+                        slack_client_msg_id TEXT,
+                        slack_message_sha256 TEXT,
                         execution_plan_json TEXT,
                         execution_path_id TEXT,
                         execution_prepared_at TEXT,
@@ -212,9 +222,12 @@ class RemediationStore:
                 )
                 connection.commit()
             workstream_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(workstreams)").fetchall()}
-            if version == SCHEMA_VERSION and "slack_copied_at" not in workstream_columns:
-                connection.execute("ALTER TABLE workstreams ADD COLUMN slack_copied_at TEXT")
-            for column in ("execution_plan_json", "execution_path_id", "execution_prepared_at", "mcp_request_copied_at"):
+            for column in (
+                "slack_copied_at", "slack_recipient_id", "slack_channel_id", "slack_message_ts",
+                "slack_permalink", "slack_sent_at", "slack_sent_path_id", "slack_client_msg_id",
+                "slack_message_sha256", "execution_plan_json", "execution_path_id",
+                "execution_prepared_at", "mcp_request_copied_at",
+            ):
                 if version == SCHEMA_VERSION and column not in workstream_columns:
                     connection.execute(f"ALTER TABLE workstreams ADD COLUMN {column} TEXT")
             instance_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(instances)").fetchall()}
@@ -346,7 +359,10 @@ class RemediationStore:
                            selected_target_tier=?, selected_path_json=?, impact_json=?, affected_instance_count=?,
                            last_seen=?, last_retrieval_id=?, execution_plan_json=NULL, execution_path_id=NULL,
                            execution_prepared_at=NULL, mcp_request_copied_at=NULL, slack_prepared_at=NULL,
-                           slack_copied_at=NULL, version=version+1 WHERE fingerprint=?""",
+                           slack_copied_at=NULL, slack_recipient_id=NULL, slack_channel_id=NULL,
+                           slack_message_ts=NULL, slack_permalink=NULL, slack_sent_at=NULL,
+                           slack_sent_path_id=NULL, slack_client_msg_id=NULL, slack_message_sha256=NULL,
+                           version=version+1 WHERE fingerprint=?""",
                         (
                             candidate["policy_version"], candidate["title"], _json(candidate["dimensions"]),
                             _json(candidate["reason_codes"]), status, candidate["priority"], candidate["route"],
@@ -887,6 +903,14 @@ class RemediationStore:
                     "mcp_request_copied_at": None,
                     "slack_prepared_at": None,
                     "slack_copied_at": None,
+                    "slack_recipient_id": None,
+                    "slack_channel_id": None,
+                    "slack_message_ts": None,
+                    "slack_permalink": None,
+                    "slack_sent_at": None,
+                    "slack_sent_path_id": None,
+                    "slack_client_msg_id": None,
+                    "slack_message_sha256": None,
                 })
                 event_payload = {"path_id": path_id, "target_tier": selected["target_tier"], "execution_plan_invalidated": True}
             elif action == "prepare_execution":
@@ -940,6 +964,50 @@ class RemediationStore:
                     raise QueueValidationError("Prepare a Slack follow-up before recording a copy.")
                 updates["slack_copied_at"] = _utc_now()
                 event_payload = {"recipient": row["slack_recipient"], "delivery": "copied_not_sent"}
+            elif action == "record_slack_sent":
+                if not row["slack_prepared_at"] or not row["slack_recipient"]:
+                    raise QueueValidationError("Prepare a Slack follow-up before recording delivery.")
+                recipient_id = str(data.get("recipient_id") or "").strip().upper()
+                channel_id = str(data.get("channel_id") or "").strip().upper()
+                message_ts = str(data.get("message_ts") or "").strip()
+                permalink = str(data.get("permalink") or "").strip()
+                client_msg_id = str(data.get("client_msg_id") or "").strip().lower()
+                message_sha256 = str(data.get("message_sha256") or "").strip().lower()
+                parsed_permalink = urlsplit(permalink)
+                if not re.fullmatch(r"[A-Z][A-Z0-9]{2,}", recipient_id):
+                    raise QueueValidationError("Slack returned an invalid recipient ID.")
+                if not re.fullmatch(r"[CDG][A-Z0-9]{2,}", channel_id):
+                    raise QueueValidationError("Slack returned an invalid conversation ID.")
+                if not re.fullmatch(r"\d+\.\d+", message_ts):
+                    raise QueueValidationError("Slack returned an invalid message timestamp.")
+                if parsed_permalink.scheme != "https" or not (parsed_permalink.hostname or "").lower().endswith(".slack.com"):
+                    raise QueueValidationError("Slack returned an invalid message permalink.")
+                if not re.fullmatch(r"[0-9a-f-]{36}", client_msg_id):
+                    raise QueueValidationError("Slack returned an invalid client message ID.")
+                if not re.fullmatch(r"[0-9a-f]{64}", message_sha256):
+                    raise QueueValidationError("Slack returned an invalid message digest.")
+                sent_at = _utc_now()
+                updates.update({
+                    "slack_recipient_id": recipient_id,
+                    "slack_channel_id": channel_id,
+                    "slack_message_ts": message_ts,
+                    "slack_permalink": permalink,
+                    "slack_sent_at": sent_at,
+                    "slack_sent_path_id": row["selected_path_id"],
+                    "slack_client_msg_id": client_msg_id,
+                    "slack_message_sha256": message_sha256,
+                })
+                event_payload = {
+                    "recipient": row["slack_recipient"],
+                    "recipient_id": recipient_id,
+                    "channel_id": channel_id,
+                    "message_ts": message_ts,
+                    "permalink": permalink,
+                    "client_msg_id": client_msg_id,
+                    "message_sha256": message_sha256,
+                    "path_id": row["selected_path_id"],
+                    "delivery": "sent",
+                }
             elif action == "snooze":
                 if current not in ACTIVE_WORKSTREAM_STATUSES:
                     raise QueueValidationError(f"Cannot snooze a {current} workstream.")
@@ -996,6 +1064,8 @@ class RemediationStore:
             result["delivery"] = "prepared_not_sent"
         elif action == "record_slack_copy":
             result["delivery"] = "copied_not_sent"
+        elif action == "record_slack_sent":
+            result["delivery"] = "sent"
         elif action == "prepare_execution":
             result["execution_workspace"] = workstream.get("execution_plan")
             result["execution"] = "prepared_not_executed"

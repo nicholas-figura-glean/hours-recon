@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from threading import Lock
 
 from hours_recon.evidence import attach_governance
 from hours_recon.inference import infer_packages
@@ -23,6 +24,7 @@ from hours_recon.remediation import (
 from hours_recon.remediation_execution import build_execution_workspace
 from hours_recon.remediation_policy import path_options, rank_paths, validate_paths
 from hours_recon.remediation_store import QueueConflict, QueueValidationError, RemediationStore
+from hours_recon.service import ReconciliationService
 
 
 PACKAGE_CONFIG = {
@@ -350,8 +352,11 @@ class RemediationPlannerTests(unittest.TestCase):
         workstream = build_workstreams(queue_report([RemediationStoreTests.gap_value()]), scope_id="scope")[0]
         message = format_slack_followup(workstream, "@revops")
         self.assertIn("Hi @revops", message)
-        self.assertIn("T2 is the minimum governed outcome", message)
-        self.assertIn("fresh, complete pull", message)
+        self.assertIn("What needs attention", message)
+        self.assertIn("What to do", message)
+        self.assertIn("— sent via Glean Pi", message)
+        self.assertNotIn("*", message)
+        self.assertIn("refresh Hours Recon and verify", message)
 
     def test_project_linkage_t1_builds_exact_rocketlane_mcp_write_and_owner_handoff(self):
         gap = {
@@ -410,7 +415,8 @@ class RemediationPlannerTests(unittest.TestCase):
         self.assertIsNone(approval["tool"])
         self.assertEqual(["9001"], approval["record_ids"])
         self.assertIn("does not expose approvalStatus", approval["limitation"])
-        self.assertIn("AISM", workspace["slack_draft"]["message"])
+        self.assertIn("What needs attention", workspace["slack_draft"]["message"])
+        self.assertIn("— sent via Glean Pi", workspace["slack_draft"]["message"])
 
     def test_execution_slack_template_is_recipient_specific_and_never_claims_delivery(self):
         workstream = build_workstreams(queue_report([RemediationStoreTests.gap_value()]), scope_id="scope")[0]
@@ -693,6 +699,98 @@ class RemediationStoreTests(unittest.TestCase):
             )
             self.assertIsNone(second_draft["workstream"]["slack_copied_at"])
             self.assertEqual("prepared_not_sent", second_draft["delivery"])
+            sent = store.action(
+                workstream["fingerprint"], scope_id="scope", action="record_slack_sent",
+                expected_version=second_draft["workstream"]["version"], payload={
+                    "recipient_id": "U123ABC",
+                    "channel_id": "D456DEF",
+                    "message_ts": "1770000000.123456",
+                    "permalink": "https://example.slack.com/archives/D456DEF/p1770000000123456",
+                    "client_msg_id": "28aa0503-1594-5a85-8807-7bd4a078ec35",
+                    "message_sha256": "a" * 64,
+                },
+            )
+            self.assertEqual("sent", sent["delivery"])
+            self.assertTrue(sent["workstream"]["slack_sent_at"])
+            self.assertEqual("U123ABC", sent["workstream"]["slack_recipient_id"])
+            self.assertEqual("https://example.slack.com/archives/D456DEF/p1770000000123456", sent["workstream"]["slack_permalink"])
+            self.assertEqual("sent", sent["workstream"]["events"][0]["payload"]["delivery"])
+
+    def test_slack_delivery_rejects_unverified_or_unsafe_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = RemediationStore(Path(temporary) / "queue.sqlite3")
+            store.observe(queue_report([self.gap()]), retrieval_id="r1", scope_id="scope", coverage_complete=False)
+            workstream = store.list_workstreams(scope_id="scope")[0]
+            prepared = store.action(
+                workstream["fingerprint"], scope_id="scope", action="prepare_slack",
+                expected_version=workstream["version"], payload={"recipient": "@owner"},
+            )
+            with self.assertRaisesRegex(QueueValidationError, "permalink"):
+                store.action(
+                    workstream["fingerprint"], scope_id="scope", action="record_slack_sent",
+                    expected_version=prepared["workstream"]["version"], payload={
+                        "recipient_id": "U123ABC", "channel_id": "D456DEF",
+                        "message_ts": "1770000000.123456", "permalink": "https://evil.example/message",
+                        "client_msg_id": "28aa0503-1594-5a85-8807-7bd4a078ec35", "message_sha256": "a" * 64,
+                    },
+                )
+
+    def test_service_sends_reviewed_slack_text_and_records_confirmed_permalink(self):
+        class FakeSlackClient:
+            def __init__(self):
+                self.sent = []
+
+            def resolve_recipient(self, query):
+                self.query = query
+                return {"kind": "user", "id": "U123ABC", "label": "@owner"}
+
+            def send_message(self, recipient, message, *, client_msg_id):
+                self.sent.append((recipient, message, client_msg_id))
+                return {
+                    "recipient_id": "U123ABC", "recipient_label": "@owner", "channel_id": "D456DEF",
+                    "message_ts": "1770000000.123456",
+                    "permalink": "https://example.slack.com/archives/D456DEF/p1770000000123456",
+                    "client_msg_id": client_msg_id,
+                }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            report = queue_report([self.gap()])
+            store = RemediationStore(Path(temporary) / "queue.sqlite3")
+            store.observe(report, retrieval_id="r1", scope_id="scope", coverage_complete=False)
+            workstream = store.list_workstreams(scope_id="scope")[0]
+            plan = {
+                "execution_id": "hrex1_service_test", "workstream_id": workstream["fingerprint"],
+                "selected_path": {"id": workstream["selected_path_id"]},
+                "execution_mode": "delegated", "source_write_performed": False,
+                "slack_draft": {"message": "Hi {{recipient}} — please update the source."},
+            }
+            prepared = store.action(
+                workstream["fingerprint"], scope_id="scope", action="prepare_execution",
+                expected_version=workstream["version"], payload={"execution_plan": plan},
+            )["workstream"]
+            service = object.__new__(ReconciliationService)
+            service.settings = {
+                "remediation_scope_id": "scope", "requester_email": "", "mcp_requester_email": "",
+            }
+            service._data = report
+            service.remediation_store = store
+            service.slack_client = FakeSlackClient()
+            service.slack_send_lock = Lock()
+            with self.assertRaisesRegex(QueueValidationError, "Confirm"):
+                service.send_remediation_slack(
+                    workstream["fingerprint"], expected_version=prepared["version"],
+                    recipient_query="Alex Owner", reviewed_message="Do not send", confirmed=False,
+                )
+            self.assertEqual([], service.slack_client.sent)
+            result = service.send_remediation_slack(
+                workstream["fingerprint"], expected_version=prepared["version"],
+                recipient_query="Alex Owner", reviewed_message="Hi Alex — please update the linked record.", confirmed=True,
+            )
+            self.assertEqual("sent", result["delivery"])
+            self.assertIn("— sent via Glean Pi", result["slack_message"])
+            self.assertEqual("Alex Owner", service.slack_client.query)
+            self.assertEqual(1, len(service.slack_client.sent))
+            self.assertEqual("https://example.slack.com/archives/D456DEF/p1770000000123456", result["workstream"]["slack_permalink"])
 
     def test_account_visibility_filters_reads_and_writes(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -706,6 +804,19 @@ class RemediationStoreTests(unittest.TestCase):
                     action="acknowledge", expected_version=workstream["version"],
                 )
 
+    def test_existing_v2_database_adds_slack_delivery_columns(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "queue.sqlite3"
+            with sqlite3.connect(str(path)) as connection:
+                connection.execute("CREATE TABLE workstreams(fingerprint TEXT PRIMARY KEY)")
+                connection.execute("CREATE TABLE instances(fingerprint TEXT PRIMARY KEY, last_governed_tier TEXT)")
+                connection.execute("PRAGMA user_version=2")
+                connection.commit()
+            RemediationStore(path)
+            with sqlite3.connect(str(path)) as connection:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(workstreams)")}
+            self.assertTrue({"slack_recipient_id", "slack_channel_id", "slack_message_ts", "slack_permalink", "slack_sent_at", "slack_message_sha256"} <= columns)
+
     def test_v1_database_is_cleanly_reset_to_v2(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "queue.sqlite3"
@@ -718,8 +829,10 @@ class RemediationStoreTests(unittest.TestCase):
             self.assertEqual(2, store.health(scope_id="scope")["schema_version"])
             with sqlite3.connect(str(path)) as connection:
                 tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                workstream_columns = {row[1] for row in connection.execute("PRAGMA table_info(workstreams)")}
             self.assertNotIn("cases", tables)
             self.assertIn("workstreams", tables)
+            self.assertTrue({"slack_sent_at", "slack_permalink", "slack_message_sha256"} <= workstream_columns)
 
 
 if __name__ == "__main__":
