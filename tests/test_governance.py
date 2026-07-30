@@ -380,7 +380,11 @@ class RemediationPlannerTests(unittest.TestCase):
         operation = workspace["operations"][0]
         self.assertEqual("update_project", operation["tool"])
         self.assertEqual(["1379328"], operation["record_ids"])
-        self.assertEqual({"externalReferenceId": "001ABC"}, operation["proposed_fields"])
+        opportunity_url = "https://glean.lightning.force.com/lightning/r/Opportunity/006OPP/view"
+        self.assertEqual({
+            "externalReferenceId": "001ABC",
+            "Link to Salesforce Opportunity (resolve Rocketlane field ID in preflight)": opportunity_url,
+        }, operation["proposed_fields"])
         self.assertEqual("AISM / Rocketlane project owner", workspace["recipient_role"])
         self.assertEqual(["Alex AISM"], workspace["recipient_suggestions"])
         self.assertEqual("Alex AISM", workspace["default_recipient"])
@@ -389,6 +393,8 @@ class RemediationPlannerTests(unittest.TestCase):
         self.assertIn("project 1379328 currently links to Acme only by normalized customer name", slack_message)
         self.assertIn("verified Salesforce Account ID is 001ABC", slack_message)
         self.assertIn("Set Rocketlane project 1379328 `externalReferenceId` to `001ABC`", slack_message)
+        self.assertIn(f"Set its `Link to Salesforce Opportunity` field to `{opportunity_url}`", slack_message)
+        self.assertIn(f"Salesforce Opportunity 006OPP: {opportunity_url}", slack_message)
         self.assertIn("confirm whether you’re the right owner", slack_message)
         self.assertIn("point me to the correct owner", slack_message)
         self.assertIn("refresh Hours Recon and verify the direct ID match", slack_message)
@@ -396,6 +402,32 @@ class RemediationPlannerTests(unittest.TestCase):
         self.assertNotIn("Identify or create", slack_message)
         self.assertIn("wait for my explicit confirmation", workspace["mcp_request"])
         self.assertFalse(workspace["source_write_performed"])
+
+    def test_project_linkage_does_not_guess_when_multiple_opportunities_exist(self):
+        gap = {
+            "dimension": "project_linkage", "tier": "T3", "reason_code": "normalized_customer_name",
+            "summary": "Matched by name.", "recommended_action": "Store a stable ID.",
+            "refs": ["001ABC", "1379328"], "details": {"match_bases": ["normalized_customer_name"]},
+        }
+        report = queue_report([gap])
+        report["accounts"][0].update({
+            "id": "001ABC", "name": "Acme",
+            "packages": [{"opportunity_id": "006FIRST"}, {"opportunity_id": "006SECOND"}],
+            "projects": [{"id": "1379328", "name": "Acme Outcomes", "owner_name": "Alex AISM"}],
+            "entries": [],
+        })
+        workstream = build_workstreams(report, scope_id="scope")[0]
+        selected = next(path for path in workstream["paths"] if path["id"] == "project_linkage.salesforce_account_id.t1")
+        workstream["selected_path_id"] = selected["id"]
+        workstream["selected_path"] = selected
+        workspace = build_execution_workspace(workstream, report)
+        operation = workspace["operations"][0]
+        self.assertEqual("needs_confirmed_opportunity", operation["status"])
+        self.assertEqual({"externalReferenceId": "001ABC"}, operation["proposed_fields"])
+        self.assertIn("Select the correct Salesforce Opportunity URL", workspace["required_inputs"][0])
+        self.assertIn("candidate URLs under Records; do not guess", workspace["slack_draft"]["message"])
+        self.assertIn("006FIRST/view", workspace["slack_draft"]["message"])
+        self.assertIn("006SECOND/view", workspace["slack_draft"]["message"])
 
     def test_time_quality_workspace_splits_supported_updates_from_manual_approval(self):
         gap = {
@@ -844,6 +876,92 @@ class RemediationStoreTests(unittest.TestCase):
             )
             self.assertEqual("pending", retried["status"])
 
+    def test_source_action_outbox_requires_concrete_server_scoped_fields_and_records_completion(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report = queue_report([self.gap()])
+            store = RemediationStore(Path(temporary) / "queue.sqlite3")
+            store.observe(report, retrieval_id="r1", scope_id="scope", coverage_complete=False)
+            workstream = store.list_workstreams(scope_id="scope")[0]
+            plan = {
+                "execution_id": "hrex1_source_test", "workstream_id": workstream["fingerprint"],
+                "selected_path": {"id": workstream["selected_path_id"]}, "source_write_performed": False,
+                "operations": [{
+                    "system": "rocketlane", "tool": "update_project", "object": "Project",
+                    "record_ids": ["77"], "proposed_fields": {"externalReferenceId": "<account id>"},
+                    "preflight": ["Re-read the project."],
+                }],
+            }
+            prepared = store.action(
+                workstream["fingerprint"], scope_id="scope", action="prepare_execution",
+                expected_version=workstream["version"], payload={"execution_plan": plan},
+            )["workstream"]
+            with self.assertRaisesRegex(QueueValidationError, "placeholder"):
+                store.queue_source_action(
+                    workstream["fingerprint"], scope_id="scope", portfolio_id="local-default", account_ids=None,
+                    expected_version=prepared["version"], operation_index=0,
+                    proposed_fields={"externalReferenceId": "<account id>"},
+                )
+            with self.assertRaisesRegex(QueueValidationError, "field names"):
+                store.queue_source_action(
+                    workstream["fingerprint"], scope_id="scope", portfolio_id="local-default", account_ids=None,
+                    expected_version=prepared["version"], operation_index=0,
+                    proposed_fields={"unsafeExtraField": "value"},
+                )
+            queued = store.queue_source_action(
+                workstream["fingerprint"], scope_id="scope", portfolio_id="local-default", account_ids=None,
+                expected_version=prepared["version"], operation_index=0,
+                proposed_fields={"externalReferenceId": "001ABC"},
+            )
+            self.assertEqual("queued_not_executed", queued["execution"])
+            self.assertEqual(["77"], queued["outbox"]["record_ids"])
+            self.assertEqual({"externalReferenceId": "001ABC"}, queued["outbox"]["proposed_fields"])
+            claimed = store.claim_source_action(
+                queued["outbox"]["id"], scope_id="scope", portfolio_id="local-default",
+                expected_version=queued["outbox"]["version"],
+            )
+            self.assertEqual("executing", claimed["status"])
+            with self.assertRaisesRegex(QueueValidationError, "trusted Salesforce or Rocketlane"):
+                store.complete_source_action(
+                    claimed["id"], scope_id="scope", portfolio_id="local-default", expected_version=claimed["version"],
+                    source_links=["https://evil.example/record"], result_summary="Untrusted audit result.",
+                )
+            completed = store.complete_source_action(
+                claimed["id"], scope_id="scope", portfolio_id="local-default", expected_version=claimed["version"],
+                source_links=["https://glean.rocketlane.com/projects/77/overview"],
+                result_summary="Observed externalReferenceId=001ABC after write.",
+            )
+            self.assertEqual("completed", completed["status"])
+            self.assertEqual(1, len(store.list_source_actions(scope_id="scope", status="completed")))
+            refreshed = store.get_workstream(workstream["fingerprint"], scope_id="scope")
+            second = store.queue_source_action(
+                workstream["fingerprint"], scope_id="scope", portfolio_id="local-default", account_ids=None,
+                expected_version=refreshed["version"], operation_index=0,
+                proposed_fields={"externalReferenceId": "001SECOND"},
+            )["outbox"]
+            second_claim = store.claim_source_action(
+                second["id"], scope_id="scope", portfolio_id="local-default", expected_version=second["version"],
+            )
+            uncertain = store.mark_source_action_uncertain(
+                second_claim["id"], scope_id="scope", portfolio_id="local-default",
+                expected_version=second_claim["version"], error="Connector response was uncertain",
+            )
+            with self.assertRaisesRegex(QueueValidationError, "fresh read"):
+                store.retry_source_action(
+                    uncertain["id"], scope_id="scope", portfolio_id="local-default",
+                    expected_version=uncertain["version"], confirmed_not_applied=False,
+                )
+            retried = store.retry_source_action(
+                uncertain["id"], scope_id="scope", portfolio_id="local-default",
+                expected_version=uncertain["version"], confirmed_not_applied=True,
+            )
+            self.assertEqual("pending", retried["status"])
+            store.observe(report, retrieval_id="r2", scope_id="scope", coverage_complete=False)
+            self.assertEqual([], store.list_source_actions(scope_id="scope", status="pending"))
+            self.assertTrue(any(
+                item["id"] == retried["id"] and item["status"] == "cancelled"
+                for item in store.list_source_actions(scope_id="scope", status="cancelled")
+            ))
+
     def test_service_queues_reviewed_slack_text_without_sending(self):
         with tempfile.TemporaryDirectory() as temporary:
             report = queue_report([self.gap()])
@@ -903,8 +1021,9 @@ class RemediationStoreTests(unittest.TestCase):
                 tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             self.assertTrue({"slack_recipient_id", "slack_channel_id", "slack_message_ts", "slack_permalink", "slack_sent_at", "slack_outbox_id", "slack_message_sha256"} <= columns)
             self.assertIn("slack_outbox", tables)
+            self.assertIn("source_action_outbox", tables)
 
-    def test_v1_database_is_cleanly_reset_to_v3(self):
+    def test_v1_database_is_cleanly_reset_to_v4(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "queue.sqlite3"
             with sqlite3.connect(str(path)) as connection:
@@ -913,7 +1032,7 @@ class RemediationStoreTests(unittest.TestCase):
                 connection.execute("PRAGMA user_version=1")
                 connection.commit()
             store = RemediationStore(path)
-            self.assertEqual(3, store.health(scope_id="scope")["schema_version"])
+            self.assertEqual(4, store.health(scope_id="scope")["schema_version"])
             with sqlite3.connect(str(path)) as connection:
                 tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 workstream_columns = {row[1] for row in connection.execute("PRAGMA table_info(workstreams)")}

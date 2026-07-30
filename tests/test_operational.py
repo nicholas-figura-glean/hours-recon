@@ -111,6 +111,9 @@ class DashboardMarkupTests(unittest.TestCase):
         self.assertIn("function renderExecutionWorkspace(workspace, workstream)", html)
         self.assertIn("function copyMcpRequest()", html)
         self.assertIn("function queueExecutionSlackDraft()", html)
+        self.assertIn("function queueReviewedSourceActions()", html)
+        self.assertIn("Queue reviewed source actions", html)
+        self.assertIn("execute pending Hours Recon source actions", html)
         self.assertIn("function queueAllSlackHandoffs()", html)
         self.assertIn("function renderSlackQueue(queue)", html)
         self.assertIn("function selectRemediationTab(tab, focus = false)", html)
@@ -142,6 +145,21 @@ class DashboardMarkupTests(unittest.TestCase):
         self.assertIn("Invalid remediation action token", app_source)
         self.assertIn("hro1_[a-f0-9]{64}", app_source)
         self.assertIn("/api/remediation/slack/outbox", app_source)
+        self.assertIn("/api/remediation/source/outbox", app_source)
+        self.assertIn("hsa1_[a-f0-9]{64}", app_source)
+
+    def test_source_action_outbox_cli_and_skill_require_preflight_and_confirmation(self):
+        script = (ROOT / "scripts" / "hours_recon_source_outbox.py").read_text(encoding="utf-8")
+        skill = (ROOT / ".glean" / "skills" / "hours-recon-source-execute" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn('subparsers.add_parser("claim"', script)
+        self.assertIn('subparsers.add_parser("completed"', script)
+        self.assertIn('subparsers.add_parser("uncertain"', script)
+        self.assertIn('subparsers.add_parser("retry"', script)
+        self.assertIn("must be a loopback HTTP URL", script)
+        self.assertIn("Re-read every `record_id`", skill)
+        self.assertIn("ask_clarifying_question", skill)
+        self.assertIn("final write confirmation", skill)
+        self.assertIn("Never parallelize writes. Retry an uncertain write only after a fresh read", skill)
 
     def test_slack_mcp_outbox_cli_and_skill_enforce_claim_before_send(self):
         script = (ROOT / "scripts" / "hours_recon_slack_outbox.py").read_text(encoding="utf-8")

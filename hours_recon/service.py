@@ -163,6 +163,16 @@ class ReconciliationService:
         accounts = source.get("accounts", []) if isinstance(source, Mapping) else []
         return sorted({str(account.get("id")) for account in accounts if account.get("id")})
 
+    def _source_execution_status(self) -> Dict[str, Any]:
+        return {
+            "mode": "glean_pi_source_action_outbox",
+            "available": self.remediation_store is not None,
+            "executor": "Authenticated Salesforce/Rocketlane tools via Glean Pi",
+            "requires_pi_command": True,
+            "command": "execute pending Hours Recon source actions",
+            "final_confirmation_required": True,
+        }
+
     def _slack_delivery_status(self) -> Dict[str, Any]:
         return {
             "mode": "glean_slack_mcp_outbox",
@@ -185,6 +195,7 @@ class ReconciliationService:
             "active_instance_count": 0,
             "governed_instance_count": 0,
             "slack_delivery": self._slack_delivery_status(),
+            "source_execution": self._source_execution_status(),
         }
 
     def _attach_remediation(self, result: Dict[str, Any]) -> None:
@@ -202,6 +213,7 @@ class ReconciliationService:
             summary["available"] = True
             summary["action_token"] = self.action_token
             summary["slack_delivery"] = self._slack_delivery_status()
+            summary["source_execution"] = self._source_execution_status()
             workstream_titles = {
                 str(item.get("fingerprint")): str(item.get("title") or "Hours Recon handoff")
                 for item in summary.get("workstreams", [])
@@ -283,6 +295,7 @@ class ReconciliationService:
             "remediation_mode": self.settings.get("remediation_mode", "off"),
             "remediation_queue": queue_health,
             "slack_delivery": self._slack_delivery_status(),
+            "source_execution": self._source_execution_status(),
         }
 
     def _load_mcp_report(self) -> Dict[str, Any]:
@@ -452,6 +465,76 @@ class ReconciliationService:
         result["slack_message"] = message
         result["next_step"] = "Tell Glean Pi: send pending Hours Recon messages"
         return result
+
+    def queue_remediation_source_action(
+        self,
+        workstream_id: str,
+        *,
+        expected_version: int,
+        operation_index: int,
+        proposed_fields: Mapping[str, Any],
+        confirmed: bool,
+    ) -> Dict[str, Any]:
+        if confirmed is not True:
+            raise QueueValidationError("Confirm that you reviewed the proposed fields before queueing the source action.")
+        if not self.remediation_store:
+            raise QueueError("The remediation planner is unavailable.")
+        result = self.remediation_store.queue_source_action(
+            workstream_id,
+            scope_id=self._active_scope_id(), portfolio_id=self._active_portfolio_id(),
+            account_ids=self._owned_account_ids(), expected_version=expected_version,
+            operation_index=operation_index, proposed_fields=proposed_fields,
+        )
+        result["next_step"] = "Tell Glean Pi: execute pending Hours Recon source actions"
+        return result
+
+    def list_source_actions(self, status: str = "pending") -> List[Dict[str, Any]]:
+        if not self.remediation_store:
+            raise QueueError("The remediation planner is unavailable.")
+        return self.remediation_store.list_source_actions(
+            scope_id=self._active_scope_id(), portfolio_id=self._active_portfolio_id(), status=status,
+            account_ids=self._owned_account_ids(),
+        )
+
+    def claim_source_action(self, outbox_id: str, *, expected_version: int) -> Dict[str, Any]:
+        if not self.remediation_store:
+            raise QueueError("The remediation planner is unavailable.")
+        return self.remediation_store.claim_source_action(
+            outbox_id, scope_id=self._active_scope_id(), portfolio_id=self._active_portfolio_id(),
+            expected_version=expected_version, account_ids=self._owned_account_ids(),
+        )
+
+    def complete_source_action(
+        self, outbox_id: str, *, expected_version: int, source_links: List[str], result_summary: str,
+    ) -> Dict[str, Any]:
+        if not self.remediation_store:
+            raise QueueError("The remediation planner is unavailable.")
+        return self.remediation_store.complete_source_action(
+            outbox_id, scope_id=self._active_scope_id(), portfolio_id=self._active_portfolio_id(),
+            expected_version=expected_version, source_links=source_links, result_summary=result_summary,
+            account_ids=self._owned_account_ids(),
+        )
+
+    def mark_source_action_uncertain(
+        self, outbox_id: str, *, expected_version: int, error: str,
+    ) -> Dict[str, Any]:
+        if not self.remediation_store:
+            raise QueueError("The remediation planner is unavailable.")
+        return self.remediation_store.mark_source_action_uncertain(
+            outbox_id, scope_id=self._active_scope_id(), portfolio_id=self._active_portfolio_id(),
+            expected_version=expected_version, error=error, account_ids=self._owned_account_ids(),
+        )
+
+    def retry_source_action(
+        self, outbox_id: str, *, expected_version: int, confirmed_not_applied: bool,
+    ) -> Dict[str, Any]:
+        if not self.remediation_store:
+            raise QueueError("The remediation planner is unavailable.")
+        return self.remediation_store.retry_source_action(
+            outbox_id, scope_id=self._active_scope_id(), portfolio_id=self._active_portfolio_id(),
+            expected_version=expected_version, confirmed_not_applied=confirmed_not_applied,
+            account_ids=self._owned_account_ids(),
+        )
 
     def list_slack_outbox(self, status: str = "pending") -> List[Dict[str, Any]]:
         if not self.remediation_store:

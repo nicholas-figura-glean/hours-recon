@@ -228,6 +228,18 @@ The browser records execution preparation and successful MCP-request copy separa
 
 Salesforce and Rocketlane source actions still run through Glean MCP: Glean performs read/schema preflight and asks for confirmation immediately before every connector write. A source write response never governs an instance; only a subsequent complete verified source refresh can validate the selected target.
 
+#### Reviewed source writes through Glean Pi
+
+Write-capable proposed actions expose editable JSON in the execution workspace. The server accepts only the server-generated tool, operation index, target record IDs, and exact field-name set; reviewers may replace placeholder values but cannot add target fields or records. Unresolved placeholders, unsupported tools, stale workstream versions, and untrusted source links are rejected.
+
+1. Review the proposed fields and replace every `<placeholder>` with a concrete value.
+2. Choose **Queue reviewed source actions**. This stores one `pending` item per operation but performs no source write.
+3. Tell Glean Pi: **“execute pending Hours Recon source actions.”**
+4. The `hours-recon-source-execute` skill fresh-reads the record and schema, resolves custom-field IDs, shows exact before/after values, and asks for final confirmation immediately before the write.
+5. After confirmation, Pi atomically claims the item, writes once, re-reads the changed record, and records trusted Salesforce/Rocketlane links plus the observed result.
+
+Actions run sequentially. An uncertain connector result becomes `needs_review` and cannot be silently retried. It is completed only when a fresh read proves the values were applied, or returned to pending only when a fresh read proves they were not applied and the user confirms again. A subsequent complete Hours Recon refresh remains mandatory for governance validation. The helper CLI is `scripts/hours_recon_source_outbox.py`; normal users should invoke the skill through natural language.
+
 #### Slack delivery through Glean Pi
 
 No Slack app, bot token, user OAuth token, password, or browser cookie is required. The Slack card accepts a display name, email, `@handle`, `#channel`, or Slack ID and stores the exact reviewed message in the owner-only remediation database. Messages use a short greeting, up to three findings, four actions, the most relevant source links, and the due date without decorative Slack formatting.
@@ -245,13 +257,16 @@ The reviewed message body remains in SQLite only while delivery is pending, send
 
 Planner v2 intentionally performs a clean reset of a schema-v1 remediation database on first startup. V1 case/gap workflow state is not migrated because it cannot accurately represent shared workstreams or selected T1/T2 paths. Report data and source snapshots are unaffected. New v2 workflow history then persists in the configured database.
 
-Read-only and local workflow endpoints:
+Local data and workflow endpoints:
 
 - `GET /api/data`
 - `GET /api/status`
 - `GET /api/remediation/workstreams`
 - `GET /api/remediation/workstreams/{workstream_id}`
 - `POST /api/remediation/workstreams/{workstream_id}/actions`
+- `POST /api/remediation/workstreams/{workstream_id}/source/queue`
+- `GET /api/remediation/source/outbox?status=pending`
+- `POST /api/remediation/source/outbox/{outbox_id}/{claim|completed|uncertain|retry}`
 - `POST /api/remediation/workstreams/{workstream_id}/slack/queue`
 - `GET /api/remediation/slack/outbox?status=pending`
 - `POST /api/remediation/slack/outbox/{outbox_id}/{claim|sent|uncertain|retry}`
@@ -259,7 +274,7 @@ Read-only and local workflow endpoints:
 
 Supported workstream actions include `acknowledge`, `start`, `resume`, `ready_for_validation`, `select_path`, `prepare_execution`, `record_mcp_request_copy`, `prepare_slack`, `record_slack_copy`, `snooze`, and `waive`.
 
-The remediation database and its parent directory use owner-only permissions. Dashboard mutations and outbox transitions require an ephemeral per-process action token, same-origin requests, and loopback binding; responses deny framing to reduce local CSRF/clickjacking risk. The application remains a local single-user tool rather than a multi-user authorization system. The local process never stores SaaS credentials and never sends Salesforce, Rocketlane, or Slack writes. Those external actions occur only through the user's authenticated Glean MCP session after explicit instruction.
+The remediation database and its parent directory use owner-only permissions. Dashboard mutations and outbox transitions require an ephemeral per-process action token, same-origin requests, and loopback binding; responses deny framing to reduce local CSRF/clickjacking risk. The application remains a local single-user tool rather than a multi-user authorization system. The local process never stores SaaS credentials and never directly sends Salesforce, Rocketlane, or Slack writes. Those external actions occur only through the user's authenticated Glean MCP session after explicit instruction and, for source writes, final pre-write confirmation.
 
 ## Calculation rules
 
@@ -300,9 +315,11 @@ hours_recon/reconcile.py     FIFO, risk, weekly checks, totals
 hours_recon/remediation_policy.py  Versioned path catalog and recommendation policy
 hours_recon/remediation.py   Workstream grouping, identities, impact, and Slack formatting
 hours_recon/remediation_execution.py  MCP packets, source links, capability boundaries, and owner handoffs
-hours_recon/remediation_store.py  Private SQLite planner and Slack outbox persistence
+hours_recon/remediation_store.py  Private SQLite planner, source-action, and Slack outbox persistence
 hours_recon/service.py       Refresh, cache, governance, and planner orchestration
-scripts/hours_recon_slack_outbox.py  Loopback outbox helper used by the Pi skill
+scripts/hours_recon_source_outbox.py  Loopback source-action helper used by the Pi skill
+scripts/hours_recon_slack_outbox.py  Loopback Slack helper used by the Pi skill
+.glean/skills/hours-recon-source-execute/  Authenticated Salesforce/Rocketlane write playbook
 .glean/skills/hours-recon-slack-send/  Authenticated Slack MCP send playbook
 static/index.html            Interactive dashboard
 config/                      Package and account mappings

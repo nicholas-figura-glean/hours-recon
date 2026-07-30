@@ -237,6 +237,7 @@
     .execution-operation { border-left: 4px solid var(--artifact-accent); }
     .execution-operation.unsupported { border-left-color: var(--artifact-warning); }
     .execution-fields { margin: 0; padding: 9px; border-radius: 6px; overflow-x: auto; color: var(--artifact-text); background: var(--artifact-surface); border: 1px solid var(--artifact-border); font: 11px/1.5 var(--artifact-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+    textarea.execution-fields { min-height: 130px; resize: vertical; white-space: pre; }
     .execution-links, .execution-list { margin: 0; padding-left: 20px; display: grid; gap: 5px; color: var(--artifact-muted); }
     .execution-links a { color: var(--artifact-info); overflow-wrap: anywhere; }
     .execution-copy { display: grid; gap: 8px; }
@@ -640,7 +641,12 @@
         const statusLabel = item.status === 'governed' ? 'Governed' : item.status === 'waived' ? 'Waived' : `${priority} · ${titleCase(item.status)}`;
         const outbox = item.slack_outbox || {};
         const outboxState = outbox.status === 'pending' ? `Slack MCP handoff queued ${new Date(outbox.queued_at).toLocaleString()}; tell Pi “send pending Hours Recon messages.”` : (outbox.status === 'sending' ? 'Slack MCP handoff claimed by Pi; delivery is in progress.' : (outbox.status === 'needs_review' ? `Slack MCP delivery needs review${outbox.error ? `: ${outbox.error}` : '.'}` : ''));
-        const copied = outboxState || (item.slack_sent_at ? `Slack sent ${new Date(item.slack_sent_at).toLocaleString()}${item.slack_permalink ? ` · ${item.slack_permalink}` : ''}` : (item.slack_copied_at ? `Slack follow-up copied ${new Date(item.slack_copied_at).toLocaleString()}; not sent.` : (item.mcp_request_copied_at ? `MCP request copied ${new Date(item.mcp_request_copied_at).toLocaleString()}; no source write is implied.` : '')));
+        const sourceActions = item.source_action_outbox || [];
+        const sourcePending = sourceActions.filter(action => ['pending', 'executing', 'needs_review'].includes(action.status));
+        const sourceCompleted = sourceActions.filter(action => action.status === 'completed');
+        const sourceState = sourcePending.length ? `${sourcePending.length} source action${sourcePending.length === 1 ? '' : 's'} queued/executing · tell Pi “execute pending Hours Recon source actions”` : (sourceCompleted.length ? `${sourceCompleted.length} source action${sourceCompleted.length === 1 ? '' : 's'} completed; refresh to validate.` : '');
+        const slackState = outboxState || (item.slack_sent_at ? `Slack sent ${new Date(item.slack_sent_at).toLocaleString()}${item.slack_permalink ? ` · ${item.slack_permalink}` : ''}` : (item.slack_copied_at ? `Slack follow-up copied ${new Date(item.slack_copied_at).toLocaleString()}; not sent.` : (item.mcp_request_copied_at ? `MCP request copied ${new Date(item.mcp_request_copied_at).toLocaleString()}; no source write is implied.` : '')));
+        const copied = [sourceState, slackState].filter(Boolean).join(' · ');
         const selectedAlternate = item.selected_path_id !== item.recommended_path_id;
         const recommendationHeading = selectedAlternate ? 'Selected alternate path' : 'Why this path';
         const recommendationText = selectedAlternate ? `Policy recommends a different path: ${item.recommendation_reason || ''} The selected alternate remains valid and drives the current target.` : (item.recommendation_reason || '');
@@ -693,10 +699,16 @@
       if (!workspace) throw new Error('The execution workspace was not returned.');
       state.execution = { workspace, workstreamId: workstream.fingerprint, version: Number(workstream.version) };
       const modeLabel = titleCase(workspace.execution_mode || 'guided');
-      const operations = (workspace.operations || []).map(operation => {
-        const unsupported = !operation.tool || String(operation.status || '').includes('unsupported');
+      const supportedWriteTools = new Set(['update_project', 'update_time_entry', 'update_salesforce_opportunity', 'SALESFORCE_UPDATE_ACCOUNT']);
+      const operations = (workspace.operations || []).map((operation, operationIndex) => {
+        const writeReady = supportedWriteTools.has(operation.tool);
+        const unsupported = !writeReady || String(operation.status || '').includes('unsupported');
         const records = (operation.record_ids || []).join(', ') || 'Resolve during preflight';
-        return `<article class="execution-card execution-operation ${unsupported ? 'unsupported' : ''}"><h3><span class="pill ${operation.tool ? 'mcp' : ''}">${operation.tool ? 'MCP-ready' : 'Owner handoff'}</span>${escapeHtml(titleCase(operation.system))} · ${escapeHtml(operation.object)}</h3><p><strong>Tool:</strong> ${escapeHtml(operation.tool || 'No safe connector write registered')} · <strong>Records:</strong> ${escapeHtml(records)}</p><pre class="execution-fields">${escapeHtml(JSON.stringify(operation.proposed_fields || {}, null, 2))}</pre><div><strong>Required preflight</strong>${executionList(operation.preflight || [])}</div>${operation.limitation ? `<p class="source-note"><strong>Boundary:</strong> ${escapeHtml(operation.limitation)}</p>` : ''}</article>`;
+        const fields = escapeHtml(JSON.stringify(operation.proposed_fields || {}, null, 2));
+        const fieldEditor = writeReady
+          ? `<textarea class="execution-fields source-fields" data-source-operation-index="${operationIndex}" aria-label="Reviewed proposed fields for ${escapeHtml(operation.object)}">${fields}</textarea>`
+          : `<pre class="execution-fields">${fields}</pre>`;
+        return `<article class="execution-card execution-operation ${unsupported ? 'unsupported' : ''}"><h3><span class="pill ${writeReady ? 'mcp' : ''}">${writeReady ? 'Write available' : 'Owner handoff'}</span>${escapeHtml(titleCase(operation.system))} · ${escapeHtml(operation.object)}</h3><p><strong>Tool:</strong> ${escapeHtml(operation.tool || 'No safe connector write registered')} · <strong>Records:</strong> ${escapeHtml(records)}</p>${fieldEditor}<div><strong>Required preflight</strong>${executionList(operation.preflight || [])}</div>${operation.limitation ? `<p class="source-note"><strong>Boundary:</strong> ${escapeHtml(operation.limitation)}</p>` : ''}</article>`;
       }).join('') || '<div class="execution-card">No concrete operation is available from the current evidence.</div>';
       const recordCards = (workspace.records || []).map(record => {
         const links = (record.links || []).map(link => `<li><a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.label)}</a></li>`).join('');
@@ -705,12 +717,14 @@
       const notices = executionList(workspace.notices || []);
       const limitations = executionList(workspace.limitations || [], 'No additional connector limitations.');
       const inputs = executionList(workspace.required_inputs || [], 'No additional business input is required beyond confirmation.');
+      const sourceExecutionAvailable = state.data?.remediation_queue?.source_execution?.available === true;
+      const sourceFieldEditors = (workspace.operations || []).filter(operation => supportedWriteTools.has(operation.tool)).length;
       const slackMcpAvailable = state.data?.remediation_queue?.slack_delivery?.available === true;
       const handoffs = workspace.slack_handoffs || [];
       const handoffRows = handoffs.map(item => `<article class="handoff-item"><strong>${escapeHtml(item.recipient_label || item.recipient)}</strong><span>${fmt(item.entry_ids?.length || 0)} submitted entr${item.entry_ids?.length === 1 ? 'y' : 'ies'} · ${escapeHtml((item.issues || []).join(' · '))}</span></article>`).join('');
       const slackSetupNote = slackMcpAvailable ? 'Review and queue this message, then tell Glean Pi “send pending Hours Recon messages.” Pi will send it through your connected Slack identity and return the message link.' : 'The local remediation queue is unavailable. Use Copy instead.';
       $('#executionSubtitle').textContent = `${workspace.selected_path?.title || 'Selected path'} · ${modeLabel}`;
-      $('#executionContent').innerHTML = `<div class="execution-banner"><strong>Approval boundary:</strong> Hours Recon prepared this workspace but did not write Salesforce or Rocketlane. Glean MCP must re-read the records and ask for explicit confirmation immediately before every supported write.</div><div class="execution-grid"><div class="execution-column"><section><h2>Proposed source actions</h2><div class="execution-column">${operations}</div></section><section><h2>Affected records</h2><div class="execution-column">${recordCards}</div></section></div><aside class="execution-column"><article class="execution-card"><h3>Before execution</h3><strong>Required inputs</strong>${inputs}<strong>Connector boundaries</strong>${limitations}<strong>Safety</strong>${notices}</article><article class="execution-card execution-copy"><h3>MCP execution request</h3><p class="source-note">Copy this into Glean. The request requires read-before-write, exact payload review, and confirmation.</p><textarea id="mcpRequest" readonly aria-label="MCP execution request"></textarea><div class="execution-button-row"><button class="button" id="copyMcpRequest" type="button">Copy MCP request</button><a class="button secondary" id="openMcpWorkspace" target="_blank" rel="noreferrer">Open Glean for MCP</a><span class="execution-feedback" id="mcpCopyFeedback"></span></div></article><article class="execution-card execution-copy slack"><h3>Owner follow-up via Slack MCP</h3><p class="source-note">${escapeHtml(slackSetupNote)} ${workspace.recipient_suggestions?.length ? `Suggested from source ownership: ${escapeHtml(workspace.recipient_suggestions.join(' · '))}.` : ''}</p>${handoffRows ? `<div><strong>Time-entry submitter handoffs</strong><div class="handoff-list">${handoffRows}</div><div class="execution-button-row"><button class="button" id="queueAllSlackHandoffs" type="button" ${slackMcpAvailable ? '' : 'disabled'}>Queue all ${handoffs.length} submitter messages</button><span class="source-note">Each person receives only their own flagged entries.</span></div></div>` : ''}<div class="field"><label for="executionRecipient">Slack user, email, @handle, channel, or Slack ID</label><input id="executionRecipient" value="${escapeHtml(workspace.default_recipient || workspace.recipient_role || '')}"></div><textarea id="slackDraft" aria-label="Reviewed Slack message"></textarea><div class="execution-button-row"><button class="button" id="queueSlackDraft" type="button" ${slackMcpAvailable ? '' : 'disabled'}>Queue for Slack MCP</button><button class="button secondary" id="copySlackDraft" type="button">Copy instead</button><span class="execution-feedback" id="slackCopyFeedback"></span></div></article></aside></div>`;
+      $('#executionContent').innerHTML = `<div class="execution-banner"><strong>Approval boundary:</strong> Hours Recon prepared this workspace but did not write Salesforce or Rocketlane. Glean MCP must re-read the records and ask for explicit confirmation immediately before every supported write.</div><div class="execution-grid"><div class="execution-column"><section><h2>Proposed source actions</h2><div class="execution-column">${operations}</div>${sourceFieldEditors ? `<div class="execution-card"><strong>Reviewed write queue</strong><p class="source-note">Replace every &lt;placeholder&gt; with a concrete value. Queueing does not write immediately: Glean Pi will fresh-read the records, show the exact before/after values, and require final confirmation immediately before each write.</p><div class="execution-button-row"><button class="button" id="queueSourceActions" type="button" ${sourceExecutionAvailable ? '' : 'disabled'}>Queue reviewed source actions</button><a class="button secondary" href="https://app.glean.com/chat" target="_blank" rel="noreferrer">Open Glean to execute</a><span class="execution-feedback" id="sourceQueueFeedback"></span></div></div>` : ''}</section><section><h2>Affected records</h2><div class="execution-column">${recordCards}</div></section></div><aside class="execution-column"><article class="execution-card"><h3>Before execution</h3><strong>Required inputs</strong>${inputs}<strong>Connector boundaries</strong>${limitations}<strong>Safety</strong>${notices}</article><article class="execution-card execution-copy"><h3>MCP execution request</h3><p class="source-note">Copy this into Glean. The request requires read-before-write, exact payload review, and confirmation.</p><textarea id="mcpRequest" readonly aria-label="MCP execution request"></textarea><div class="execution-button-row"><button class="button" id="copyMcpRequest" type="button">Copy MCP request</button><a class="button secondary" id="openMcpWorkspace" target="_blank" rel="noreferrer">Open Glean for MCP</a><span class="execution-feedback" id="mcpCopyFeedback"></span></div></article><article class="execution-card execution-copy slack"><h3>Owner follow-up via Slack MCP</h3><p class="source-note">${escapeHtml(slackSetupNote)} ${workspace.recipient_suggestions?.length ? `Suggested from source ownership: ${escapeHtml(workspace.recipient_suggestions.join(' · '))}.` : ''}</p>${handoffRows ? `<div><strong>Time-entry submitter handoffs</strong><div class="handoff-list">${handoffRows}</div><div class="execution-button-row"><button class="button" id="queueAllSlackHandoffs" type="button" ${slackMcpAvailable ? '' : 'disabled'}>Queue all ${handoffs.length} submitter messages</button><span class="source-note">Each person receives only their own flagged entries.</span></div></div>` : ''}<div class="field"><label for="executionRecipient">Slack user, email, @handle, channel, or Slack ID</label><input id="executionRecipient" value="${escapeHtml(workspace.default_recipient || workspace.recipient_role || '')}"></div><textarea id="slackDraft" aria-label="Reviewed Slack message"></textarea><div class="execution-button-row"><button class="button" id="queueSlackDraft" type="button" ${slackMcpAvailable ? '' : 'disabled'}>Queue for Slack MCP</button><button class="button secondary" id="copySlackDraft" type="button">Copy instead</button><span class="execution-feedback" id="slackCopyFeedback"></span></div></article></aside></div>`;
       $('#mcpRequest').value = workspace.mcp_request || '';
       const template = workspace.slack_draft?.message || '';
       const updateSlackPreview = () => { $('#slackDraft').value = template.replaceAll('{{recipient}}', $('#executionRecipient').value.trim() || workspace.recipient_role || 'source owner'); };
@@ -720,6 +734,7 @@
       try { const parsed = new URL(workspace.mcp_workspace_url); if (parsed.protocol === 'https:') mcpUrl = parsed.href; } catch (error) { /* Use the safe default. */ }
       $('#openMcpWorkspace').href = mcpUrl;
       $('#copyMcpRequest').addEventListener('click', copyMcpRequest);
+      if ($('#queueSourceActions')) $('#queueSourceActions').addEventListener('click', queueReviewedSourceActions);
       $('#queueSlackDraft').addEventListener('click', queueExecutionSlackDraft);
       if ($('#queueAllSlackHandoffs')) $('#queueAllSlackHandoffs').addEventListener('click', queueAllSlackHandoffs);
       $('#copySlackDraft').addEventListener('click', copyExecutionSlackDraft);
@@ -769,6 +784,47 @@
           syncRemediationWorkstream(result.workstream);
         }
       } catch (error) { /* The original delivery error remains more useful. */ }
+    }
+
+    async function queueReviewedSourceActions() {
+      const button = $('#queueSourceActions');
+      const current = state.execution;
+      if (!current) return;
+      const editors = [...document.querySelectorAll('[data-source-operation-index]')];
+      const actions = [];
+      try {
+        for (const editor of editors) {
+          const proposedFields = JSON.parse(editor.value);
+          if (!proposedFields || Array.isArray(proposedFields) || typeof proposedFields !== 'object') throw new Error('Each proposed-fields editor must contain a JSON object.');
+          if (/<[^>]+>/.test(JSON.stringify(proposedFields))) throw new Error('Replace every <placeholder> before queueing source actions.');
+          actions.push({ operationIndex: Number(editor.dataset.sourceOperationIndex), proposedFields });
+        }
+      } catch (error) { setError(`Review the proposed source fields: ${error.message}`); return; }
+      if (!actions.length) { setError('No write-capable source actions are available.'); return; }
+      if (!window.confirm(`Queue ${actions.length} reviewed source action${actions.length === 1 ? '' : 's'}? Nothing will be written until Glean Pi performs a fresh read and asks for final confirmation.`)) return;
+      button.disabled = true;
+      setError('');
+      let queued = 0;
+      try {
+        for (const action of actions) {
+          const response = await fetch(`/api/remediation/workstreams/${encodeURIComponent(current.workstreamId)}/source/queue`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Hours-Recon-Action-Token': state.data.remediation_queue?.action_token || '' },
+            body: JSON.stringify({ expected_version: current.version, operation_index: action.operationIndex, proposed_fields: action.proposedFields, confirmed: true }),
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || `Source-action queueing failed (${response.status})`);
+          current.version = Number(result.workstream.version);
+          syncRemediationWorkstream(result.workstream);
+          queued += 1;
+          $('#sourceQueueFeedback').textContent = `Queued ${queued} of ${actions.length}…`;
+        }
+        await loadData();
+        $('#sourceQueueFeedback').textContent = `Queued ${queued} · tell Pi “execute pending Hours Recon source actions”`;
+      } catch (error) {
+        await loadData();
+        setError(`${error.message} ${queued} action${queued === 1 ? '' : 's'} queued before the error; no source write was performed by the dashboard.`);
+      } finally { button.disabled = false; }
     }
 
     async function queueSlackHandoff(current, recipient, message) {

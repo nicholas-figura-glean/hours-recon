@@ -306,12 +306,21 @@ def _path_operations(
     if path_id == "project_linkage.salesforce_account_id.t1":
         mode = "mcp_write"
         for record in records:
+            opportunity_links = list(record.get("opportunity_links", []))
+            if len(opportunity_links) > 1:
+                required_inputs.append(
+                    f"Select the correct Salesforce Opportunity URL for {record.get('account_name')} from the listed candidates."
+                )
             for project_id in record.get("project_ids", []):
+                proposed_fields: Dict[str, Any] = {"externalReferenceId": record.get("account_id")}
+                if len(opportunity_links) == 1:
+                    proposed_fields["Link to Salesforce Opportunity (resolve Rocketlane field ID in preflight)"] = opportunity_links[0]["url"]
                 operations.append(_operation(
                     system="rocketlane", tool="update_project", object_name="Project",
                     record_ids=[str(project_id)],
-                    proposed_fields={"externalReferenceId": record.get("account_id")},
-                    status="ready_after_preflight", preflight=rl_preflight,
+                    proposed_fields=proposed_fields,
+                    status="ready_after_preflight" if len(opportunity_links) <= 1 else "needs_confirmed_opportunity",
+                    preflight=rl_preflight,
                 ))
     elif path_id == "project_linkage.customer_id_crosswalk.t2":
         mode = "local_config"
@@ -467,7 +476,12 @@ def _slack_message(
     unique_links = list({str(link.get("url")): link for link in links if link.get("url")}.values())
     path_id = str(path.get("id") or "")
     if path_id.startswith("project_linkage."):
-        unique_links = [link for link in unique_links if "Salesforce Account" in str(link.get("label")) or "overview" in str(link.get("label"))]
+        unique_links = [
+            link for link in unique_links
+            if "Salesforce Account" in str(link.get("label"))
+            or "Salesforce Opportunity" in str(link.get("label"))
+            or "overview" in str(link.get("label"))
+        ]
     elif path_id.startswith("time_quality."):
         unique_links = [link for link in unique_links if "overview" in str(link.get("label")) or "time entries" in str(link.get("label"))]
     elif path_id.startswith(("hours_mapping.", "service_period.", "entitlement_source.")):
@@ -482,7 +496,12 @@ def _slack_message(
 
     if path_id == "project_linkage.salesforce_account_id.t1":
         exact_changes = [
-            (str(project_id), str(record.get("account_id") or ""), _safe_text(record.get("account_name"), 120))
+            {
+                "project_id": str(project_id),
+                "account_id": str(record.get("account_id") or ""),
+                "account_name": _safe_text(record.get("account_name"), 120),
+                "opportunity_links": list(record.get("opportunity_links", [])),
+            }
             for record in records
             for project_id in record.get("project_ids", [])
             if project_id and record.get("account_id")
@@ -490,13 +509,25 @@ def _slack_message(
         if exact_changes:
             verified_lines = []
             change_lines = []
-            for project_id, account_id, account_name in exact_changes[:4]:
+            for change in exact_changes[:4]:
+                project_id = change["project_id"]
+                account_id = change["account_id"]
+                account_name = change["account_name"]
+                opportunity_links = change["opportunity_links"]
                 verified_lines.append(
                     f"- Rocketlane project {project_id} currently links to {account_name or 'the account'} "
                     "only by normalized customer name; it does not store the Salesforce Account ID."
                 )
                 verified_lines.append(f"- The verified Salesforce Account ID is {account_id}.")
                 change_lines.append(f"- Set Rocketlane project {project_id} `externalReferenceId` to `{account_id}`.")
+                if len(opportunity_links) == 1:
+                    change_lines.append(
+                        f"- Set its `Link to Salesforce Opportunity` field to `{opportunity_links[0]['url']}`."
+                    )
+                elif len(opportunity_links) > 1:
+                    change_lines.append(
+                        "- Select the correct `Link to Salesforce Opportunity` value from the candidate URLs under Records; do not guess."
+                    )
             verified_lines = list(dict.fromkeys(verified_lines))[:3]
             deadline = f" by {due}" if due else ""
             return (
@@ -612,6 +643,9 @@ def build_execution_workspace(
             entry.get("id") for entry in entries
             if str(entry.get("approval_status") or "").upper() in {"SUBMITTED", "NOT_SUBMITTED", "PENDING", "UNKNOWN"}
         )
+        record_links = _record_links(
+            account, salesforce_base_url=salesforce_base, rocketlane_base_url=rocketlane_base,
+        )
         records.append({
             "account_id": account_id,
             "account_name": _safe_text(account.get("name") or instance.get("account_name") or account_id, 180),
@@ -620,13 +654,14 @@ def build_execution_workspace(
             "findings": _findings(instance),
             "evidence_refs": refs,
             "opportunity_ids": opportunity_ids,
+            "opportunity_links": [link for link in record_links if link.get("kind") == "opportunity"],
             "project_ids": project_ids,
             "customer_ids": customer_ids,
             "time_entry_ids": pending_ids,
             "missing_activity_entry_ids": _unique(entry.get("id") for entry in entries if not _safe_text(entry.get("activity_name"))),
             "time_submitter_handoffs": _time_submitter_handoffs(account) if path_id.startswith("time_quality.") else [],
             "owner_suggestions": _owner_suggestions(account, path_id),
-            "links": _record_links(account, salesforce_base_url=salesforce_base, rocketlane_base_url=rocketlane_base),
+            "links": record_links,
         })
     operations, required_inputs, limitations, execution_mode = _path_operations(path_id, records)
     primary_owner = str(path.get("primary_owner") or workstream.get("primary_owner") or "")

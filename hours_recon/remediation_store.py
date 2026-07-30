@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 from .evidence import TIER_RANK
 from .remediation import METRIC_FIELDS, PRIORITY_RANK, build_workstreams, format_slack_followup
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 ACTIVE_WORKSTREAM_STATUSES = {"open", "acknowledged", "in_progress", "pending_validation", "snoozed"}
 
 
@@ -70,7 +70,7 @@ class RemediationStore:
         connection = self._connect()
         try:
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, 1, 2, SCHEMA_VERSION}:
+            if version not in {0, 1, 2, 3, SCHEMA_VERSION}:
                 raise QueueError(f"Unsupported remediation database schema version {version}.")
             if version == 1:
                 # The workstream planner intentionally starts clean: v1 cases had no
@@ -288,7 +288,35 @@ class RemediationStore:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_slack_outbox_recipient_active
                     ON slack_outbox(workstream_fingerprint, recipient_query COLLATE NOCASE)
                     WHERE status IN ('pending', 'sending', 'needs_review');
-                PRAGMA user_version = 3;
+                CREATE TABLE IF NOT EXISTS source_action_outbox (
+                    id TEXT PRIMARY KEY,
+                    workstream_fingerprint TEXT NOT NULL REFERENCES workstreams(fingerprint) ON DELETE CASCADE,
+                    scope_id TEXT NOT NULL,
+                    portfolio_id TEXT NOT NULL,
+                    execution_id TEXT NOT NULL,
+                    path_id TEXT NOT NULL,
+                    operation_index INTEGER NOT NULL,
+                    system TEXT NOT NULL,
+                    tool TEXT NOT NULL,
+                    object_name TEXT NOT NULL,
+                    record_ids_json TEXT NOT NULL,
+                    proposed_fields_json TEXT NOT NULL,
+                    preflight_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    queued_at TEXT NOT NULL,
+                    claimed_at TEXT,
+                    completed_at TEXT,
+                    source_links_json TEXT,
+                    result_summary TEXT,
+                    error TEXT,
+                    version INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE INDEX IF NOT EXISTS idx_source_action_outbox_scope_status
+                    ON source_action_outbox(scope_id, portfolio_id, status, queued_at);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_source_action_outbox_active_operation
+                    ON source_action_outbox(workstream_fingerprint, operation_index)
+                    WHERE status IN ('pending', 'executing', 'needs_review');
+                PRAGMA user_version = 4;
                 """
             )
             connection.commit()
@@ -412,6 +440,12 @@ class RemediationStore:
                         event_type = "incomplete_retrieval_preserved_validation"
                     connection.execute(
                         """UPDATE slack_outbox SET status='cancelled', message_text='',
+                           error='Superseded by a new source observation', version=version+1
+                           WHERE workstream_fingerprint=? AND status='pending'""",
+                        (workstream_id,),
+                    )
+                    connection.execute(
+                        """UPDATE source_action_outbox SET status='cancelled',
                            error='Superseded by a new source observation', version=version+1
                            WHERE workstream_fingerprint=? AND status='pending'""",
                         (workstream_id,),
@@ -746,6 +780,12 @@ class RemediationStore:
         ).fetchall()
         result["slack_outboxes"] = [dict(item) for item in outbox_rows]
         result["slack_outbox"] = result["slack_outboxes"][0] if result["slack_outboxes"] else None
+        source_rows = connection.execute(
+            """SELECT * FROM source_action_outbox WHERE workstream_fingerprint=?
+               ORDER BY queued_at DESC, id DESC""",
+            (row["fingerprint"],),
+        ).fetchall()
+        result["source_action_outbox"] = [self._serialize_source_action(item) for item in source_rows]
         if include_events:
             event_rows = connection.execute(
                 """SELECT event_type, actor, created_at, payload_json, instance_fingerprint
@@ -1313,6 +1353,338 @@ class RemediationStore:
         finally:
             connection.close()
 
+    @staticmethod
+    def _contains_placeholder(value: Any) -> bool:
+        if isinstance(value, Mapping):
+            return any(RemediationStore._contains_placeholder(item) for item in value.values())
+        if isinstance(value, (list, tuple)):
+            return any(RemediationStore._contains_placeholder(item) for item in value)
+        return isinstance(value, str) and bool(re.search(r"<[^>]+>", value))
+
+    @staticmethod
+    def _serialize_source_action(row: sqlite3.Row) -> Dict[str, Any]:
+        result = dict(row)
+        for field, fallback in (
+            ("record_ids_json", []), ("proposed_fields_json", {}),
+            ("preflight_json", []), ("source_links_json", []),
+        ):
+            result[field.removesuffix("_json")] = _loads(result.pop(field, None), fallback)
+        return result
+
+    @staticmethod
+    def _select_source_action(
+        connection: sqlite3.Connection,
+        outbox_id: str,
+        *,
+        scope_id: str,
+        portfolio_id: str,
+        account_ids: Optional[Iterable[str]],
+    ) -> Optional[sqlite3.Row]:
+        query = "SELECT * FROM source_action_outbox WHERE id=? AND scope_id=? AND portfolio_id=?"
+        values: List[Any] = [outbox_id, scope_id, portfolio_id]
+        if account_ids is not None:
+            owned = sorted({str(value) for value in account_ids})
+            if not owned:
+                query += " AND 1=0"
+            else:
+                query += (
+                    " AND EXISTS (SELECT 1 FROM instances oi WHERE "
+                    "oi.workstream_fingerprint=source_action_outbox.workstream_fingerprint AND oi.account_id IN ("
+                    + ",".join("?" for _ in owned) + "))"
+                )
+                values.extend(owned)
+        return connection.execute(query, values).fetchone()
+
+    def list_source_actions(
+        self,
+        *,
+        scope_id: str,
+        portfolio_id: str = "local-default",
+        status: Optional[str] = "pending",
+        account_ids: Optional[Iterable[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        allowed = {"pending", "executing", "needs_review", "completed", "cancelled"}
+        if status and status not in allowed:
+            raise QueueValidationError("Select a valid source-action outbox status.")
+        connection = self._connect()
+        try:
+            query = "SELECT * FROM source_action_outbox WHERE scope_id=? AND portfolio_id=?"
+            values: List[Any] = [scope_id, portfolio_id]
+            if status:
+                query += " AND status=?"
+                values.append(status)
+            if account_ids is not None:
+                owned = sorted({str(value) for value in account_ids})
+                if not owned:
+                    query += " AND 1=0"
+                else:
+                    query += (
+                        " AND EXISTS (SELECT 1 FROM instances oi WHERE "
+                        "oi.workstream_fingerprint=source_action_outbox.workstream_fingerprint AND oi.account_id IN ("
+                        + ",".join("?" for _ in owned) + "))"
+                    )
+                    values.extend(owned)
+            query += " ORDER BY queued_at, id"
+            return [self._serialize_source_action(row) for row in connection.execute(query, values).fetchall()]
+        finally:
+            connection.close()
+
+    def queue_source_action(
+        self,
+        workstream_id: str,
+        *,
+        scope_id: str,
+        portfolio_id: str,
+        account_ids: Optional[Iterable[str]],
+        expected_version: int,
+        operation_index: int,
+        proposed_fields: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        supported_tools = {"update_project", "update_time_entry", "update_salesforce_opportunity", "SALESFORCE_UPDATE_ACCOUNT"}
+        if operation_index < 0:
+            raise QueueValidationError("Select a valid proposed source action.")
+        reviewed_fields = dict(proposed_fields or {})
+        if not reviewed_fields or self._contains_placeholder(reviewed_fields):
+            raise QueueValidationError("Replace every placeholder with a concrete reviewed value before queueing the source action.")
+        if len(_json(reviewed_fields).encode("utf-8")) > 50_000:
+            raise QueueValidationError("The reviewed source fields are too large.")
+        owned = sorted({str(value) for value in account_ids}) if account_ids is not None else None
+        connection = self._connect()
+        outbox: Optional[Dict[str, Any]] = None
+        idempotent = False
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            query = "SELECT * FROM workstreams WHERE fingerprint=? AND scope_id=? AND portfolio_id=?"
+            params: List[Any] = [workstream_id, scope_id, portfolio_id]
+            if owned is not None:
+                if owned:
+                    query += (
+                        " AND EXISTS (SELECT 1 FROM instances oi WHERE oi.workstream_fingerprint=workstreams.fingerprint "
+                        "AND oi.account_id IN (" + ",".join("?" for _ in owned) + "))"
+                    )
+                    params.extend(owned)
+                else:
+                    query += " AND 1=0"
+            workstream = connection.execute(query, params).fetchone()
+            if not workstream:
+                raise QueueValidationError("Unknown remediation workstream.")
+            if int(workstream["version"]) != int(expected_version):
+                raise QueueConflict("The remediation workstream changed; reload before queueing source actions.")
+            plan = _loads(workstream["execution_plan_json"], {})
+            operations = list(plan.get("operations") or []) if isinstance(plan, Mapping) else []
+            if str(workstream["execution_path_id"] or "") != str(workstream["selected_path_id"] or "") or operation_index >= len(operations):
+                raise QueueValidationError("Open and review the current selected source-action plan before queueing it.")
+            operation = operations[operation_index]
+            tool = str(operation.get("tool") or "")
+            if tool not in supported_tools:
+                raise QueueValidationError("This proposed action does not have a supported authenticated write tool.")
+            template_fields = operation.get("proposed_fields")
+            if not isinstance(template_fields, Mapping) or set(reviewed_fields) != set(template_fields):
+                raise QueueValidationError("Reviewed source field names must exactly match the server-generated action.")
+            record_ids = sorted({str(value) for value in operation.get("record_ids", []) if value})
+            if not record_ids:
+                raise QueueValidationError("The proposed source action has no target record IDs.")
+            action_identity = {
+                "execution_id": plan.get("execution_id"), "operation_index": operation_index,
+                "tool": tool, "record_ids": record_ids, "proposed_fields": reviewed_fields,
+            }
+            outbox_id = "hsa1_" + sha256(_json(action_identity).encode("utf-8")).hexdigest()
+            existing = connection.execute("SELECT * FROM source_action_outbox WHERE id=?", (outbox_id,)).fetchone()
+            if existing and str(existing["status"]) in {"pending", "executing", "needs_review", "completed"}:
+                outbox = self._serialize_source_action(existing)
+                idempotent = True
+                connection.commit()
+            else:
+                uncertain = connection.execute(
+                    """SELECT id FROM source_action_outbox WHERE workstream_fingerprint=?
+                       AND operation_index=? AND status IN ('executing','needs_review') LIMIT 1""",
+                    (workstream_id, operation_index),
+                ).fetchone()
+                if uncertain:
+                    raise QueueConflict("Reconcile the existing source write before queueing this action again.")
+                connection.execute(
+                    """UPDATE source_action_outbox SET status='cancelled',
+                       error='Superseded by a newly reviewed source action', version=version+1
+                       WHERE workstream_fingerprint=? AND operation_index=? AND status='pending'""",
+                    (workstream_id, operation_index),
+                )
+                queued_at = _utc_now()
+                values = (
+                    outbox_id, workstream_id, scope_id, portfolio_id, str(plan.get("execution_id") or ""),
+                    str(workstream["selected_path_id"] or ""), operation_index,
+                    str(operation.get("system") or ""), tool, str(operation.get("object") or ""),
+                    _json(record_ids), _json(reviewed_fields), _json(operation.get("preflight") or []), queued_at,
+                )
+                if existing:
+                    connection.execute(
+                        """UPDATE source_action_outbox SET workstream_fingerprint=?, scope_id=?, portfolio_id=?,
+                           execution_id=?, path_id=?, operation_index=?, system=?, tool=?, object_name=?,
+                           record_ids_json=?, proposed_fields_json=?, preflight_json=?, status='pending', queued_at=?,
+                           claimed_at=NULL, completed_at=NULL, source_links_json=NULL, result_summary=NULL, error=NULL,
+                           version=version+1 WHERE id=?""",
+                        values[1:] + (outbox_id,),
+                    )
+                else:
+                    connection.execute(
+                        """INSERT INTO source_action_outbox(
+                               id, workstream_fingerprint, scope_id, portfolio_id, execution_id, path_id,
+                               operation_index, system, tool, object_name, record_ids_json, proposed_fields_json,
+                               preflight_json, status, queued_at
+                           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?)""",
+                        values,
+                    )
+                connection.execute("UPDATE workstreams SET version=version+1 WHERE fingerprint=?", (workstream_id,))
+                self._event(
+                    connection, workstream_id=workstream_id, instance_id=None,
+                    event_type="source_action_queued", actor="local_dashboard",
+                    payload={"outbox_id": outbox_id, "operation_index": operation_index, "tool": tool, "record_ids": record_ids},
+                )
+                connection.commit()
+                outbox = self._serialize_source_action(
+                    connection.execute("SELECT * FROM source_action_outbox WHERE id=?", (outbox_id,)).fetchone()
+                )
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        workstream_result = self.get_workstream(
+            workstream_id, scope_id=scope_id, portfolio_id=portfolio_id, account_ids=owned,
+        )
+        if not workstream_result or not outbox:
+            raise QueueError("The queued source action is unavailable.")
+        return {"workstream": workstream_result, "outbox": outbox, "execution": "already_" + outbox["status"] if idempotent else "queued_not_executed"}
+
+    def claim_source_action(
+        self, outbox_id: str, *, scope_id: str, portfolio_id: str, expected_version: int,
+        account_ids: Optional[Iterable[str]] = None,
+    ) -> Dict[str, Any]:
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._select_source_action(connection, outbox_id, scope_id=scope_id, portfolio_id=portfolio_id, account_ids=account_ids)
+            if not row:
+                raise QueueValidationError("Unknown source-action outbox item.")
+            if int(row["version"]) != int(expected_version):
+                raise QueueConflict("The source action changed; list pending actions again.")
+            if str(row["status"]) != "pending":
+                raise QueueValidationError(f"Cannot claim a {row['status']} source action.")
+            connection.execute(
+                "UPDATE source_action_outbox SET status='executing', claimed_at=?, version=version+1 WHERE id=?",
+                (_utc_now(), outbox_id),
+            )
+            self._event(connection, workstream_id=str(row["workstream_fingerprint"]), instance_id=None,
+                        event_type="source_action_claimed", actor="glean_pi", payload={"outbox_id": outbox_id})
+            connection.commit()
+            return self._serialize_source_action(connection.execute("SELECT * FROM source_action_outbox WHERE id=?", (outbox_id,)).fetchone())
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def complete_source_action(
+        self, outbox_id: str, *, scope_id: str, portfolio_id: str, expected_version: int,
+        source_links: Sequence[str], result_summary: str, account_ids: Optional[Iterable[str]] = None,
+    ) -> Dict[str, Any]:
+        links = sorted({str(value).strip() for value in source_links if str(value).strip()})
+        allowed_host_suffixes = (".salesforce.com", ".force.com", ".rocketlane.com")
+        if not links or any(
+            urlsplit(value).scheme != "https"
+            or not any((urlsplit(value).hostname or "").lower().endswith(suffix) for suffix in allowed_host_suffixes)
+            for value in links
+        ):
+            raise QueueValidationError("Record at least one trusted Salesforce or Rocketlane HTTPS source link after the post-write read.")
+        summary = str(result_summary or "").strip()[:1000]
+        if not summary:
+            raise QueueValidationError("Record the observed post-write result.")
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._select_source_action(connection, outbox_id, scope_id=scope_id, portfolio_id=portfolio_id, account_ids=account_ids)
+            if not row:
+                raise QueueValidationError("Unknown source-action outbox item.")
+            if int(row["version"]) != int(expected_version):
+                raise QueueConflict("The source action changed; do not record completion twice.")
+            if str(row["status"]) not in {"executing", "needs_review"}:
+                raise QueueValidationError(f"Cannot complete a {row['status']} source action.")
+            completed_at = _utc_now()
+            connection.execute(
+                """UPDATE source_action_outbox SET status='completed', completed_at=?, source_links_json=?,
+                   result_summary=?, error=NULL, version=version+1 WHERE id=?""",
+                (completed_at, _json(links), summary, outbox_id),
+            )
+            connection.execute("UPDATE workstreams SET version=version+1 WHERE fingerprint=?", (row["workstream_fingerprint"],))
+            self._event(connection, workstream_id=str(row["workstream_fingerprint"]), instance_id=None,
+                        event_type="source_action_completed", actor="glean_pi_mcp",
+                        payload={"outbox_id": outbox_id, "source_links": links, "result": summary})
+            connection.commit()
+            return self._serialize_source_action(connection.execute("SELECT * FROM source_action_outbox WHERE id=?", (outbox_id,)).fetchone())
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def mark_source_action_uncertain(
+        self, outbox_id: str, *, scope_id: str, portfolio_id: str, expected_version: int,
+        error: str, account_ids: Optional[Iterable[str]] = None,
+    ) -> Dict[str, Any]:
+        reason = str(error or "").strip()[:500]
+        if not reason:
+            raise QueueValidationError("Describe why the source write needs review.")
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._select_source_action(connection, outbox_id, scope_id=scope_id, portfolio_id=portfolio_id, account_ids=account_ids)
+            if not row or int(row["version"]) != int(expected_version):
+                raise QueueConflict("The source action changed; list it again before updating.")
+            if str(row["status"]) != "executing":
+                raise QueueValidationError(f"Cannot flag a {row['status']} source action for review.")
+            connection.execute("UPDATE source_action_outbox SET status='needs_review', error=?, version=version+1 WHERE id=?", (reason, outbox_id))
+            connection.execute("UPDATE workstreams SET version=version+1 WHERE fingerprint=?", (row["workstream_fingerprint"],))
+            self._event(connection, workstream_id=str(row["workstream_fingerprint"]), instance_id=None,
+                        event_type="source_action_uncertain", actor="glean_pi_mcp", payload={"outbox_id": outbox_id, "error": reason})
+            connection.commit()
+            return self._serialize_source_action(connection.execute("SELECT * FROM source_action_outbox WHERE id=?", (outbox_id,)).fetchone())
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def retry_source_action(
+        self, outbox_id: str, *, scope_id: str, portfolio_id: str, expected_version: int,
+        confirmed_not_applied: bool, account_ids: Optional[Iterable[str]] = None,
+    ) -> Dict[str, Any]:
+        if confirmed_not_applied is not True:
+            raise QueueValidationError("Confirm a fresh read proved the source values were not applied before retrying.")
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._select_source_action(connection, outbox_id, scope_id=scope_id, portfolio_id=portfolio_id, account_ids=account_ids)
+            if not row:
+                raise QueueValidationError("Unknown source-action outbox item.")
+            if int(row["version"]) != int(expected_version):
+                raise QueueConflict("The source action changed; list it again before retrying.")
+            if str(row["status"]) != "needs_review":
+                raise QueueValidationError(f"Cannot retry a {row['status']} source action.")
+            connection.execute(
+                "UPDATE source_action_outbox SET status='pending', claimed_at=NULL, error=NULL, version=version+1 WHERE id=?",
+                (outbox_id,),
+            )
+            connection.execute("UPDATE workstreams SET version=version+1 WHERE fingerprint=?", (row["workstream_fingerprint"],))
+            self._event(connection, workstream_id=str(row["workstream_fingerprint"]), instance_id=None,
+                        event_type="source_action_retry_authorized", actor="glean_pi_mcp",
+                        payload={"outbox_id": outbox_id, "fresh_read_confirmed_not_applied": True})
+            connection.commit()
+            return self._serialize_source_action(connection.execute("SELECT * FROM source_action_outbox WHERE id=?", (outbox_id,)).fetchone())
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def action(
         self,
         workstream_id: str,
@@ -1374,6 +1746,12 @@ class RemediationStore:
                     raise QueueValidationError("Select a valid remediation path.")
                 connection.execute(
                     """UPDATE slack_outbox SET status='cancelled', message_text='',
+                       error='Superseded by a selected-path change', version=version+1
+                       WHERE workstream_fingerprint=? AND status='pending'""",
+                    (workstream_id,),
+                )
+                connection.execute(
+                    """UPDATE source_action_outbox SET status='cancelled',
                        error='Superseded by a selected-path change', version=version+1
                        WHERE workstream_fingerprint=? AND status='pending'""",
                     (workstream_id,),
