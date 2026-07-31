@@ -13,7 +13,9 @@
       --artifact-surface-subtle: #eef1f4;
       --artifact-text: #14212b;
       --artifact-muted: #60717e;
+      --artifact-faint: #8494a0;
       --artifact-border: #d6dde3;
+      --artifact-border-soft: #e6ebef;
       --artifact-accent: #0b6b62;
       --artifact-accent-soft: #dcefeb;
       --artifact-danger: #a93737;
@@ -33,8 +35,10 @@
       --artifact-space-4: 16px;
       --artifact-space-5: 24px;
       --artifact-space-6: 32px;
+      --artifact-space-7: 48px;
       --artifact-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       --artifact-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --artifact-shadow: 0 18px 48px rgba(9, 22, 30, .14);
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -44,7 +48,9 @@
         --artifact-surface-subtle: #202b31;
         --artifact-text: #edf2f4;
         --artifact-muted: #a5b3bb;
+        --artifact-faint: #7f8f99;
         --artifact-border: #35434b;
+        --artifact-border-soft: #2a353b;
         --artifact-accent: #62c4b4;
         --artifact-accent-soft: #1c413d;
         --artifact-danger: #f08a84;
@@ -57,121 +63,201 @@
         --artifact-healthy-soft: #233c2a;
         --artifact-info: #80b4e2;
         --artifact-info-soft: #20394f;
+        --artifact-shadow: 0 18px 48px rgba(0, 0, 0, .45);
       }
     }
     * { box-sizing: border-box; }
     body { margin: 0; background: var(--artifact-bg); color: var(--artifact-text); font-family: var(--artifact-font); font-size: 14px; line-height: 1.45; }
     button, input, select, textarea { font: inherit; }
     button, input, select, textarea, [tabindex] { outline: none; }
-    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline: 3px solid color-mix(in srgb, var(--artifact-accent) 45%, transparent); outline-offset: 2px; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline: 3px solid color-mix(in srgb, var(--artifact-accent) 45%, transparent); outline-offset: 2px; }
     button { cursor: pointer; }
-    button:disabled { cursor: wait; opacity: .65; }
-    .shell { max-width: 1540px; margin: 0 auto; padding: var(--artifact-space-5); }
-    .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--artifact-space-5); margin-bottom: var(--artifact-space-5); }
-    .eyebrow { color: var(--artifact-accent); font-size: 12px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
-    h1 { font-size: clamp(24px, 4vw, 36px); letter-spacing: -.035em; line-height: 1.1; margin: 3px 0 6px; }
-    h2 { font-size: 18px; letter-spacing: -.015em; margin: 0; }
-    h3 { font-size: 15px; margin: 0; }
+    button:disabled { cursor: wait; opacity: .6; }
     p { margin: 0; }
-    .subtitle { color: var(--artifact-muted); max-width: 780px; }
+    h1 { font-size: clamp(22px, 3vw, 28px); letter-spacing: -.03em; line-height: 1.1; margin: 2px 0 4px; }
+    h2 { font-size: 17px; letter-spacing: -.015em; margin: 0; }
+    h3 { font-size: 14px; margin: 0; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+    .shell { max-width: 1360px; margin: 0 auto; padding: var(--artifact-space-5) var(--artifact-space-5) var(--artifact-space-7); }
+
+    /* Header */
+    .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--artifact-space-5); margin-bottom: var(--artifact-space-4); }
+    .eyebrow { color: var(--artifact-accent); font-size: 11px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
+    .subtitle { color: var(--artifact-muted); }
     .actions { display: flex; align-items: center; gap: var(--artifact-space-3); flex-wrap: wrap; justify-content: flex-end; }
-    .button { min-height: 40px; border: 1px solid var(--artifact-accent); border-radius: 8px; padding: 8px 14px; color: #fff; background: #0b6b62; font-weight: 700; }
+    .button { min-height: 38px; border: 1px solid var(--artifact-accent); border-radius: 8px; padding: 8px 14px; color: #fff; background: #0b6b62; font-weight: 650; }
     @media (prefers-color-scheme: dark) { .button { color: #10201d; background: var(--artifact-accent); } }
-    .button.secondary { color: var(--artifact-text); background: var(--artifact-surface); border-color: var(--artifact-border); }
-    .button.tiny { min-height: 30px; padding: 4px 9px; font-size: 12px; }
-    .pill { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--artifact-border); background: var(--artifact-surface); color: var(--artifact-muted); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
-    .pill.live, .pill.mcp { color: var(--artifact-healthy); background: var(--artifact-healthy-soft); border-color: color-mix(in srgb, var(--artifact-healthy) 35%, var(--artifact-border)); }
-    .pill.demo { color: var(--artifact-warning); background: var(--artifact-warning-soft); border-color: color-mix(in srgb, var(--artifact-warning) 35%, var(--artifact-border)); }
-    .tier-badge { display: inline-flex; align-items: center; min-height: 23px; padding: 3px 7px; border-radius: 6px; font-size: 11px; font-weight: 780; letter-spacing: .035em; white-space: nowrap; }
-    .tier-badge.t1, .tier-badge.t2 { color: var(--artifact-healthy); background: var(--artifact-healthy-soft); }
-    .tier-badge.t3 { color: var(--artifact-warning); background: var(--artifact-warning-soft); }
-    .tier-badge.t4 { color: var(--artifact-danger); background: var(--artifact-danger-soft); }
-    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-    .notice, .error { display: none; border: 1px solid var(--artifact-border); border-radius: var(--artifact-radius); padding: 12px 14px; margin-bottom: var(--artifact-space-4); }
-    .notice.show, .error.show { display: flex; gap: 10px; align-items: flex-start; }
-    .notice { color: var(--artifact-warning); background: var(--artifact-warning-soft); }
-    .error { color: var(--artifact-danger); background: var(--artifact-danger-soft); }
-    .metrics { display: grid; grid-template-columns: repeat(6, minmax(145px, 1fr)); gap: 1px; background: var(--artifact-border); border: 1px solid var(--artifact-border); border-radius: var(--artifact-radius); overflow: hidden; margin-bottom: var(--artifact-space-5); }
-    .metric { min-height: 112px; padding: var(--artifact-space-4); background: var(--artifact-surface); display: flex; flex-direction: column; justify-content: space-between; }
-    .metric.primary { background: var(--artifact-accent-soft); }
-    .metric-label { color: var(--artifact-muted); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .055em; }
-    .metric-value { font-size: clamp(24px, 3vw, 34px); font-variant-numeric: tabular-nums; font-weight: 760; letter-spacing: -.04em; line-height: 1; }
-    .metric-note { color: var(--artifact-muted); font-size: 12px; }
-    .overview-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(300px, .75fr); gap: var(--artifact-space-4); margin-bottom: var(--artifact-space-5); }
+    .button.secondary { color: var(--artifact-text); background: var(--artifact-surface); border-color: var(--artifact-border); font-weight: 600; }
+    .button.tiny { min-height: 30px; padding: 4px 10px; font-size: 12px; }
+    .button.quiet { border-color: transparent; background: transparent; color: var(--artifact-accent); }
+    .link-button { border: 0; padding: 0; background: none; color: inherit; font: inherit; font-weight: 650; text-align: left; }
+    .link-button:hover { text-decoration: underline; }
+
+    /* Sync chip replaces the raw mode pill */
+    .sync { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 4px 11px; border-radius: 999px; border: 1px solid var(--artifact-border); background: var(--artifact-surface); color: var(--artifact-muted); font-size: 12px; font-weight: 600; }
+    .sync .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+    .sync.current { color: var(--artifact-healthy); background: var(--artifact-healthy-soft); border-color: color-mix(in srgb, var(--artifact-healthy) 30%, var(--artifact-border)); }
+    .sync.stale, .sync.incomplete, .sync.unverified_scope, .sync.demo, .sync.unknown { color: var(--artifact-warning); background: var(--artifact-warning-soft); border-color: color-mix(in srgb, var(--artifact-warning) 30%, var(--artifact-border)); }
+
+    .pill { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--artifact-border); background: var(--artifact-surface); color: var(--artifact-muted); font-size: 11px; font-weight: 650; }
+    .pill.live { color: var(--artifact-healthy); background: var(--artifact-healthy-soft); border-color: color-mix(in srgb, var(--artifact-healthy) 30%, var(--artifact-border)); }
+    .pill.demo { color: var(--artifact-warning); background: var(--artifact-warning-soft); border-color: color-mix(in srgb, var(--artifact-warning) 30%, var(--artifact-border)); }
+    .pill.mcp { color: var(--artifact-accent); background: var(--artifact-accent-soft); border-color: color-mix(in srgb, var(--artifact-accent) 30%, var(--artifact-border)); }
+
+    /* Banners */
+    .banner { display: none; gap: 12px; align-items: flex-start; border: 1px solid var(--artifact-border); border-radius: var(--artifact-radius); padding: 13px 15px; margin-bottom: var(--artifact-space-4); }
+    .banner.show { display: flex; }
+    .banner-body { display: grid; gap: 3px; flex: 1; min-width: 0; }
+    .banner-body strong { font-weight: 700; }
+    .banner-body p { font-size: 13px; opacity: .92; }
+    .banner .button { flex: none; }
+    .banner.warn { color: var(--artifact-warning); background: var(--artifact-warning-soft); border-color: color-mix(in srgb, var(--artifact-warning) 30%, var(--artifact-border)); }
+    .banner.warn .button.secondary { color: var(--artifact-warning); border-color: color-mix(in srgb, var(--artifact-warning) 45%, var(--artifact-border)); background: transparent; }
+    .banner.danger { color: var(--artifact-danger); background: var(--artifact-danger-soft); border-color: color-mix(in srgb, var(--artifact-danger) 30%, var(--artifact-border)); }
+
+    /* Hero */
+    .hero { display: grid; grid-template-columns: minmax(260px, .9fr) minmax(0, 1.6fr); gap: var(--artifact-space-5); align-items: center; padding: var(--artifact-space-5); background: var(--artifact-surface); border: 1px solid var(--artifact-border); border-radius: var(--artifact-radius); }
+    .hero-label { color: var(--artifact-muted); font-size: 12px; font-weight: 680; text-transform: uppercase; letter-spacing: .06em; }
+    .hero-value { font-size: clamp(40px, 6vw, 60px); font-variant-numeric: tabular-nums; font-weight: 700; letter-spacing: -.045em; line-height: 1.02; margin: 4px 0 6px; }
+    .hero-value .unit { font-size: .42em; font-weight: 650; letter-spacing: -.01em; color: var(--artifact-muted); margin-left: 4px; }
+    .hero-context { color: var(--artifact-muted); font-size: 13px; }
+    .hero-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--artifact-border-soft); border: 1px solid var(--artifact-border-soft); border-radius: 8px; overflow: hidden; }
+    .hero-stat { padding: 13px 14px; background: var(--artifact-surface); display: grid; gap: 3px; align-content: start; }
+    .hero-stat span { color: var(--artifact-muted); font-size: 12px; }
+    .hero-stat strong { font-size: 22px; font-variant-numeric: tabular-nums; font-weight: 680; letter-spacing: -.025em; }
+    .hero-stat.alert strong { color: var(--artifact-danger); }
+    .hero-footnote { display: flex; gap: 16px; flex-wrap: wrap; color: var(--artifact-muted); font-size: 12px; margin: 10px 2px var(--artifact-space-5); }
+    .delta { font-size: 12px; font-weight: 650; font-variant-numeric: tabular-nums; }
+    .delta.up-bad, .delta.down-bad { color: var(--artifact-danger); }
+    .delta.up-good, .delta.down-good { color: var(--artifact-healthy); }
+    .delta.flat { color: var(--artifact-faint); }
+
+    /* Sections */
+    .section { margin-bottom: var(--artifact-space-5); }
+    .section-title { display: flex; align-items: baseline; justify-content: space-between; gap: var(--artifact-space-4); margin-bottom: var(--artifact-space-3); }
+    .section-title p { color: var(--artifact-muted); font-size: 12px; }
     .panel { background: var(--artifact-surface); border: 1px solid var(--artifact-border); border-radius: var(--artifact-radius); }
     .panel-head { display: flex; align-items: center; justify-content: space-between; gap: var(--artifact-space-3); padding: var(--artifact-space-4); border-bottom: 1px solid var(--artifact-border); }
     .panel-body { padding: var(--artifact-space-4); }
     .source-note { color: var(--artifact-muted); font-size: 12px; }
-    .risk-bars { display: grid; gap: 10px; }
-    .risk-row { display: grid; grid-template-columns: 80px minmax(80px, 1fr) 110px; align-items: center; gap: 10px; }
-    .bar-track { height: 10px; background: var(--artifact-surface-subtle); border-radius: 999px; overflow: hidden; }
-    .bar-fill { height: 100%; min-width: 2px; border-radius: inherit; background: var(--artifact-info); }
-    .bar-fill.overage, .bar-fill.expired, .bar-fill.critical { background: var(--artifact-danger); }
-    .bar-fill.high { background: var(--artifact-warning); }
-    .bar-fill.medium { background: var(--artifact-medium); }
-    .bar-fill.healthy { background: var(--artifact-healthy); }
-    .bar-value { text-align: right; color: var(--artifact-muted); font-variant-numeric: tabular-nums; }
-    .weekly-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--artifact-space-3); }
-    .weekly-stat { background: var(--artifact-surface-subtle); border-radius: 8px; padding: 14px; }
-    .weekly-stat strong { display: block; font-size: 26px; font-variant-numeric: tabular-nums; }
-    .weekly-stat span { color: var(--artifact-muted); font-size: 12px; }
-    .section { margin-bottom: var(--artifact-space-5); }
-    .section-title { display: flex; align-items: end; justify-content: space-between; gap: var(--artifact-space-4); margin-bottom: var(--artifact-space-3); }
-    .controls { display: grid; grid-template-columns: minmax(220px, 1fr) 180px 180px auto; gap: var(--artifact-space-3); padding: var(--artifact-space-4); border-bottom: 1px solid var(--artifact-border); }
+    .empty { padding: var(--artifact-space-5); color: var(--artifact-muted); text-align: center; }
+    .empty strong { display: block; color: var(--artifact-text); margin-bottom: 4px; }
+
+    /* Needs attention */
+    .attention-list { display: grid; }
+    .attention-item { display: grid; grid-template-columns: 8px minmax(0, 1.1fr) minmax(0, 1.4fr) auto; align-items: center; gap: 14px; padding: 13px var(--artifact-space-4); border-top: 1px solid var(--artifact-border-soft); }
+    .attention-item:first-child { border-top: 0; }
+    .attention-item:hover { background: var(--artifact-surface-subtle); }
+    .attention-mark { width: 8px; height: 8px; border-radius: 50%; background: var(--artifact-medium); }
+    .attention-item.sev0 .attention-mark { background: var(--artifact-danger); }
+    .attention-item.sev1 .attention-mark { background: var(--artifact-warning); }
+    .attention-headline { font-weight: 680; }
+    .attention-account { color: var(--artifact-muted); font-size: 12px; }
+    .attention-action { color: var(--artifact-muted); font-size: 13px; }
+
+    /* Controls + table */
+    .controls { display: grid; grid-template-columns: minmax(200px, 1fr) 170px 180px auto; gap: var(--artifact-space-3); padding: var(--artifact-space-4); border-bottom: 1px solid var(--artifact-border); }
     .field { display: grid; gap: 5px; }
-    .field label { color: var(--artifact-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .055em; }
+    .field label { color: var(--artifact-muted); font-size: 11px; font-weight: 680; text-transform: uppercase; letter-spacing: .05em; }
     input, select, textarea { width: 100%; min-height: 38px; padding: 7px 10px; color: var(--artifact-text); background: var(--artifact-surface); border: 1px solid var(--artifact-border); border-radius: 7px; }
     textarea { resize: vertical; font-family: var(--artifact-mono); font-size: 12px; line-height: 1.5; }
     .checkbox { display: flex; align-items: end; padding-bottom: 8px; gap: 8px; color: var(--artifact-muted); white-space: nowrap; }
     .checkbox input { width: 16px; min-height: 16px; height: 16px; accent-color: var(--artifact-accent); }
     .table-wrap { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; }
-    th, td { padding: 11px 12px; border-bottom: 1px solid var(--artifact-border); text-align: left; vertical-align: middle; }
-    th { color: var(--artifact-muted); background: var(--artifact-surface-subtle); font-size: 11px; font-weight: 750; letter-spacing: .045em; text-transform: uppercase; white-space: nowrap; }
+    th, td { padding: 11px 12px; border-bottom: 1px solid var(--artifact-border-soft); text-align: left; vertical-align: middle; }
+    th { color: var(--artifact-muted); background: var(--artifact-surface-subtle); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
     tbody tr:last-child td { border-bottom: 0; }
-    tbody tr[data-account-id] { cursor: pointer; }
-    tbody tr[data-account-id]:hover, tbody tr[data-account-id].selected { background: var(--artifact-accent-soft); }
+    tbody tr[data-account-row] { cursor: pointer; }
+    tbody tr[data-account-row]:hover { background: var(--artifact-surface-subtle); }
+    tbody tr[data-account-row].selected { background: var(--artifact-accent-soft); }
     .number { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-    .account-name { font-weight: 720; min-width: 190px; }
-    .account-meta { display: block; color: var(--artifact-muted); font-size: 12px; font-weight: 400; }
-    .risk-badge, .activity-badge { display: inline-flex; align-items: center; min-height: 24px; border-radius: 999px; padding: 3px 8px; font-size: 11px; font-weight: 750; text-transform: uppercase; letter-spacing: .035em; white-space: nowrap; }
-    .risk-badge.overage, .risk-badge.expired, .risk-badge.critical, .activity-badge.missing { color: var(--artifact-danger); background: var(--artifact-danger-soft); }
+    /* Remaining and At risk are the decision-drivers; sold and billed are context. */
+    .number.lead { font-size: 15px; font-weight: 680; }
+    .number.context { color: var(--artifact-muted); }
+    .account-name { min-width: 200px; }
+    .account-meta { display: block; color: var(--artifact-faint); font-size: 12px; font-weight: 400; }
+    .risk-badge { display: inline-flex; align-items: center; min-height: 23px; border-radius: 6px; padding: 3px 8px; font-size: 11px; font-weight: 680; white-space: nowrap; }
+    .risk-badge.overage, .risk-badge.expired, .risk-badge.critical { color: var(--artifact-danger); background: var(--artifact-danger-soft); }
     .risk-badge.high { color: var(--artifact-warning); background: var(--artifact-warning-soft); }
     .risk-badge.medium { color: var(--artifact-medium); background: var(--artifact-medium-soft); }
-    .risk-badge.healthy, .activity-badge.active { color: var(--artifact-healthy); background: var(--artifact-healthy-soft); }
+    .risk-badge.healthy { color: var(--artifact-healthy); background: var(--artifact-healthy-soft); }
     .risk-badge.exhausted, .risk-badge.none { color: var(--artifact-muted); background: var(--artifact-surface-subtle); }
-    .activity-stack { display: grid; gap: 4px; justify-items: start; }
-    .detail { display: none; margin-top: var(--artifact-space-4); }
-    .detail.show { display: block; }
-    .detail-header { display: flex; justify-content: space-between; gap: var(--artifact-space-4); padding: var(--artifact-space-5); border-bottom: 1px solid var(--artifact-border); }
-    .detail-title h2 { font-size: 22px; margin-bottom: 4px; }
-    .detail-kpis { display: flex; flex-wrap: wrap; gap: 18px; color: var(--artifact-muted); }
-    .detail-kpis strong { color: var(--artifact-text); font-variant-numeric: tabular-nums; }
-    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--artifact-space-4); padding: var(--artifact-space-4); }
+    .week-cell { display: grid; gap: 2px; }
+    .week-cell strong { font-size: 12px; font-weight: 650; }
+    .week-cell.gap strong { color: var(--artifact-warning); }
+    .week-cell.unknown strong { color: var(--artifact-faint); font-weight: 500; }
+    .week-cell span { color: var(--artifact-faint); font-size: 11px; }
+
+    /* Risk distribution + weekly */
+    .overview-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr); gap: var(--artifact-space-4); margin-bottom: var(--artifact-space-5); }
+    .risk-bars { display: grid; gap: 10px; }
+    .risk-row { display: grid; grid-template-columns: 96px minmax(70px, 1fr) 108px; align-items: center; gap: 10px; }
+    .bar-track { height: 8px; background: var(--artifact-surface-subtle); border-radius: 999px; overflow: hidden; }
+    .bar-fill { height: 100%; min-width: 2px; border-radius: inherit; background: var(--artifact-info); }
+    .bar-fill.overage, .bar-fill.expired, .bar-fill.critical { background: var(--artifact-danger); }
+    .bar-fill.high { background: var(--artifact-warning); }
+    .bar-fill.medium { background: var(--artifact-medium); }
+    .bar-fill.healthy { background: var(--artifact-healthy); }
+    .bar-value { text-align: right; color: var(--artifact-muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+    .weekly-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--artifact-space-3); }
+    .weekly-stat { background: var(--artifact-surface-subtle); border-radius: 8px; padding: 14px; }
+    .weekly-stat strong { display: block; font-size: 24px; font-variant-numeric: tabular-nums; }
+    .weekly-stat span { color: var(--artifact-muted); font-size: 12px; }
+    .weekly-grid.unreliable .weekly-stat strong { color: var(--artifact-faint); }
+
+    /* Detail sheet */
+    .sheet-scrim { position: fixed; inset: 0; background: rgba(9, 20, 27, .28); opacity: 0; pointer-events: none; transition: opacity .16s ease; z-index: 40; }
+    .sheet-scrim.show { opacity: 1; pointer-events: auto; }
+    .sheet { position: fixed; top: 0; right: 0; bottom: 0; width: min(720px, 100vw); background: var(--artifact-surface); border-left: 1px solid var(--artifact-border); box-shadow: var(--artifact-shadow); transform: translateX(100%); transition: transform .18s ease; z-index: 50; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+    .sheet.open { transform: translateX(0); }
+    @media (prefers-reduced-motion: reduce) { .sheet, .sheet-scrim { transition: none; } }
+    .sheet-header { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--artifact-space-4); padding: var(--artifact-space-4) var(--artifact-space-5); border-bottom: 1px solid var(--artifact-border); }
+    .sheet-title h2 { font-size: 19px; margin-bottom: 6px; }
+    .sheet-body { overflow-y: auto; padding: var(--artifact-space-4) var(--artifact-space-5) var(--artifact-space-6); display: grid; gap: var(--artifact-space-4); }
+    .detail-kpis { display: flex; flex-wrap: wrap; gap: 16px; color: var(--artifact-muted); font-size: 13px; }
+    .detail-kpis strong { color: var(--artifact-text); font-variant-numeric: tabular-nums; font-size: 15px; }
     .subpanel { border: 1px solid var(--artifact-border); border-radius: 8px; overflow: hidden; }
-    .subpanel.projects, .subpanel.governance { grid-column: 1 / -1; }
-    .subpanel h3 { padding: 12px; background: var(--artifact-surface-subtle); border-bottom: 1px solid var(--artifact-border); }
-    .evidence-summary { display: grid; grid-template-columns: repeat(5, minmax(150px, 1fr)); gap: 1px; background: var(--artifact-border); }
-    .evidence-dimension { padding: 12px; background: var(--artifact-surface); display: grid; align-content: start; gap: 7px; }
+    .subpanel > h3 { padding: 10px 12px; background: var(--artifact-surface-subtle); border-bottom: 1px solid var(--artifact-border); font-size: 13px; }
+    .subpanel th, .subpanel td { padding: 9px 11px; font-size: 13px; }
+    .evidence-summary { display: grid; gap: 1px; background: var(--artifact-border-soft); }
+    .evidence-dimension { padding: 11px 12px; background: var(--artifact-surface); display: grid; gap: 5px; }
+    .evidence-dimension-head { display: flex; align-items: center; gap: 8px; }
+    .evidence-dimension-head strong { font-size: 13px; margin-right: auto; }
     .evidence-dimension p { color: var(--artifact-muted); font-size: 12px; }
-    .evidence-dimension strong { font-size: 12px; }
-    .evidence-chains { display: grid; gap: 8px; padding: 12px; border-top: 1px solid var(--artifact-border); }
-    .evidence-chain { border: 1px solid var(--artifact-border); border-radius: 7px; background: var(--artifact-surface); }
-    .evidence-chain summary { cursor: pointer; padding: 9px 11px; font-weight: 700; }
-    .evidence-steps { margin: 0; padding: 0 12px 12px 34px; color: var(--artifact-muted); }
+    .check { display: inline-flex; align-items: center; gap: 5px; min-height: 22px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 650; white-space: nowrap; }
+    .check.ok { color: var(--artifact-healthy); background: var(--artifact-healthy-soft); }
+    .check.warn { color: var(--artifact-warning); background: var(--artifact-warning-soft); }
+    .check.bad { color: var(--artifact-danger); background: var(--artifact-danger-soft); }
+    .check.muted { color: var(--artifact-muted); background: var(--artifact-surface-subtle); }
+    .evidence-chains { display: grid; gap: 8px; padding: 12px; border-top: 1px solid var(--artifact-border-soft); }
+    .evidence-chain { border: 1px solid var(--artifact-border); border-radius: 7px; }
+    .evidence-chain summary { cursor: pointer; padding: 8px 11px; font-weight: 650; font-size: 13px; }
+    .evidence-steps { margin: 0; padding: 0 12px 12px 32px; color: var(--artifact-muted); font-size: 12px; }
     .evidence-steps code { color: var(--artifact-text); font-family: var(--artifact-mono); font-size: 11px; overflow-wrap: anywhere; }
-    .empty { padding: var(--artifact-space-5); color: var(--artifact-muted); text-align: center; }
-    .exception-list { display: grid; gap: 1px; background: var(--artifact-border); }
-    .exception { background: var(--artifact-surface); padding: 13px 15px; display: grid; grid-template-columns: 150px minmax(180px, 1fr) 2fr; gap: var(--artifact-space-3); }
-    .exception-type { color: var(--artifact-warning); font-family: var(--artifact-mono); font-size: 12px; }
-    .exception strong { font-weight: 700; }
-    .exception p { color: var(--artifact-muted); }
+
+    /* Data quality */
+    .disclosure { background: var(--artifact-surface); border: 1px solid var(--artifact-border); border-radius: var(--artifact-radius); overflow: hidden; }
+    .disclosure > summary { cursor: pointer; list-style: none; padding: var(--artifact-space-4); display: flex; align-items: center; gap: var(--artifact-space-3); }
+    .disclosure > summary::-webkit-details-marker { display: none; }
+    .disclosure > summary::after { content: '⌄'; margin-left: auto; color: var(--artifact-muted); font-size: 18px; line-height: 1; transition: transform .15s ease; }
+    .disclosure[open] > summary::after { transform: rotate(180deg); }
+    .disclosure > summary:hover { background: var(--artifact-surface-subtle); }
+    .disclosure-title { display: grid; gap: 2px; }
+    .disclosure-title strong { font-size: 16px; letter-spacing: -.01em; }
+    .disclosure-title span { color: var(--artifact-muted); font-size: 12px; }
+    .disclosure-body { border-top: 1px solid var(--artifact-border); }
+    .quality-summary { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; padding: var(--artifact-space-4); border-bottom: 1px solid var(--artifact-border); color: var(--artifact-muted); font-size: 13px; }
+    .quality-summary strong { color: var(--artifact-text); }
+    .technical { color: var(--artifact-faint); font-family: var(--artifact-mono); font-size: 11px; }
+
     .workspace-tabs { display: flex; gap: 4px; padding: 8px 10px 0; border-bottom: 1px solid var(--artifact-border); background: var(--artifact-surface-subtle); }
-    .workspace-tab { min-height: 40px; padding: 8px 14px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--artifact-muted); background: transparent; font-weight: 750; }
+    .workspace-tab { min-height: 38px; padding: 8px 14px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--artifact-muted); background: transparent; font-weight: 650; }
     .workspace-tab:hover { color: var(--artifact-text); background: color-mix(in srgb, var(--artifact-surface) 55%, transparent); }
     .workspace-tab[aria-selected="true"] { color: var(--artifact-accent); background: var(--artifact-surface); border-color: var(--artifact-border); position: relative; top: 1px; }
-    .workspace-tab-count { margin-left: 6px; color: inherit; font-variant-numeric: tabular-nums; }
-    .workspace-pane { min-height: 120px; }
+    .workspace-tab-count { margin-left: 6px; font-variant-numeric: tabular-nums; }
+    .workspace-pane { min-height: 110px; }
+
     .slack-queue { margin: 12px; border: 1px solid var(--artifact-border); border-radius: 9px; overflow: hidden; }
     .slack-queue-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; background: var(--artifact-surface-subtle); }
     .slack-queue-head div { display: grid; gap: 2px; }
@@ -180,100 +266,137 @@
     .slack-queue-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 13px; background: var(--artifact-surface-subtle); }
     .slack-queue-section-head span { color: var(--artifact-muted); font-size: 12px; }
     .slack-queue-list { display: grid; }
-    .slack-queue-item { display: grid; grid-template-columns: auto minmax(180px, 1fr) auto; align-items: center; gap: 10px; padding: 10px 13px; border-top: 1px solid var(--artifact-border); }
+    .slack-queue-item { display: grid; grid-template-columns: auto minmax(180px, 1fr) auto; align-items: center; gap: 10px; padding: 10px 13px; border-top: 1px solid var(--artifact-border-soft); }
     .slack-queue-item p { color: var(--artifact-muted); font-size: 12px; }
-    .slack-queue-status { min-width: 88px; text-align: center; }
+    .slack-queue-status { min-width: 88px; justify-content: center; }
     .handoff-list { display: grid; gap: 7px; }
-    .handoff-item { display: grid; grid-template-columns: minmax(160px, .8fr) minmax(220px, 1.2fr); gap: 8px; padding: 9px; border: 1px solid var(--artifact-border); border-radius: 7px; background: var(--artifact-surface); }
+    .handoff-item { display: grid; grid-template-columns: minmax(150px, .8fr) minmax(200px, 1.2fr); gap: 8px; padding: 9px; border: 1px solid var(--artifact-border); border-radius: 7px; background: var(--artifact-surface); }
     .handoff-item span { color: var(--artifact-muted); font-size: 12px; }
-    .workstream-list { display: grid; gap: 12px; padding: 12px; }
+
+    .workstream-list { display: grid; gap: 10px; padding: 12px; }
     .workstream-card { border: 1px solid var(--artifact-border); border-radius: 9px; background: var(--artifact-surface); overflow: hidden; }
-    .workstream-card > summary { cursor: pointer; list-style: none; padding: 14px; display: grid; grid-template-columns: auto minmax(240px, 1fr) auto; align-items: center; gap: 10px; }
+    .workstream-card > summary { cursor: pointer; list-style: none; padding: 12px 14px; display: grid; grid-template-columns: auto minmax(200px, 1fr) auto; align-items: center; gap: 12px; }
     .workstream-card > summary::-webkit-details-marker { display: none; }
-    .workstream-title { display: grid; gap: 3px; }
+    .workstream-card > summary:hover { background: var(--artifact-surface-subtle); }
+    .workstream-title { display: grid; gap: 2px; min-width: 0; }
     .workstream-title strong { font-size: 14px; }
     .workstream-summary-meta { color: var(--artifact-muted); font-size: 12px; }
-    .case-priority { display: inline-flex; min-width: 30px; justify-content: center; border-radius: 5px; padding: 3px 6px; font-size: 11px; font-weight: 800; }
-    .case-priority.p0 { color: var(--artifact-danger); background: var(--artifact-danger-soft); }
-    .case-priority.p1 { color: var(--artifact-warning); background: var(--artifact-warning-soft); }
-    .case-priority.p2 { color: var(--artifact-info); background: var(--artifact-info-soft); }
-    .workstream-id { color: var(--artifact-muted); font-family: var(--artifact-mono); font-size: 11px; text-align: right; }
+    .urgency { display: inline-flex; align-items: center; justify-content: center; min-width: 74px; border-radius: 6px; padding: 4px 9px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+    .urgency.p0 { color: var(--artifact-danger); background: var(--artifact-danger-soft); }
+    .urgency.p1 { color: var(--artifact-warning); background: var(--artifact-warning-soft); }
+    .urgency.p2 { color: var(--artifact-muted); background: var(--artifact-surface-subtle); }
+    .urgency.done { color: var(--artifact-healthy); background: var(--artifact-healthy-soft); }
+    .workstream-due { color: var(--artifact-faint); font-size: 12px; text-align: right; white-space: nowrap; }
     .workstream-body { border-top: 1px solid var(--artifact-border); padding: 14px; display: grid; gap: 14px; }
-    .planner-summary { display: grid; grid-template-columns: minmax(220px, 1.5fr) repeat(4, minmax(105px, .6fr)); gap: 1px; border: 1px solid var(--artifact-border); border-radius: 8px; overflow: hidden; background: var(--artifact-border); }
-    .planner-fact { padding: 11px; background: var(--artifact-surface-subtle); display: grid; gap: 3px; }
-    .planner-fact span { color: var(--artifact-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .045em; }
-    .planner-fact strong { font-size: 12px; }
-    .recommendation { padding: 12px; border-left: 4px solid var(--artifact-accent); border-radius: 6px; background: var(--artifact-accent-soft); display: grid; gap: 4px; }
+    .planner-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; border: 1px solid var(--artifact-border-soft); border-radius: 8px; overflow: hidden; background: var(--artifact-border-soft); }
+    .planner-fact { padding: 10px 11px; background: var(--artifact-surface-subtle); display: grid; gap: 3px; }
+    .planner-fact span { color: var(--artifact-muted); font-size: 11px; font-weight: 680; text-transform: uppercase; letter-spacing: .04em; }
+    .planner-fact strong { font-size: 12px; font-weight: 650; }
+    .recommendation { padding: 11px 12px; border-left: 3px solid var(--artifact-accent); border-radius: 6px; background: var(--artifact-accent-soft); display: grid; gap: 4px; }
     .recommendation p { color: var(--artifact-muted); font-size: 12px; }
-    .path-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 10px; }
+    .path-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
     .path-option { border: 1px solid var(--artifact-border); border-radius: 8px; padding: 11px; display: grid; gap: 9px; align-content: start; }
     .path-option.recommended { border-color: var(--artifact-accent); }
     .path-option.selected { box-shadow: inset 0 0 0 2px var(--artifact-accent); }
     .path-head { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
     .path-head strong { margin-right: auto; }
-    .path-meta { display: flex; flex-wrap: wrap; gap: 6px; color: var(--artifact-muted); font-size: 11px; }
+    .path-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; color: var(--artifact-muted); font-size: 11px; }
+    .path-meta span::before { content: '·'; margin-right: 6px; color: var(--artifact-border); }
+    .path-meta span:first-child::before { content: none; }
     .path-option p { color: var(--artifact-muted); font-size: 12px; }
-    .path-steps { margin: 0; padding-left: 22px; color: var(--artifact-muted); font-size: 12px; display: grid; gap: 4px; }
+    .path-steps { margin: 0; padding-left: 20px; color: var(--artifact-muted); font-size: 12px; display: grid; gap: 4px; }
     .instance-list { display: grid; gap: 7px; }
-    .instance-item { border: 1px solid var(--artifact-border); border-radius: 7px; padding: 9px 10px; display: grid; grid-template-columns: auto minmax(180px, 1fr) auto; gap: 9px; align-items: center; }
+    .instance-item { border: 1px solid var(--artifact-border-soft); border-radius: 7px; padding: 9px 10px; display: grid; grid-template-columns: auto minmax(180px, 1fr) auto; gap: 10px; align-items: center; }
     .instance-item p { color: var(--artifact-muted); font-size: 12px; }
     .workstream-actions { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
-    .queue-meta { display: flex; gap: 12px; flex-wrap: wrap; color: var(--artifact-muted); font-size: 12px; }
-    .copy-feedback { color: var(--artifact-healthy); font-weight: 700; font-size: 12px; }
+    .queue-meta { display: flex; gap: 14px; flex-wrap: wrap; color: var(--artifact-muted); font-size: 12px; }
+    .copy-feedback { color: var(--artifact-healthy); font-weight: 650; font-size: 12px; }
     .target-note { color: var(--artifact-muted); font-size: 12px; }
     .target-note.optional { color: var(--artifact-info); }
     .history { color: var(--artifact-muted); font-size: 12px; }
-    .execution-dialog { width: min(1180px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; color: var(--artifact-text); background: var(--artifact-surface); border: 1px solid var(--artifact-border); border-radius: 12px; box-shadow: 0 24px 70px rgba(0,0,0,.25); }
-    .execution-dialog::backdrop { background: rgba(7, 18, 25, .62); backdrop-filter: blur(3px); }
+
+    .exception-list { display: grid; }
+    .exception { padding: 12px var(--artifact-space-4); display: grid; grid-template-columns: minmax(160px, .8fr) minmax(200px, 2fr); gap: var(--artifact-space-3); border-top: 1px solid var(--artifact-border-soft); }
+    .exception:first-child { border-top: 0; }
+    .exception strong { font-weight: 650; }
+    .exception p { color: var(--artifact-muted); font-size: 13px; }
+    .exception-type { display: block; color: var(--artifact-faint); font-size: 11px; font-weight: 400; }
+
+    /* Dialogs */
+    dialog { color: var(--artifact-text); background: var(--artifact-surface); border: 1px solid var(--artifact-border); border-radius: 12px; box-shadow: var(--artifact-shadow); padding: 0; }
+    dialog::backdrop { background: rgba(7, 18, 25, .55); }
+    .prompt-dialog { width: min(460px, calc(100vw - 32px)); }
+    .prompt-shell { display: grid; gap: var(--artifact-space-4); padding: var(--artifact-space-5); }
+    .prompt-shell h2 { font-size: 17px; }
+    .prompt-shell > p { color: var(--artifact-muted); font-size: 13px; }
+    .prompt-fields { display: grid; gap: var(--artifact-space-3); }
+    .prompt-field-help { color: var(--artifact-muted); font-size: 12px; }
+    .prompt-actions { display: flex; justify-content: flex-end; gap: var(--artifact-space-2); }
+    .prompt-error { color: var(--artifact-danger); font-size: 12px; min-height: 16px; }
+    .execution-dialog { width: min(1180px, calc(100vw - 32px)); max-height: calc(100vh - 32px); }
+    .execution-dialog::backdrop { backdrop-filter: blur(3px); }
     .execution-shell { display: grid; max-height: calc(100vh - 34px); grid-template-rows: auto minmax(0, 1fr); }
     .execution-header { display: flex; justify-content: space-between; gap: 16px; align-items: start; padding: 16px 18px; border-bottom: 1px solid var(--artifact-border); }
     .execution-header div { display: grid; gap: 4px; }
     .execution-content { overflow-y: auto; padding: 18px; display: grid; gap: 16px; }
-    .execution-banner { padding: 12px; border: 1px solid color-mix(in srgb, var(--artifact-warning) 35%, var(--artifact-border)); border-radius: 8px; color: var(--artifact-warning); background: var(--artifact-warning-soft); }
+    .execution-banner { padding: 12px; border: 1px solid color-mix(in srgb, var(--artifact-warning) 35%, var(--artifact-border)); border-radius: 8px; color: var(--artifact-warning); background: var(--artifact-warning-soft); font-size: 13px; }
     .execution-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(320px, .8fr); gap: 14px; }
     .execution-column { display: grid; gap: 12px; align-content: start; }
     .execution-card { border: 1px solid var(--artifact-border); border-radius: 8px; padding: 12px; display: grid; gap: 9px; background: var(--artifact-surface-subtle); }
-    .execution-card h3 { display: flex; align-items: center; gap: 7px; }
-    .execution-operation { border-left: 4px solid var(--artifact-accent); }
+    .execution-card h3 { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+    .execution-operation { border-left: 3px solid var(--artifact-accent); }
     .execution-operation.unsupported { border-left-color: var(--artifact-warning); }
     .execution-fields { margin: 0; padding: 9px; border-radius: 6px; overflow-x: auto; color: var(--artifact-text); background: var(--artifact-surface); border: 1px solid var(--artifact-border); font: 11px/1.5 var(--artifact-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
-    textarea.execution-fields { min-height: 130px; resize: vertical; white-space: pre; }
-    .execution-links, .execution-list { margin: 0; padding-left: 20px; display: grid; gap: 5px; color: var(--artifact-muted); }
+    /* Field-level editing replaces raw JSON so a CS owner never edits syntax. */
+    .field-table { display: grid; gap: 8px; padding: 10px; background: var(--artifact-surface); border: 1px solid var(--artifact-border); border-radius: 6px; }
+    .field-row { display: grid; grid-template-columns: minmax(140px, .8fr) minmax(160px, 1.4fr); gap: 10px; align-items: start; }
+    .field-row > label { display: grid; gap: 2px; padding-top: 8px; }
+    .field-row .field-key { font-family: var(--artifact-mono); font-size: 11px; overflow-wrap: anywhere; }
+    .field-row .field-hint { color: var(--artifact-faint); font-size: 11px; }
+    .field-row textarea { min-height: 72px; }
+    .field-row input[type="checkbox"] { width: 16px; min-height: 16px; height: 16px; margin-top: 11px; accent-color: var(--artifact-accent); }
+    .execution-links, .execution-list { margin: 0; padding-left: 20px; display: grid; gap: 5px; color: var(--artifact-muted); font-size: 13px; }
     .execution-links a { color: var(--artifact-info); overflow-wrap: anywhere; }
     .execution-copy { display: grid; gap: 8px; }
-    .execution-copy textarea { min-height: 190px; }
-    .execution-copy.slack textarea { min-height: 240px; }
+    .execution-copy textarea { min-height: 180px; }
+    .execution-copy.slack textarea { min-height: 220px; }
     .execution-button-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .execution-feedback { color: var(--artifact-healthy); font-size: 12px; font-weight: 700; }
-    .footer { padding: var(--artifact-space-5) 0; color: var(--artifact-muted); font-size: 12px; text-align: center; }
+    .execution-feedback { color: var(--artifact-healthy); font-size: 12px; font-weight: 650; }
+
+    .footer { display: grid; gap: 10px; justify-items: center; padding: var(--artifact-space-5) 0 0; color: var(--artifact-muted); font-size: 12px; text-align: center; }
+    .method { max-width: 700px; }
+    .method > summary { cursor: pointer; color: var(--artifact-muted); }
+    .method-body { display: grid; gap: 8px; margin-top: 10px; padding: 12px 14px; text-align: left; background: var(--artifact-surface); border: 1px solid var(--artifact-border); border-radius: 8px; }
+    .method-body dt { font-weight: 650; color: var(--artifact-text); }
+    .method-body dd { margin: 2px 0 0; }
     .loading { animation: pulse 1.2s ease-in-out infinite; }
     @keyframes pulse { 50% { opacity: .55; } }
     @media (prefers-reduced-motion: reduce) { .loading { animation: none; } }
+
     @media (max-width: 1100px) {
-      .metrics { grid-template-columns: repeat(3, 1fr); }
+      .hero { grid-template-columns: 1fr; }
       .overview-grid { grid-template-columns: 1fr; }
       .controls { grid-template-columns: 1fr 1fr; }
-      .detail-grid { grid-template-columns: 1fr; }
-      .evidence-summary { grid-template-columns: 1fr 1fr; }
-      .planner-summary { grid-template-columns: 1fr 1fr; }
+      .execution-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 680px) {
       .shell { padding: var(--artifact-space-4); }
       .topbar { flex-direction: column; }
       .actions { justify-content: flex-start; }
-      .metrics { grid-template-columns: 1fr 1fr; }
+      .hero-stats { grid-template-columns: 1fr; }
       .controls { grid-template-columns: 1fr; }
       .checkbox { align-items: center; padding: 0; }
-      .risk-row { grid-template-columns: 68px minmax(60px, 1fr) 84px; }
+      .attention-item { grid-template-columns: 8px 1fr; }
+      .attention-action, .attention-item .button { grid-column: 2 / -1; }
+      .risk-row { grid-template-columns: 84px minmax(50px, 1fr) 82px; }
       .exception { grid-template-columns: 1fr; }
-      .detail-header { flex-direction: column; }
-      .evidence-summary { grid-template-columns: 1fr; }
+      .sheet { width: 100vw; }
       .workstream-card > summary { grid-template-columns: auto 1fr; }
-      .workstream-id { grid-column: 1 / -1; text-align: left; }
-      .planner-summary { grid-template-columns: 1fr; }
+      .workstream-due { grid-column: 1 / -1; text-align: left; }
       .instance-item { grid-template-columns: auto 1fr; }
       .instance-item .button { grid-column: 1 / -1; }
-      .execution-grid { grid-template-columns: 1fr; }
+      .field-row { grid-template-columns: 1fr; }
+      .field-row > label { padding-top: 0; }
       .execution-header { flex-direction: column; }
     }
   </style>
@@ -284,82 +407,133 @@
       <div>
         <div class="eyebrow">AI Outcomes Operations</div>
         <h1>Hours Recon</h1>
-        <p class="subtitle" id="subtitle">Salesforce entitlements reconciled against billable Rocketlane time.</p>
+        <p class="subtitle" id="subtitle">Hours sold, hours delivered, and what is about to expire.</p>
       </div>
       <div class="actions">
-        <span class="pill" id="modePill"><span class="status-dot"></span><span>Loading</span></span>
-        <button class="button" id="refreshButton" type="button">Refresh data</button>
+        <span class="sync" id="syncChip"><span class="status-dot"></span><span id="syncText">Loading</span></span>
+        <button class="button" id="refreshButton" data-action="refresh" type="button">Refresh</button>
       </div>
     </header>
 
-    <div class="notice" id="notice" role="status"></div>
-    <div class="error" id="error" role="alert"></div>
+    <div class="banner warn" id="freshnessBanner"></div>
+    <div class="banner danger" id="error" role="alert"></div>
+    <p class="sr-only" id="liveStatus" role="status"></p>
 
-    <section class="metrics" aria-label="Portfolio metrics" id="metrics"></section>
+    <section class="hero" aria-labelledby="heroLabel">
+      <div class="hero-main">
+        <p class="hero-label" id="heroLabel">At risk in the next 90 days</p>
+        <p class="hero-value" id="heroValue">—</p>
+        <p class="hero-context" id="heroContext"></p>
+      </div>
+      <div class="hero-stats" id="heroStats"></div>
+    </section>
+    <p class="hero-footnote" id="heroFootnote"></p>
+
+    <section class="section" id="attentionSection" hidden>
+      <div class="section-title">
+        <div><h2>Needs attention</h2><p>Hours being lost now, most costly first</p></div>
+        <p class="source-note" id="attentionCount"></p>
+      </div>
+      <div class="panel"><div class="attention-list" id="attentionList"></div></div>
+    </section>
+
+    <section class="section">
+      <div class="section-title"><div><h2>All accounts</h2><p id="resultCount"></p></div></div>
+      <div class="panel">
+        <div class="controls">
+          <div class="field"><label for="search">Search</label><input id="search" type="search" placeholder="Account or project name"></div>
+          <div class="field"><label for="riskFilter">Status</label><select id="riskFilter"><option value="all">Any status</option><option value="overage">Over</option><option value="expired">Expired</option><option value="critical">Expires in 30 days</option><option value="high">Expires in 60 days</option><option value="medium">Expires in 90 days</option><option value="healthy">Healthy</option><option value="exhausted">Fully used</option><option value="none">No package</option></select></div>
+          <div class="field"><label for="sort">Sort by</label><select id="sort"><option value="risk">Most urgent</option><option value="expiration">Expiring soonest</option><option value="remaining">Most hours left</option><option value="name">Account name</option></select></div>
+          <label class="checkbox"><input id="weeklyOnly" type="checkbox"> No time logged this week</label>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th scope="col">Account</th><th scope="col">Status</th><th scope="col" class="number">Remaining</th><th scope="col" class="number">At risk</th><th scope="col" class="number">Sold</th><th scope="col" class="number">Delivered</th><th scope="col">This week</th></tr></thead>
+            <tbody id="accountRows"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="accountEmpty" hidden><strong>Nothing matches these filters.</strong>Try clearing the search or status filter.</div>
+      </div>
+    </section>
 
     <section class="overview-grid">
       <article class="panel">
         <div class="panel-head">
-          <div><h2>Exposure by account risk</h2><p class="source-note">Remaining usable hours, grouped by the account's highest-risk package</p></div>
+          <div><h2>Where the remaining hours sit</h2><p class="source-note">Unused hours grouped by how soon they expire</p></div>
           <span class="source-note" id="asOf"></span>
         </div>
         <div class="panel-body"><div class="risk-bars" id="riskBars"></div></div>
       </article>
       <article class="panel">
-        <div class="panel-head"><div><h2>Weekly compliance</h2><p class="source-note">Current Monday-to-today period</p></div></div>
-        <div class="panel-body"><div class="weekly-grid" id="weeklyStats"></div></div>
+        <div class="panel-head"><div><h2>This week</h2><p class="source-note" id="weeklyRange">Monday to today</p></div></div>
+        <div class="panel-body"><div class="weekly-grid" id="weeklyStats"></div><p class="source-note" id="weeklyNote" hidden></p></div>
       </article>
     </section>
 
-    <section class="section">
-      <div class="section-title"><div><h2>Assigned accounts</h2><p class="source-note" id="resultCount"></p></div></div>
-      <div class="panel">
-        <div class="controls">
-          <div class="field"><label for="search">Search accounts</label><input id="search" type="search" placeholder="Account or project name"></div>
-          <div class="field"><label for="riskFilter">Risk</label><select id="riskFilter"><option value="all">All risk levels</option><option value="overage">Overage</option><option value="expired">Expired</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="healthy">Healthy</option><option value="exhausted">Exhausted</option><option value="none">No package</option></select></div>
-          <div class="field"><label for="sort">Sort</label><select id="sort"><option value="risk">Risk priority</option><option value="expiration">Expiration soonest</option><option value="remaining">Remaining hours</option><option value="name">Account name</option></select></div>
-          <label class="checkbox"><input id="weeklyOnly" type="checkbox"> Weekly gaps only</label>
+    <details class="disclosure section" id="dataQuality">
+      <summary>
+        <div class="disclosure-title">
+          <strong>Data quality</strong>
+          <span id="dataQualitySummary">Checks that make the numbers above trustworthy</span>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Account</th><th>Risk</th><th class="number">Sold</th><th class="number">Billed</th><th class="number">Remaining</th><th class="number">At risk</th><th class="number">Expired</th><th>Current week</th></tr></thead>
-            <tbody id="accountRows"></tbody>
-          </table>
-        </div>
-        <div class="empty" id="accountEmpty" hidden>No accounts match these filters.</div>
-      </div>
-      <article class="panel detail" id="detail" aria-live="polite"></article>
-    </section>
-
-    <section class="section">
-      <div class="section-title"><div><h2>Remediation workspace</h2><p class="source-note">Plan source corrections and track Slack handoff delivery in one workspace</p></div><span class="pill" id="remediationCount">0 active workstreams</span></div>
-      <div class="panel">
-        <div class="workspace-tabs" role="tablist" aria-label="Remediation workspace views">
-          <button class="workspace-tab" id="plannerTab" role="tab" type="button" aria-selected="true" aria-controls="remediationPlannerPane" data-remediation-tab="planner">Remediation planner <span class="workspace-tab-count" id="plannerTabCount">0</span></button>
-          <button class="workspace-tab" id="slackTab" role="tab" type="button" aria-selected="false" aria-controls="slackQueuePane" data-remediation-tab="slack" tabindex="-1">Slack delivery queue <span class="workspace-tab-count" id="slackTabCount">0</span></button>
+        <span class="pill" id="remediationCount">0 to fix</span>
+      </summary>
+      <div class="disclosure-body">
+        <div class="quality-summary" id="qualitySummary"></div>
+        <div class="workspace-tabs" role="tablist" aria-label="Data quality views">
+          <button class="workspace-tab" id="plannerTab" role="tab" type="button" aria-selected="true" aria-controls="remediationPlannerPane" data-action="remediation-tab" data-remediation-tab="planner">Things to fix <span class="workspace-tab-count" id="plannerTabCount">0</span></button>
+          <button class="workspace-tab" id="slackTab" role="tab" type="button" aria-selected="false" aria-controls="slackQueuePane" data-action="remediation-tab" data-remediation-tab="slack" tabindex="-1">Slack delivery queue <span class="workspace-tab-count" id="slackTabCount">0</span></button>
+          <button class="workspace-tab" id="diagnosticsTab" role="tab" type="button" aria-selected="false" aria-controls="diagnosticsPane" data-action="remediation-tab" data-remediation-tab="diagnostics" tabindex="-1">Matching notes <span class="workspace-tab-count" id="diagnosticsTabCount">0</span></button>
         </div>
         <div class="workspace-pane" id="remediationPlannerPane" role="tabpanel" aria-labelledby="plannerTab">
           <div class="workstream-list" id="remediationWorkstreams"></div>
-          <div class="empty" id="remediationEmpty" hidden>No remediation workstreams have been observed.</div>
+          <div class="empty" id="remediationEmpty" hidden></div>
         </div>
         <div class="workspace-pane" id="slackQueuePane" role="tabpanel" aria-labelledby="slackTab" hidden>
-          <div class="slack-queue" id="slackQueue" aria-live="polite"></div>
+          <div class="slack-queue" id="slackQueue"></div>
+        </div>
+        <div class="workspace-pane" id="diagnosticsPane" role="tabpanel" aria-labelledby="diagnosticsTab" hidden>
+          <div class="exception-list" id="exceptions"></div>
+          <div class="empty" id="exceptionEmpty" hidden><strong>No matching problems.</strong>Every Rocketlane project and Salesforce package resolved cleanly.</div>
         </div>
       </div>
-    </section>
+    </details>
 
-    <section class="section">
-      <div class="section-title"><div><h2>Source diagnostics</h2><p class="source-note">Matching, package, correction, and entitlement-timing warnings from reconciliation</p></div><span class="pill" id="exceptionCount">0 items</span></div>
-      <div class="panel"><div class="exception-list" id="exceptions"></div><div class="empty" id="exceptionEmpty" hidden>No unresolved source diagnostics.</div></div>
-    </section>
-
-    <footer class="footer" id="footer"></footer>
+    <footer class="footer">
+      <p id="footerRefreshed"></p>
+      <details class="method">
+        <summary>How these numbers are calculated</summary>
+        <dl class="method-body">
+          <dt>Allocation</dt><dd id="methodAllocation"></dd>
+          <dt>Expiration</dt><dd id="methodExpiration"></dd>
+          <dt>At risk</dt><dd>Unused hours on a package that expires within 90 days.</dd>
+        </dl>
+      </details>
+    </footer>
   </main>
+
+  <div class="sheet-scrim" id="sheetScrim" data-action="close-detail"></div>
+  <aside class="sheet" id="detail" role="dialog" aria-modal="false" aria-labelledby="detailHeading" aria-hidden="true" hidden></aside>
+
+  <dialog class="prompt-dialog" id="promptDialog" aria-labelledby="promptTitle">
+    <form class="prompt-shell" id="promptForm" method="dialog">
+      <div>
+        <h2 id="promptTitle"></h2>
+        <p id="promptDescription"></p>
+      </div>
+      <div class="prompt-fields" id="promptFields"></div>
+      <p class="prompt-error" id="promptError"></p>
+      <div class="prompt-actions">
+        <button class="button secondary" type="button" data-action="prompt-cancel">Cancel</button>
+        <button class="button" type="submit" id="promptConfirm">Confirm</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog class="execution-dialog" id="executionDialog" aria-labelledby="executionTitle">
     <div class="execution-shell">
       <header class="execution-header">
-        <div><span class="eyebrow">Selected path next steps</span><h2 id="executionTitle">MCP execution workspace</h2><p class="source-note" id="executionSubtitle"></p></div>
+        <div><span class="eyebrow">Selected fix</span><h2 id="executionTitle">Next steps</h2><p class="source-note" id="executionSubtitle"></p></div>
         <button class="button secondary" id="closeExecution" type="button">Close</button>
       </header>
       <div class="execution-content" id="executionContent"></div>
@@ -367,16 +541,106 @@
   </dialog>
 
   <script>
-    const state = { data: null, selectedId: null, execution: null, remediationTab: 'planner', filters: { search: '', risk: 'all', weeklyOnly: false, sort: 'risk' } };
+    const state = {
+      data: null,
+      selectedId: null,
+      execution: null,
+      remediationTab: 'planner',
+      searchTimer: null,
+      lastFocus: null,
+      filters: { search: '', risk: 'all', weeklyOnly: false, sort: 'risk' },
+    };
     const riskOrder = { overage: 0, expired: 1, critical: 2, high: 3, medium: 4, healthy: 5, exhausted: 6, none: 7 };
     const $ = selector => document.querySelector(selector);
     const fmt = value => new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(Number(value || 0));
     const fmtDate = value => value ? new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${value}T00:00:00Z`)) : '—';
+    const fmtShortDate = value => value ? new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(new Date(`${value}T00:00:00Z`)) : '—';
+    // Detail tables span several years. Dropping the year makes a correctly
+    // sorted list look scrambled, so keep it whenever it is not the report year.
+    const fmtSmartDate = value => {
+      if (!value) return '—';
+      const reportYear = String(state.data?.meta?.as_of || '').slice(0, 4);
+      return String(value).slice(0, 4) === reportYear ? fmtShortDate(value) : fmtDate(value);
+    };
     const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
     const titleCase = value => String(value || '').replaceAll('_', ' ').replace(/\b\w/g, letter => letter.toUpperCase());
-    const tierClass = value => ({ T1: 't1', T2: 't2', T3: 't3', T4: 't4' })[String(value)] || 't4';
-    const tierBadge = (tier, status) => `<span class="tier-badge ${tierClass(tier)}">${escapeHtml(tier || 'T4')} · ${escapeHtml(titleCase(status || 'provisional'))}</span>`;
+    const plural = (count, one, many) => `${fmt(count)} ${Number(count) === 1 ? one : (many || `${one}s`)}`;
 
+    /* ---------- Plain language ---------- */
+    // Internal vocabulary stays in the data layer. Everything a person reads is
+    // translated here exactly once.
+    const RISK_LABELS = { overage: 'Over', expired: 'Expired', critical: '≤30 days', high: '≤60 days', medium: '≤90 days', healthy: 'Healthy', exhausted: 'Fully used', none: 'No package' };
+    const DIMENSION_LABELS = {
+      entitlement_source: 'Where the hours came from',
+      hours_mapping: 'How hours were counted',
+      service_period: 'Contract dates',
+      project_linkage: 'Rocketlane link',
+      time_quality: 'Time entry quality',
+    };
+    const ROUTE_LABELS = {
+      source_retrieval: 'Re-pull the data',
+      entitlement_data: 'Salesforce entitlement',
+      project_mapping: 'Rocketlane linking',
+      time_quality: 'Rocketlane time entries',
+      data_governance: 'Source records',
+    };
+    const EFFORT_LABELS = { XS: 'about 10 minutes', S: 'about 30 minutes', M: 'about 2 hours', L: 'about a day', XL: 'a few days' };
+    const DURABILITY_LABELS = { low: 'Short-term fix', medium: 'Holds for a while', high: 'Permanent fix' };
+    const VALIDATION_LABELS = { automatic: 'Verified automatically', hybrid: 'Partly automatic', manual: 'Needs a manual check' };
+    const SCOPE_LABELS = { account: 'This account only', systemic: 'Fixes the shared cause' };
+    const URGENCY_LABELS = { P0: 'Act now', P1: 'Soon', P2: 'Backlog' };
+    const STATUS_LABELS = {
+      open: 'Not started', acknowledged: 'Acknowledged', in_progress: 'In progress',
+      pending_validation: 'Awaiting re-check', snoozed: 'Snoozed', governed: 'Verified', waived: 'Exception',
+    };
+    const riskLabel = risk => RISK_LABELS[risk] || titleCase(risk);
+    const dimensionLabel = name => DIMENSION_LABELS[name] || titleCase(name);
+    const routeLabel = route => ROUTE_LABELS[route] || titleCase(route);
+    const effortLabel = effort => EFFORT_LABELS[effort] || String(effort || '—');
+    const urgencyLabel = priority => URGENCY_LABELS[priority] || 'Backlog';
+    const statusLabel = status => STATUS_LABELS[status] || titleCase(status);
+    // Tier is a four-level internal score. People only need to know whether the
+    // evidence has been checked.
+    const isVerifiedTier = tier => tier === 'T1' || tier === 'T2';
+    const verificationChip = (tier, extra = '') => {
+      const verified = isVerifiedTier(tier);
+      return `<span class="check ${verified ? 'ok' : (tier === 'T3' ? 'warn' : 'bad')}" title="Evidence tier ${escapeHtml(tier || 'T4')}">${verified ? 'Checked' : 'Not checked'}${extra ? ` · ${escapeHtml(extra)}` : ''}</span>`;
+    };
+    // The precise governed/provisional split stays available for auditing.
+    const governanceSplitText = split => `Governed ${fmt(split.governed)}h · Provisional ${fmt(split.provisional)}h`;
+
+    /* ---------- Keyed DOM patching ---------- */
+    // Re-rendering by replacing innerHTML collapsed open cards, dropped scroll
+    // position, and reset focus on every action. Patching in place keeps the
+    // user where they were; delegated events keep handlers alive.
+    function patchList(container, items, { key, tag = 'div', className = '', render }) {
+      const existing = new Map();
+      for (const child of Array.from(container.children)) {
+        const id = child.dataset ? child.dataset.key : undefined;
+        if (id !== undefined && !existing.has(id)) existing.set(id, child);
+        else child.remove();
+      }
+      const ordered = [];
+      items.forEach((item, index) => {
+        const id = String(key(item, index));
+        let node = existing.get(id);
+        if (node) existing.delete(id);
+        else {
+          node = document.createElement(tag);
+          node.dataset.key = id;
+        }
+        const nextClass = typeof className === 'function' ? className(item) : className;
+        if (nextClass !== undefined && node.className !== nextClass) node.className = nextClass;
+        render(item, node);
+        ordered.push(node);
+      });
+      for (const stale of existing.values()) stale.remove();
+      ordered.forEach((node, index) => {
+        if (container.children[index] !== node) container.insertBefore(node, container.children[index] || null);
+      });
+    }
+
+    /* ---------- Data loading ---------- */
     async function loadData() {
       setError('');
       const response = await fetch('/api/data', { cache: 'no-store' });
@@ -389,7 +653,7 @@
       const button = $('#refreshButton');
       button.disabled = true;
       button.textContent = 'Refreshing…';
-      $('#modePill').classList.add('loading');
+      $('#syncChip').classList.add('loading');
       setError('');
       try {
         const response = await fetch('/api/refresh', { method: 'POST' });
@@ -397,72 +661,122 @@
         if (!response.ok) throw new Error(result.error || `Refresh failed (${response.status})`);
         state.data = result;
         render();
+        announce('Data refreshed.');
       } catch (error) {
-        setError(`${error.message} The last successful dataset is still displayed.`);
+        setError(`${error.message} You are still seeing the last data that loaded successfully.`);
       } finally {
         button.disabled = false;
-        button.textContent = state.data?.meta?.mode === 'mcp' ? 'Reload MCP snapshot' : 'Refresh data';
-        $('#modePill').classList.remove('loading');
+        button.textContent = 'Refresh';
+        $('#syncChip').classList.remove('loading');
       }
     }
 
     function setError(message) {
       const element = $('#error');
-      element.textContent = message;
+      element.innerHTML = message ? `<div class="banner-body"><strong>Something went wrong</strong><p>${escapeHtml(message)}</p></div>` : '';
       element.classList.toggle('show', Boolean(message));
     }
 
+    function announce(message) { $('#liveStatus').textContent = message; }
+
+    /* ---------- Render ---------- */
     function render() {
       if (!state.data) return;
       const { meta, metrics } = state.data;
-      const mode = meta.mode || 'unknown';
-      $('#modePill').className = `pill ${mode}`;
-      $('#modePill').innerHTML = `<span class="status-dot"></span><span>${escapeHtml(mode)} data</span>`;
-      $('#refreshButton').textContent = mode === 'mcp' ? 'Reload MCP snapshot' : 'Refresh data';
+      const freshness = meta.freshness || { state: 'unknown', is_current: false };
       const requester = meta.requester || {};
-      $('#subtitle').textContent = `${requester.name || requester.email || 'Requesting AIOM'} · Salesforce entitlements reconciled against billable Rocketlane time.`;
-      $('#asOf').textContent = `As of ${fmtDate(meta.as_of)}`;
-      const notice = $('#notice');
-      const sourceNotice = meta.notice || (mode === 'demo' ? 'Demo mode is active. Configure .env and switch HOURS_RECON_MODE to live before using these numbers operationally.' : '');
-      const governanceNotice = meta.governance_mode === 'observe_only' ? 'Governance is observe-only: reported totals are unchanged while Tier 3/4 evidence launches ranked remediation workstreams.' : '';
-      const noticeText = [sourceNotice, governanceNotice].filter(Boolean).join(' ');
-      notice.textContent = noticeText;
-      notice.classList.toggle('show', Boolean(noticeText));
-      renderMetrics(metrics);
-      renderRiskBars();
-      renderWeekly(metrics);
+      $('#subtitle').textContent = `${requester.name || requester.email || 'Your portfolio'} · hours sold, hours delivered, and what is about to expire.`;
+      $('#asOf').textContent = `Through ${fmtDate(freshness.through_date || meta.as_of)}`;
+      renderSyncChip(freshness);
+      renderFreshnessBanner(freshness);
+      renderHero(metrics, freshness);
+      renderAttention();
       renderAccounts();
+      renderRiskBars();
+      renderWeekly(metrics, freshness);
       renderRemediation();
       renderExceptions();
-      const refreshed = meta.refreshed_at ? new Date(meta.refreshed_at).toLocaleString() : 'not yet refreshed';
-      $('#footer').textContent = `${meta.allocation_method} · ${meta.expiration_rule} · Last successful refresh: ${refreshed}`;
+      if (state.selectedId) renderDetail(state.selectedId);
+      const refreshed = meta.refreshed_at ? new Date(meta.refreshed_at).toLocaleString() : 'not yet';
+      $('#footerRefreshed').textContent = `Last refresh: ${refreshed}`;
+      $('#methodAllocation').textContent = meta.allocation_method || '';
+      $('#methodExpiration').textContent = meta.expiration_rule || '';
     }
 
-    function renderMetrics(metrics) {
-      const governanceMetrics = state.data.governance?.metrics || {};
-      const note = (field, fallback) => {
-        const split = governanceMetrics[field];
-        return split ? `Governed ${fmt(split.governed)}h · Provisional ${fmt(split.provisional)}h` : fallback;
-      };
-      const cards = [
-        ['Hours remaining', metrics.remaining_hours, note('remaining_hours', 'Usable, unexpired entitlement'), true],
-        ['Hours at risk', metrics.at_risk_hours, note('at_risk_hours', 'Expire within 90 days'), false],
-        ['Expired unused', metrics.expired_unused_hours, note('expired_unused_hours', 'Past expiration with balance'), false],
-        ['Hours sold', metrics.sold_hours, note('sold_hours', `${metrics.account_count} assigned accounts`), false],
-        ['Hours billed', metrics.billed_hours, note('billed_hours', 'All billable contributors'), false],
-        ['Overage', metrics.overage_hours, note('overage_hours', 'Billable hours beyond eligible sold capacity'), false],
+    function renderSyncChip(freshness) {
+      const chip = $('#syncChip');
+      chip.className = `sync ${freshness.state || 'unknown'}`;
+      const label = freshness.state === 'demo' ? 'Sample data'
+        : freshness.is_current ? 'Up to date'
+        : freshness.days_behind === null || freshness.days_behind === undefined ? 'Needs refresh'
+        : freshness.days_behind <= 0 ? 'Needs refresh'
+        : `${freshness.days_behind}d behind`;
+      $('#syncText').textContent = label;
+      chip.title = freshness.detail || '';
+    }
+
+    function renderFreshnessBanner(freshness) {
+      const banner = $('#freshnessBanner');
+      if (freshness.is_current) { banner.classList.remove('show'); banner.innerHTML = ''; return; }
+      const hint = freshness.action_hint
+        ? `<p class="source-note">In Glean Pi, say “${escapeHtml(freshness.action_hint)}”.</p>` : '';
+      banner.innerHTML = `<div class="banner-body"><strong>${escapeHtml(freshness.headline)}</strong><p>${escapeHtml(freshness.detail)}</p>${hint}</div>${freshness.action_label ? `<button class="button secondary" type="button" data-action="refresh">${escapeHtml(freshness.action_label)}</button>` : ''}`;
+      banner.classList.add('show');
+    }
+
+    function deltaChip(entry, betterWhen) {
+      if (!entry) return '';
+      const delta = Number(entry.delta || 0);
+      if (Math.abs(delta) < 0.05) return '<span class="delta flat">no change</span>';
+      const rising = delta > 0;
+      const good = betterWhen === 'up' ? rising : !rising;
+      return `<span class="delta ${rising ? 'up' : 'down'}-${good ? 'good' : 'bad'}">${rising ? '▲' : '▼'} ${fmt(Math.abs(delta))}h since last refresh</span>`;
+    }
+
+    function renderHero(metrics, freshness) {
+      const trend = state.data.trend?.available ? state.data.trend.metrics : null;
+      const atRisk = Number(metrics.at_risk_hours || 0);
+      $('#heroValue').innerHTML = `${fmt(atRisk)}<span class="unit">hours</span>`;
+      const accounts = Number(metrics.at_risk_account_count || 0);
+      const days = metrics.soonest_expiration_days;
+      const soonest = days === null || days === undefined ? ''
+        : days <= 0 ? ' · soonest expires today'
+        : days === 1 ? ' · soonest expires tomorrow'
+        : ` · soonest expires in ${days} days`;
+      $('#heroContext').innerHTML = atRisk > 0
+        ? `${escapeHtml(`across ${plural(accounts, 'account')}${soonest}`)} ${deltaChip(trend?.at_risk_hours, 'down')}`
+        : `No unused hours expire in the next 90 days. ${deltaChip(trend?.at_risk_hours, 'down')}`;
+      const stats = [
+        { label: 'Hours remaining', value: metrics.remaining_hours, field: 'remaining_hours', better: 'up', alert: false },
+        { label: 'Over budget', value: metrics.overage_hours, field: 'overage_hours', better: 'down', alert: Number(metrics.overage_hours || 0) > 0 },
+        { label: 'Expired unused', value: metrics.expired_unused_hours, field: 'expired_unused_hours', better: 'down', alert: Number(metrics.expired_unused_hours || 0) > 0 },
       ];
-      $('#metrics').innerHTML = cards.map(([label, value, metricNote, primary]) => `<article class="metric ${primary ? 'primary' : ''}"><span class="metric-label">${label}</span><strong class="metric-value">${fmt(value)}</strong><span class="metric-note">${metricNote}</span></article>`).join('');
+      $('#heroStats').innerHTML = stats.map(stat => `<div class="hero-stat ${stat.alert ? 'alert' : ''}"><span>${escapeHtml(stat.label)}</span><strong>${fmt(stat.value)}</strong>${deltaChip(trend?.[stat.field], stat.better)}</div>`).join('');
+      const footnotes = [
+        `${fmt(metrics.sold_hours)}h sold`,
+        `${fmt(metrics.billed_hours)}h delivered`,
+        plural(metrics.account_count, 'account'),
+      ];
+      if (!state.data.trend?.available) footnotes.push('Movement appears after your next refresh');
+      else if (state.data.trend.compared_to?.as_of) footnotes.push(`Compared with ${fmtDate(state.data.trend.compared_to.as_of)}`);
+      if (freshness.state === 'demo') footnotes.push('Sample data');
+      $('#heroFootnote').innerHTML = footnotes.map(item => `<span>${escapeHtml(item)}</span>`).join('');
     }
 
-    function renderRiskBars() {
-      const rows = state.data.risk_distribution.filter(row => row.accounts > 0);
-      const max = Math.max(...rows.map(row => row.remaining_hours), 1);
-      $('#riskBars').innerHTML = rows.map(row => `<div class="risk-row"><span class="risk-badge ${row.risk}">${titleCase(row.risk)}</span><div class="bar-track" aria-label="${escapeHtml(row.risk)}: ${fmt(row.remaining_hours)} remaining hours"><div class="bar-fill ${row.risk}" style="width:${Math.max(2, row.remaining_hours / max * 100)}%"></div></div><span class="bar-value">${row.accounts} acct · ${fmt(row.remaining_hours)}h</span></div>`).join('') || '<div class="empty">No account risk data.</div>';
-    }
-
-    function renderWeekly(metrics) {
-      $('#weeklyStats').innerHTML = `<div class="weekly-stat"><strong>${fmt(metrics.weekly_account_gaps)}</strong><span>accounts with no billable activity</span></div><div class="weekly-stat"><strong>${fmt(metrics.weekly_aiom_gaps)}</strong><span>accounts with no requesting-AIOM entry</span></div>`;
+    function renderAttention() {
+      const items = state.data.attention || [];
+      $('#attentionSection').hidden = items.length === 0;
+      $('#attentionCount').textContent = items.length ? `${plural(items.length, 'item')} across ${plural(state.data.metrics.attention_account_count, 'account')}` : '';
+      patchList($('#attentionList'), items, {
+        key: item => `${item.account_id}:${item.kind}`,
+        className: item => `attention-item sev${item.severity}`,
+        render: (item, node) => {
+          node.innerHTML = `<span class="attention-mark" aria-hidden="true"></span>
+            <div><div class="attention-headline">${escapeHtml(item.headline)}</div><div class="attention-account">${escapeHtml(item.account_name)}</div></div>
+            <p class="attention-action">${escapeHtml(item.action)}</p>
+            <button class="button tiny secondary" type="button" data-action="select-account" data-account-id="${escapeHtml(item.account_id)}">Open</button>`;
+        },
+      });
     }
 
     function filteredAccounts() {
@@ -489,36 +803,85 @@
 
     function renderAccounts() {
       const rows = filteredAccounts();
-      $('#resultCount').textContent = `${rows.length} of ${state.data.accounts.length} accounts`;
+      const total = state.data.accounts.length;
+      $('#resultCount').textContent = rows.length === total ? plural(total, 'account') : `${rows.length} of ${total} accounts`;
       $('#accountEmpty').hidden = rows.length > 0;
-      $('#accountRows').innerHTML = rows.map(account => {
-        const weekly = account.weekly;
-        const projects = `${account.project_count} project${account.project_count === 1 ? '' : 's'} · ${account.entry_count} entries`;
-        return `<tr data-account-id="${escapeHtml(account.id)}" tabindex="0" class="${state.selectedId === account.id ? 'selected' : ''}">
-          <td class="account-name">${escapeHtml(account.name)}<span class="account-meta">${projects}</span><span class="account-meta">${account.governance ? tierBadge(account.governance.overall_tier, account.governance.status) : ''}${account.remediation?.active_workstream_count ? ` · ${fmt(account.remediation.active_workstream_count)} active workstreams` : ''}</span></td>
-          <td><span class="risk-badge ${account.risk}">${titleCase(account.risk)}</span></td>
-          <td class="number">${fmt(account.sold_hours)}</td><td class="number">${fmt(account.billed_hours)}</td><td class="number">${fmt(account.remaining_hours)}</td><td class="number">${fmt(account.at_risk_hours)}</td><td class="number">${fmt(account.expired_unused_hours)}</td>
-          <td><div class="activity-stack"><span class="activity-badge ${weekly.account_active_current ? 'active' : 'missing'}">Account ${weekly.account_active_current ? 'active' : 'gap'}</span><span class="activity-badge ${weekly.aiom_active_current ? 'active' : 'missing'}">AIOM ${weekly.aiom_active_current ? 'active' : 'gap'}</span></div></td>
-        </tr>`;
-      }).join('');
-      document.querySelectorAll('tr[data-account-id]').forEach(row => {
-        const open = () => selectAccount(row.dataset.accountId);
-        row.addEventListener('click', open);
-        row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); } });
+      const dataCoversToday = state.data.meta.freshness?.covers_today !== false;
+      patchList($('#accountRows'), rows, {
+        key: account => account.id,
+        tag: 'tr',
+        className: account => (state.selectedId === account.id ? 'selected' : ''),
+        render: (account, node) => {
+          node.dataset.accountRow = account.id;
+          const weekly = account.weekly;
+          const trend = account.trend?.fields;
+          const weekClass = !dataCoversToday ? 'unknown' : weekly.account_active_current ? '' : 'gap';
+          const weekMain = !dataCoversToday ? 'Not current' : weekly.account_active_current ? 'Time logged' : 'No time logged';
+          const weekSub = !dataCoversToday ? 'refresh to check' : weekly.aiom_active_current ? 'including yours' : 'none from you';
+          const expired = Number(account.expired_unused_hours || 0);
+          const overage = Number(account.overage_hours || 0);
+          node.innerHTML = `
+            <td class="account-name"><button class="link-button" type="button" data-action="select-account" data-account-id="${escapeHtml(account.id)}">${escapeHtml(account.name)}</button><span class="account-meta">${escapeHtml(`${plural(account.project_count, 'project')} · ${plural(account.entry_count, 'entry', 'entries')}`)}</span></td>
+            <td><span class="risk-badge ${account.risk}">${escapeHtml(riskLabel(account.risk))}</span></td>
+            <td class="number lead">${fmt(account.remaining_hours)}${expired > 0 ? `<span class="account-meta">${fmt(expired)}h expired</span>` : ''}</td>
+            <td class="number lead">${fmt(account.at_risk_hours)}${trend ? `<span class="account-meta">${deltaChipShort(trend.at_risk_hours)}</span>` : ''}</td>
+            <td class="number context">${fmt(account.sold_hours)}</td>
+            <td class="number context">${fmt(account.billed_hours)}${overage > 0 ? `<span class="account-meta">${fmt(overage)}h over</span>` : ''}</td>
+            <td><span class="week-cell ${weekClass}"><strong>${escapeHtml(weekMain)}</strong><span>${escapeHtml(weekSub)}</span></span></td>`;
+        },
       });
-      if (state.selectedId) renderDetail(state.selectedId);
     }
 
+    function deltaChipShort(entry) {
+      if (!entry) return '';
+      const delta = Number(entry.delta || 0);
+      if (Math.abs(delta) < 0.05) return '';
+      return `${delta > 0 ? '▲' : '▼'} ${fmt(Math.abs(delta))}`;
+    }
+
+    function renderRiskBars() {
+      const rows = state.data.risk_distribution.filter(row => row.accounts > 0);
+      const max = Math.max(...rows.map(row => row.remaining_hours), 1);
+      $('#riskBars').innerHTML = rows.map(row => `<div class="risk-row"><span class="risk-badge ${row.risk}">${escapeHtml(riskLabel(row.risk))}</span><div class="bar-track" role="img" aria-label="${escapeHtml(riskLabel(row.risk))}: ${fmt(row.remaining_hours)} hours across ${row.accounts} accounts"><div class="bar-fill ${row.risk}" style="width:${Math.max(2, row.remaining_hours / max * 100)}%"></div></div><span class="bar-value">${fmt(row.remaining_hours)}h · ${row.accounts} acct</span></div>`).join('') || '<div class="empty">No accounts yet.</div>';
+    }
+
+    function renderWeekly(metrics, freshness) {
+      // Week-to-date counts are only meaningful if the data reaches today. A
+      // stale pull reports every account as inactive, which reads as failure.
+      const unreliable = freshness.covers_today === false;
+      const grid = $('#weeklyStats');
+      grid.className = `weekly-grid ${unreliable ? 'unreliable' : ''}`;
+      grid.innerHTML = `<div class="weekly-stat"><strong>${fmt(metrics.weekly_account_gaps)}</strong><span>accounts with no time logged</span></div><div class="weekly-stat"><strong>${fmt(metrics.weekly_aiom_gaps)}</strong><span>accounts with no time from you</span></div>`;
+      const note = $('#weeklyNote');
+      note.hidden = !unreliable;
+      // A stale pull always shows every account as inactive. Say so rather than
+      // letting the reader conclude they missed every account this week.
+      note.textContent = unreliable ? `These counts are unreliable until you refresh: the data only covers through ${fmtDate(freshness.through_date || state.data.meta.as_of)}.` : '';    }
+
+    /* ---------- Account detail sheet ---------- */
     function selectAccount(id) {
+      state.lastFocus = document.activeElement;
       state.selectedId = id;
       renderAccounts();
-      $('#detail').scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+      renderDetail(id);
+    }
+
+    function closeDetail() {
+      state.selectedId = null;
+      const detail = $('#detail');
+      detail.classList.remove('open');
+      detail.setAttribute('aria-hidden', 'true');
+      detail.hidden = true;
+      $('#sheetScrim').classList.remove('show');
+      renderAccounts();
+      if (state.lastFocus && document.contains(state.lastFocus)) state.lastFocus.focus();
+      state.lastFocus = null;
     }
 
     function renderDetail(id) {
       const account = state.data.accounts.find(item => item.id === id);
       const detail = $('#detail');
-      if (!account) { detail.classList.remove('show'); return; }
+      if (!account) { closeDetail(); return; }
       const entries = account.entries || [];
       const governance = account.governance || null;
       const projectStats = entries.reduce((stats, entry) => {
@@ -533,46 +896,74 @@
         const stats = projectStats[String(project.id)] || { count: 0, hours: 0 };
         const status = [project.status, project.archived ? 'Archived' : ''].filter(Boolean).join(' · ') || '—';
         const matchBasis = project.match_evidence?.basis || 'legacy_name_match';
-        return `<tr><td>${escapeHtml(project.name || 'Unnamed project')}<span class="account-meta">Rocketlane #${escapeHtml(project.id)}</span></td><td>${escapeHtml(project.customer_name || '—')}<span class="account-meta">${escapeHtml(titleCase(matchBasis))}</span></td><td>${escapeHtml(status)}</td><td>${fmtDate(project.start_date)}</td><td>${fmtDate(project.due_date)}</td><td class="number">${fmt(stats.count)}</td><td class="number">${fmt(stats.hours)}</td></tr>`;
+        return `<tr><td>${escapeHtml(project.name || 'Unnamed project')}<span class="account-meta">Rocketlane #${escapeHtml(project.id)}</span></td><td>${escapeHtml(project.customer_name || '—')}<span class="account-meta">Linked by ${escapeHtml(titleCase(matchBasis).toLowerCase())}</span></td><td>${escapeHtml(status)}</td><td>${fmtSmartDate(project.start_date)}</td><td>${fmtSmartDate(project.due_date)}</td><td class="number">${fmt(stats.count)}</td><td class="number">${fmt(stats.hours)}</td></tr>`;
       }).join('');
       const packageRows = (account.packages || []).map(pkg => {
         const packageGovernance = pkg.governance || {};
         const sourceLabel = pkg.line_item_source === 'approved_quote' ? 'Approved quote' : pkg.line_item_source === 'primary_quote' ? 'Primary quote' : titleCase(pkg.line_item_source || 'Opportunity fallback');
         const serviceEnd = pkg.service_end_date || pkg.expiration_date;
-        const allocationPeriodNote = serviceEnd !== pkg.expiration_date ? `Observe-only allocation still uses ${fmtDate(pkg.expiration_date)}` : `${pkg.days_to_expiration} days`;
-        return `<tr><td>${escapeHtml(pkg.opportunity_name)}<span class="account-meta">${escapeHtml(pkg.tier)} · ${escapeHtml(sourceLabel)}</span><span class="account-meta">${escapeHtml(pkg.product_code || pkg.line_item_name || '')}</span></td><td>${fmtDate(pkg.service_start_date || pkg.close_date)}<span class="account-meta">${escapeHtml(titleCase(pkg.service_period_source || 'close_date_plus_one_year'))}</span></td><td>${fmtDate(serviceEnd)}<span class="account-meta">${escapeHtml(allocationPeriodNote)}</span></td><td class="number">${fmt(pkg.sold_hours)}</td><td class="number">${fmt(pkg.consumed_hours)}</td><td class="number">${fmt(pkg.remaining_hours)}</td><td>${pkg.governance ? tierBadge(packageGovernance.overall_tier, packageGovernance.status) : '—'}<span class="account-meta">${escapeHtml(titleCase(pkg.inference_source))}</span></td><td><span class="risk-badge ${pkg.risk}">${titleCase(pkg.risk)}</span></td></tr>`;
+        const allocationPeriodNote = serviceEnd !== pkg.expiration_date ? `Counted against ${fmtSmartDate(pkg.expiration_date)}` : `${pkg.days_to_expiration} days left`;
+        return `<tr><td>${escapeHtml(pkg.opportunity_name)}<span class="account-meta">${escapeHtml(pkg.tier)} · ${escapeHtml(sourceLabel)}</span><span class="account-meta">${escapeHtml(pkg.product_code || pkg.line_item_name || '')}</span></td><td>${fmtSmartDate(pkg.service_start_date || pkg.close_date)}</td><td>${fmtSmartDate(serviceEnd)}<span class="account-meta">${escapeHtml(allocationPeriodNote)}</span></td><td class="number">${fmt(pkg.sold_hours)}</td><td class="number">${fmt(pkg.consumed_hours)}</td><td class="number">${fmt(pkg.remaining_hours)}</td><td>${pkg.governance ? verificationChip(packageGovernance.overall_tier) : '—'}</td><td><span class="risk-badge ${pkg.risk}">${escapeHtml(riskLabel(pkg.risk))}</span></td></tr>`;
       }).join('');
-      const entryRows = [...entries].sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 100).map(entry => `<tr><td>${fmtDate(entry.date)}${entry.pre_entitlement_hours ? `<span class="account-meta">Pre-entitlement: ${fmt(entry.pre_entitlement_hours)}h</span>` : ''}</td><td>${escapeHtml(entry.project_name || (account.projects || []).find(project => String(project.id) === String(entry.project_id))?.name || 'Rocketlane project')}<span class="account-meta">${escapeHtml(entry.activity_name || 'Activity missing')} · ${escapeHtml(entry.category || 'Category missing')}</span></td><td>${escapeHtml(entry.user_name || entry.user_email || 'Unknown user')}<span class="account-meta">${escapeHtml(entry.approval_status || 'Approval unobservable')}</span></td><td class="number">${fmt(entry.hours)}</td></tr>`).join('');
-      const dimensionCards = governance ? Object.entries(governance.dimensions || {}).map(([name, item]) => `<article class="evidence-dimension">${tierBadge(item.tier, Number(item.rank) <= 2 ? 'governed' : 'provisional')}<strong>${escapeHtml(titleCase(name))}</strong><p>${escapeHtml(item.summary)}</p><p><strong>To improve:</strong> ${escapeHtml(item.recommended_action)}</p></article>`).join('') : '';
+      const entryRows = [...entries].sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 100).map(entry => `<tr><td>${fmtSmartDate(entry.date)}${entry.pre_entitlement_hours ? `<span class="account-meta">Before entitlement: ${fmt(entry.pre_entitlement_hours)}h</span>` : ''}</td><td>${escapeHtml(entry.project_name || (account.projects || []).find(project => String(project.id) === String(entry.project_id))?.name || 'Rocketlane project')}<span class="account-meta">${escapeHtml(entry.activity_name || 'No activity recorded')} · ${escapeHtml(entry.category || 'No category')}</span></td><td>${escapeHtml(entry.user_name || entry.user_email || 'Unknown')}<span class="account-meta">${escapeHtml(entry.approval_status || 'Approval not visible')}</span></td><td class="number">${fmt(entry.hours)}</td></tr>`).join('');
+      const dimensionCards = governance ? Object.entries(governance.dimensions || {}).map(([name, item]) => `<article class="evidence-dimension"><div class="evidence-dimension-head"><strong>${escapeHtml(dimensionLabel(name))}</strong>${verificationChip(item.tier)}</div><p>${escapeHtml(item.summary)}</p>${isVerifiedTier(item.tier) ? '' : `<p><strong>To fix:</strong> ${escapeHtml(item.recommended_action)}</p>`}</article>`).join('') : '';
       const evidenceChains = (account.packages || []).map(pkg => {
         const chain = pkg.governance?.evidence_chain || [];
         const steps = chain.map(step => `<li><strong>${escapeHtml(step.step)}:</strong> ${escapeHtml(step.label || '—')}${step.id ? ` · <code>${escapeHtml(step.id)}</code>` : ''}</li>`).join('');
         return `<details class="evidence-chain"><summary>${escapeHtml(pkg.opportunity_name || pkg.id)} · ${fmt(pkg.sold_hours)}h</summary><ol class="evidence-steps">${steps}</ol></details>`;
       }).join('');
       const remediation = account.remediation;
-      const governanceHeader = governance ? `${tierBadge(governance.overall_tier, governance.status)}${remediation ? ` <span class="account-meta">${escapeHtml(remediation.highest_priority || '')} remediation · ${fmt(remediation.active_workstream_count)} active workstreams</span>` : ''}` : '';
-      detail.innerHTML = `<div class="detail-header"><div class="detail-title"><h2>${escapeHtml(account.name)}</h2><div>${governanceHeader}</div><div class="detail-kpis"><span><strong>${fmt(account.remaining_hours)}</strong> remaining</span><span><strong>${fmt(account.at_risk_hours)}</strong> at risk</span><span><strong>${fmt(account.expired_unused_hours)}</strong> expired</span><span><strong>${fmt(account.overage_hours)}</strong> overage</span>${account.pre_entitlement_hours ? `<span><strong>${fmt(account.pre_entitlement_hours)}</strong> pre-entitlement</span>` : ''}</div></div><button class="button secondary" id="closeDetail" type="button">Close detail</button></div>
-        <div class="detail-grid">
-          <section class="subpanel governance"><h3>Governance evidence · weakest dimension controls the account tier</h3>${dimensionCards ? `<div class="evidence-summary">${dimensionCards}</div>${evidenceChains ? `<div class="evidence-chains"><strong>Entitlement evidence chains</strong>${evidenceChains}</div>` : ''}` : '<div class="empty">Governance evidence is pending a refreshed report.</div>'}</section>
-          <section class="subpanel projects"><h3>Matched Rocketlane projects · ${fmt(account.project_count)}</h3>${projectRows ? `<div class="table-wrap"><table><thead><tr><th>Project</th><th>Customer / match basis</th><th>Status</th><th>Start</th><th>Due</th><th class="number">Entries</th><th class="number">Billed</th></tr></thead><tbody>${projectRows}</tbody></table></div>` : '<div class="empty">No matched Rocketlane projects.</div>'}</section>
-          <section class="subpanel"><h3>Entitlement tranches · FIFO by expiration</h3>${packageRows ? `<div class="table-wrap"><table><thead><tr><th>Package</th><th>Service start</th><th>Expires</th><th class="number">Sold</th><th class="number">Used</th><th class="number">Left</th><th>Evidence</th><th>Risk</th></tr></thead><tbody>${packageRows}</tbody></table></div>` : '<div class="empty">No recognized sold-hours package.</div>'}</section>
-          <section class="subpanel"><h3>Billable Rocketlane entries · latest 100</h3>${entryRows ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Project / work</th><th>Contributor / approval</th><th class="number">Hours</th></tr></thead><tbody>${entryRows}</tbody></table></div>` : '<div class="empty">No matched billable entries.</div>'}</section>
+      const coverageNote = governance?.coverage_capped
+        ? '<p class="source-note">Nothing on this account can be marked checked until a complete, current data pull succeeds.</p>' : '';
+      const trend = account.trend?.fields;
+      detail.innerHTML = `
+        <div class="sheet-header">
+          <div class="sheet-title">
+            <h2 id="detailHeading">${escapeHtml(account.name)}</h2>
+            <div class="detail-kpis">
+              <span><strong>${fmt(account.remaining_hours)}</strong> remaining</span>
+              <span><strong>${fmt(account.at_risk_hours)}</strong> at risk ${trend ? deltaChipShort(trend.at_risk_hours) : ''}</span>
+              <span><strong>${fmt(account.expired_unused_hours)}</strong> expired</span>
+              <span><strong>${fmt(account.overage_hours)}</strong> over</span>
+              ${account.pre_entitlement_hours ? `<span><strong>${fmt(account.pre_entitlement_hours)}</strong> before entitlement</span>` : ''}
+            </div>
+            ${remediation?.active_workstream_count ? `<p class="source-note">${escapeHtml(`${plural(remediation.active_workstream_count, 'open data-quality item')} · ${urgencyLabel(remediation.highest_priority)}`)}</p>` : ''}
+          </div>
+          <button class="button secondary" type="button" data-action="close-detail">Close</button>
+        </div>
+        <div class="sheet-body">
+          <section class="subpanel"><h3>Entitlements · used in expiry order</h3>${packageRows ? `<div class="table-wrap"><table><thead><tr><th>Package</th><th>Starts</th><th>Expires</th><th class="number">Sold</th><th class="number">Used</th><th class="number">Left</th><th>Evidence</th><th>Status</th></tr></thead><tbody>${packageRows}</tbody></table></div>` : '<div class="empty">No sold-hours package was found for this account.</div>'}</section>
+          <section class="subpanel"><h3>Matched Rocketlane projects · ${fmt(account.project_count)}</h3>${projectRows ? `<div class="table-wrap"><table><thead><tr><th>Project</th><th>Customer</th><th>Status</th><th>Start</th><th>Due</th><th class="number">Entries</th><th class="number">Hours</th></tr></thead><tbody>${projectRows}</tbody></table></div>` : '<div class="empty">No matched Rocketlane projects.</div>'}</section>
+          <section class="subpanel"><h3>Billable time · most recent 100</h3>${entryRows ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Project / work</th><th>Who / approval</th><th class="number">Hours</th></tr></thead><tbody>${entryRows}</tbody></table></div>` : '<div class="empty">No billable time matched this account.</div>'}</section>
+          <section class="subpanel"><h3>Governance evidence · the weakest check sets the account status</h3>${coverageNote}${dimensionCards ? `<div class="evidence-summary">${dimensionCards}</div>${evidenceChains ? `<div class="evidence-chains"><strong>Where each entitlement came from</strong>${evidenceChains}</div>` : ''}` : '<div class="empty">Evidence appears after the next refresh.</div>'}</section>
         </div>`;
-      detail.classList.add('show');
-      $('#closeDetail').addEventListener('click', () => { state.selectedId = null; detail.classList.remove('show'); renderAccounts(); });
+      const wasOpen = detail.classList.contains('open');
+      detail.hidden = false;
+      detail.setAttribute('aria-hidden', 'false');
+      // Force a frame so the transform transition runs on first open.
+      requestAnimationFrame(() => detail.classList.add('open'));
+      $('#sheetScrim').classList.add('show');
+      // Re-rendering an open sheet after a data reload must not steal focus or
+      // re-announce the account.
+      if (!wasOpen) {
+        announce(`Opened ${account.name}.`);
+        const close = detail.querySelector('[data-action="close-detail"]');
+        if (close) close.focus();
+      }
     }
 
+    /* ---------- Data quality ---------- */
     function remediationActionButtons(workstream) {
       const base = `data-workstream-id="${escapeHtml(workstream.fingerprint)}" data-workstream-version="${Number(workstream.version)}"`;
       const active = ['open', 'acknowledged', 'in_progress', 'pending_validation', 'snoozed'].includes(workstream.status);
       let primary = '';
-      if (workstream.status === 'open') primary = `<button class="button tiny secondary" ${base} data-remediation-action="acknowledge" type="button">Acknowledge</button><button class="button tiny secondary" ${base} data-remediation-action="start" type="button">Start work</button>`;
-      if (workstream.status === 'acknowledged') primary = `<button class="button tiny secondary" ${base} data-remediation-action="start" type="button">Start work</button><button class="button tiny secondary" ${base} data-remediation-action="ready_for_validation" type="button">Ready for fresh-pull validation</button>`;
-      if (workstream.status === 'snoozed') primary = `<button class="button tiny secondary" ${base} data-remediation-action="resume" type="button">Resume work</button>`;
-      if (workstream.status === 'in_progress') primary = `<button class="button tiny secondary" ${base} data-remediation-action="ready_for_validation" type="button">Ready for fresh-pull validation</button>`;
-      if (workstream.status === 'pending_validation') primary = `<span class="source-note">Waiting for a new complete source retrieval.</span><button class="button tiny secondary" ${base} data-remediation-action="resume" type="button">Resume work</button>`;
-      if (workstream.status === 'waived') return `<span class="source-note">Temporary exception approved by ${escapeHtml(workstream.waiver_approved_by || '—')} through ${fmtDate(workstream.waiver_expires_on)}.</span>`;
-      const controls = active ? `<button class="button tiny secondary" ${base} data-remediation-action="snooze" type="button">Snooze</button><button class="button tiny secondary" ${base} data-remediation-action="waive" type="button">Temporary exception</button>` : '';
+      if (workstream.status === 'open') primary = `<button class="button tiny secondary" ${base} data-action="remediation-action" data-remediation-action="acknowledge" type="button">Acknowledge</button><button class="button tiny secondary" ${base} data-action="remediation-action" data-remediation-action="start" type="button">Start work</button>`;
+      if (workstream.status === 'acknowledged') primary = `<button class="button tiny secondary" ${base} data-action="remediation-action" data-remediation-action="start" type="button">Start work</button><button class="button tiny secondary" ${base} data-action="remediation-action" data-remediation-action="ready_for_validation" type="button">Mark ready to re-check</button>`;
+      if (workstream.status === 'snoozed') primary = `<button class="button tiny secondary" ${base} data-action="remediation-action" data-remediation-action="resume" type="button">Resume</button>`;
+      if (workstream.status === 'in_progress') primary = `<button class="button tiny secondary" ${base} data-action="remediation-action" data-remediation-action="ready_for_validation" type="button">Mark ready to re-check</button>`;
+      if (workstream.status === 'pending_validation') primary = `<span class="source-note">Waiting for a fresh data pull to confirm the fix.</span><button class="button tiny secondary" ${base} data-action="remediation-action" data-remediation-action="resume" type="button">Resume</button>`;
+      if (workstream.status === 'waived') return `<span class="source-note">Exception approved by ${escapeHtml(workstream.waiver_approved_by || '—')} until ${fmtDate(workstream.waiver_expires_on)}.</span>`;
+      const controls = active ? `<button class="button tiny secondary" ${base} data-action="remediation-action" data-remediation-action="snooze" type="button">Snooze</button><button class="button tiny secondary" ${base} data-action="remediation-action" data-remediation-action="waive" type="button">Add exception</button>` : '';
       return primary + controls;
     }
 
@@ -581,13 +972,19 @@
       const base = `data-workstream-id="${escapeHtml(workstream.fingerprint)}" data-workstream-version="${Number(workstream.version)}"`;
       const badges = `${path.recommended ? '<span class="pill live">Recommended</span>' : ''}${selected ? '<span class="pill">Selected</span>' : ''}`;
       const steps = (path.steps || []).map(step => `<li>${escapeHtml(step)}</li>`).join('');
-      const dependencies = (path.dependencies || []).join(' · ') || 'None listed';
-      const contributors = (path.contributors || []).join(' · ') || 'None listed';
-      return `<article class="path-option ${path.recommended ? 'recommended' : ''} ${selected ? 'selected' : ''}"><div class="path-head">${tierBadge(path.target_tier, path.target_tier === 'T1' ? 'preferred' : 'governed')}${badges}<strong>${escapeHtml(path.title)}</strong></div><div class="path-meta"><span>Effort ${escapeHtml(path.effort)}</span><span>${escapeHtml(titleCase(path.durability))} durability</span><span>${escapeHtml(titleCase(path.execution_scope))} execution</span><span>${escapeHtml(titleCase(path.validation_mode))} validation</span></div><p>${escapeHtml(path.outcome)}</p><ol class="path-steps">${steps}</ol><p><strong>Owner:</strong> ${escapeHtml(path.primary_owner)} · <strong>Partners:</strong> ${escapeHtml(contributors)}</p><p><strong>Dependencies:</strong> ${escapeHtml(dependencies)}</p>${selected ? `<div class="execution-button-row"><span class="source-note">Selected path; this drives target-state reporting.</span><button class="button tiny" ${base} data-remediation-action="prepare_execution" type="button">Open next steps</button></div>` : `<button class="button tiny secondary" ${base} data-remediation-action="select_path" data-path-id="${escapeHtml(path.id)}" type="button">Select and open next steps</button>`}</article>`;
+      const dependencies = (path.dependencies || []).join(' · ') || 'None';
+      const contributors = (path.contributors || []).join(' · ') || 'None';
+      const meta = [
+        `Takes ${effortLabel(path.effort)}`,
+        DURABILITY_LABELS[path.durability] || titleCase(path.durability),
+        SCOPE_LABELS[path.execution_scope] || titleCase(path.execution_scope),
+        VALIDATION_LABELS[path.validation_mode] || titleCase(path.validation_mode),
+      ].map(item => `<span>${escapeHtml(item)}</span>`).join('');
+      return `<article class="path-option ${path.recommended ? 'recommended' : ''} ${selected ? 'selected' : ''}"><div class="path-head"><strong>${escapeHtml(path.title)}</strong>${badges}</div><div class="path-meta">${meta}</div><p>${escapeHtml(path.outcome)}</p><ol class="path-steps">${steps}</ol><p><strong>Owner:</strong> ${escapeHtml(path.primary_owner)} · <strong>Help from:</strong> ${escapeHtml(contributors)}</p><p><strong>Needs:</strong> ${escapeHtml(dependencies)}</p>${selected ? `<div class="execution-button-row"><span class="source-note">This is the fix being tracked.</span><button class="button tiny" ${base} data-action="remediation-action" data-remediation-action="prepare_execution" type="button">Open next steps</button></div>` : `<button class="button tiny secondary" ${base} data-action="remediation-action" data-remediation-action="select_path" data-path-id="${escapeHtml(path.id)}" type="button">Select and open next steps</button>`}</article>`;
     }
 
     function selectRemediationTab(tab, focus = false) {
-      const selected = tab === 'slack' ? 'slack' : 'planner';
+      const selected = ['slack', 'diagnostics'].includes(tab) ? tab : 'planner';
       state.remediationTab = selected;
       document.querySelectorAll('[data-remediation-tab]').forEach(button => {
         const active = button.dataset.remediationTab === selected;
@@ -597,64 +994,137 @@
       });
       $('#remediationPlannerPane').hidden = selected !== 'planner';
       $('#slackQueuePane').hidden = selected !== 'slack';
+      $('#diagnosticsPane').hidden = selected !== 'diagnostics';
     }
 
     function renderSlackQueue(queue) {
       const rows = queue.slack_outbox || [];
       const counts = queue.slack_outbox_counts || {};
       const activeCount = Number(counts.pending || 0) + Number(counts.sending || 0) + Number(counts.needs_review || 0);
-      const statusLabel = status => status === 'pending' ? 'Queued' : status === 'sending' ? 'Sending' : status === 'needs_review' ? 'Needs review' : titleCase(status);
+      const deliveryLabel = status => status === 'pending' ? 'Queued' : status === 'sending' ? 'Sending' : status === 'needs_review' ? 'Needs review' : titleCase(status);
       const queued = rows.filter(item => ['pending', 'sending', 'needs_review'].includes(item.status))
         .sort((a, b) => String(b.queued_at || '').localeCompare(String(a.queued_at || '')));
       const delivered = rows.filter(item => item.status === 'sent')
         .sort((a, b) => String(b.sent_at || b.queued_at || '').localeCompare(String(a.sent_at || a.queued_at || '')));
-      const renderItem = item => `<article class="slack-queue-item"><span class="pill slack-queue-status ${item.status === 'sent' ? 'live' : item.status === 'pending' ? 'demo' : ''}">${escapeHtml(statusLabel(item.status))}</span><div><strong>${escapeHtml(item.recipient_query || 'Unresolved recipient')}</strong><p>${escapeHtml(item.workstream_title || 'Hours Recon handoff')} · ${item.status === 'sent' ? 'delivered' : 'queued'} ${new Date(item.status === 'sent' ? item.sent_at || item.queued_at : item.queued_at).toLocaleString()}${item.error ? ` · ${escapeHtml(item.error)}` : ''}</p></div>${item.permalink ? `<a class="button tiny secondary" href="${escapeHtml(item.permalink)}" target="_blank" rel="noreferrer">Open Slack</a>` : '<span class="source-note">Not sent</span>'}</article>`;
-      const renderSection = (title, items, emptyText) => `<section class="slack-queue-section"><div class="slack-queue-section-head"><strong>${title}</strong><span>${fmt(items.length)} message${items.length === 1 ? '' : 's'} · newest first</span></div>${items.length ? `<div class="slack-queue-list">${items.map(renderItem).join('')}</div>` : `<div class="empty">${emptyText}</div>`}</section>`;
+      const renderItem = item => `<article class="slack-queue-item"><span class="pill slack-queue-status ${item.status === 'sent' ? 'live' : item.status === 'pending' ? 'demo' : ''}">${escapeHtml(deliveryLabel(item.status))}</span><div><strong>${escapeHtml(item.recipient_query || 'No recipient')}</strong><p>${escapeHtml(item.workstream_title || 'Hours Recon handoff')} · ${item.status === 'sent' ? 'delivered' : 'queued'} ${new Date(item.status === 'sent' ? item.sent_at || item.queued_at : item.queued_at).toLocaleString()}${item.error ? ` · ${escapeHtml(item.error)}` : ''}</p></div>${item.permalink ? `<a class="button tiny secondary" href="${escapeHtml(item.permalink)}" target="_blank" rel="noreferrer">Open in Slack</a>` : '<span class="source-note">Not sent yet</span>'}</article>`;
+      const renderSection = (title, items, emptyText) => `<section class="slack-queue-section"><div class="slack-queue-section-head"><strong>${title}</strong><span>${plural(items.length, 'message')} · newest first</span></div>${items.length ? `<div class="slack-queue-list">${items.map(renderItem).join('')}</div>` : `<div class="empty">${emptyText}</div>`}</section>`;
       $('#slackTabCount').textContent = fmt(activeCount);
-      $('#slackQueue').innerHTML = `<div class="slack-queue-head"><div><strong>Delivery status</strong><span class="source-note">Every reviewed handoff and its current state</span></div><span class="pill ${activeCount ? 'demo' : 'live'}">${fmt(activeCount)} awaiting delivery · ${fmt(delivered.length)} delivered</span></div>${renderSection('Queued', queued, 'No messages are awaiting delivery.')}${renderSection('Delivered', delivered, 'No messages have been delivered yet.')}`;
+      $('#slackQueue').innerHTML = `<div class="slack-queue-head"><div><strong>Message delivery</strong><span class="source-note">Nothing sends until you ask Glean Pi to send it</span></div><span class="pill ${activeCount ? 'demo' : 'live'}">${fmt(activeCount)} waiting · ${fmt(delivered.length)} sent</span></div>${renderSection('Queued', queued, 'No messages are waiting to be sent.')}${renderSection('Delivered', delivered, 'Nothing has been sent yet.')}`;
+    }
+
+    function urgencyNoteFor(accountIds) {
+      // The planner stores evidence, not money. Join back to the account record
+      // so a person can see why an item outranks another.
+      const accounts = (state.data.accounts || []).filter(item => accountIds.includes(String(item.id)));
+      const overage = accounts.reduce((total, item) => total + Number(item.overage_hours || 0), 0);
+      const expired = accounts.reduce((total, item) => total + Number(item.expired_unused_hours || 0), 0);
+      const atRisk = accounts.reduce((total, item) => total + Number(item.at_risk_hours || 0), 0);
+      const days = accounts.flatMap(item => (item.packages || []).filter(pkg => Number(pkg.remaining_hours || 0) > 0).map(pkg => Number(pkg.days_to_expiration)));
+      const soonest = days.length ? Math.min(...days) : null;
+      if (overage > 0) return `${fmt(overage)}h already over budget`;
+      if (expired > 0) return `${fmt(expired)}h already expired`;
+      if (atRisk > 0 && soonest !== null) return `${fmt(atRisk)}h expiring in ${soonest} day${soonest === 1 ? '' : 's'}`;
+      if (atRisk > 0) return `${fmt(atRisk)}h at risk`;
+      return 'No hours at stake yet';
     }
 
     function renderRemediation() {
       const queue = state.data.remediation_queue || {};
       const workstreams = queue.workstreams || [];
       renderSlackQueue(queue);
-      const waivedCount = workstreams.filter(item => item.status === 'waived').length;
       const governedCount = workstreams.filter(item => item.status === 'governed').length;
-      $('#remediationCount').textContent = `${fmt(queue.active_workstream_count)} active workstream${queue.active_workstream_count === 1 ? '' : 's'} · ${fmt(queue.active_instance_count)} account gaps${governedCount ? ` · ${governedCount} governed` : ''}${waivedCount ? ` · ${waivedCount} waived` : ''}`;
-      $('#plannerTabCount').textContent = fmt(queue.active_workstream_count);
-      $('#remediationEmpty').hidden = workstreams.length > 0;
+      const waivedCount = workstreams.filter(item => item.status === 'waived').length;
+      const openCount = Number(queue.active_workstream_count || 0);
+      $('#remediationCount').textContent = !queue.available
+        ? (queue.unavailable_reason === 'demo' ? 'Sample data' : 'Not running')
+        : openCount ? `${fmt(openCount)} to fix` : 'All clear';
+      $('#plannerTabCount').textContent = fmt(openCount);
+      $('#dataQualitySummary').textContent = queue.available
+        ? `${plural(openCount, 'open item')} · ${plural(Number(state.data.governance?.coverage_capped_account_count || 0), 'account')} not yet checked${governedCount ? ` · ${governedCount} verified` : ''}${waivedCount ? ` · ${waivedCount} exception${waivedCount === 1 ? '' : 's'}` : ''}`
+        : 'Checks that make the numbers above trustworthy';
+      renderQualitySummary(queue);
       selectRemediationTab(state.remediationTab);
+
       if (!queue.available) {
-        $('#remediationWorkstreams').innerHTML = `<div class="error show">Remediation planner unavailable.${queue.error ? ` ${escapeHtml(queue.error)}` : ''}</div>`;
+        $('#remediationWorkstreams').replaceChildren();
+        const empty = $('#remediationEmpty');
+        empty.hidden = false;
+        empty.innerHTML = `<strong>${escapeHtml(queue.unavailable_reason === 'demo' ? 'Checks run on your own data' : 'Checks are not running')}</strong>${escapeHtml(queue.unavailable_message || 'Data quality checks are unavailable.')}`;
         return;
       }
-      $('#remediationWorkstreams').innerHTML = workstreams.map((item, index) => {
-        const priority = ['P0', 'P1', 'P2'].includes(item.priority) ? item.priority : 'P2';
-        const selectedPath = item.selected_path || (item.paths || []).find(path => path.id === item.selected_path_id) || {};
-        const impact = item.impact || {};
-        const impactText = `${fmt(impact.sold_hours)}h sold · ${fmt(impact.remaining_hours)}h remaining · ${fmt(impact.at_risk_hours)}h at risk · ${fmt(impact.overage_hours)}h overage`;
-        const targetNote = item.minimum_target_met
-          ? (item.selected_target_met ? `Selected ${escapeHtml(item.selected_target_tier)} outcome validated.` : `Governed at T2; selected T1 improvement remains optional.`)
-          : `Current evidence is below the T2 governed minimum.`;
-        const instances = (item.instances || []).map(instance => `<article class="instance-item">${tierBadge(instance.validation_tier || instance.current_tier, instance.governance_status)}<div><strong>${escapeHtml(instance.account_name || instance.account_id)} · ${escapeHtml(titleCase(instance.dimension))}</strong><p>${escapeHtml(instance.summary || '')}</p><p>Reason: ${escapeHtml(instance.reason_code || '—')}${instance.unverified_observed_tier ? ` · Latest incomplete observation: ${escapeHtml(instance.unverified_observed_tier)} (not revalidated)` : ''}${instance.regression_count ? ` · Regressions: ${fmt(instance.regression_count)}` : ''}</p></div><button class="button tiny secondary" type="button" data-open-account-id="${escapeHtml(instance.account_id)}">View evidence</button></article>`).join('');
-        const paths = (item.paths || []).map(path => renderPathOption(path, item)).join('');
-        const statusLabel = item.status === 'governed' ? 'Governed' : item.status === 'waived' ? 'Waived' : `${priority} · ${titleCase(item.status)}`;
-        const outbox = item.slack_outbox || {};
-        const outboxState = outbox.status === 'pending' ? `Slack MCP handoff queued ${new Date(outbox.queued_at).toLocaleString()}; tell Pi “send pending Hours Recon messages.”` : (outbox.status === 'sending' ? 'Slack MCP handoff claimed by Pi; delivery is in progress.' : (outbox.status === 'needs_review' ? `Slack MCP delivery needs review${outbox.error ? `: ${outbox.error}` : '.'}` : ''));
-        const sourceActions = item.source_action_outbox || [];
-        const sourcePending = sourceActions.filter(action => ['pending', 'executing', 'needs_review'].includes(action.status));
-        const sourceCompleted = sourceActions.filter(action => action.status === 'completed');
-        const sourceState = sourcePending.length ? `${sourcePending.length} source action${sourcePending.length === 1 ? '' : 's'} queued/executing · tell Pi “execute pending Hours Recon source actions”` : (sourceCompleted.length ? `${sourceCompleted.length} source action${sourceCompleted.length === 1 ? '' : 's'} completed; refresh to validate.` : '');
-        const slackState = outboxState || (item.slack_sent_at ? `Slack sent ${new Date(item.slack_sent_at).toLocaleString()}${item.slack_permalink ? ` · ${item.slack_permalink}` : ''}` : (item.slack_copied_at ? `Slack follow-up copied ${new Date(item.slack_copied_at).toLocaleString()}; not sent.` : (item.mcp_request_copied_at ? `MCP request copied ${new Date(item.mcp_request_copied_at).toLocaleString()}; no source write is implied.` : '')));
-        const copied = [sourceState, slackState].filter(Boolean).join(' · ');
-        const selectedAlternate = item.selected_path_id !== item.recommended_path_id;
-        const recommendationHeading = selectedAlternate ? 'Selected alternate path' : 'Why this path';
-        const recommendationText = selectedAlternate ? `Policy recommends a different path: ${item.recommendation_reason || ''} The selected alternate remains valid and drives the current target.` : (item.recommendation_reason || '');
-        return `<details class="workstream-card" ${index === 0 && item.status !== 'governed' ? 'open' : ''}><summary><span class="case-priority ${priority.toLowerCase()}">${escapeHtml(statusLabel)}</span><span class="workstream-title"><strong>${escapeHtml(item.title)}</strong><span class="workstream-summary-meta">${fmt(item.affected_account_count)} account${item.affected_account_count === 1 ? '' : 's'} · ${escapeHtml((item.dimensions || []).map(titleCase).join(', '))} · Target ${escapeHtml(item.selected_target_tier || selectedPath.target_tier || 'T2')}</span></span><span class="workstream-id">${escapeHtml(item.fingerprint.slice(0, 17))}…</span></summary><div class="workstream-body"><div class="planner-summary"><div class="planner-fact"><span>Selected path</span><strong>${escapeHtml(selectedPath.title || 'Policy recommendation')}</strong></div><div class="planner-fact"><span>Route</span><strong>${escapeHtml(titleCase(item.route))}</strong></div><div class="planner-fact"><span>Effort</span><strong>${escapeHtml(selectedPath.effort || '—')}</strong></div><div class="planner-fact"><span>Due</span><strong>${fmtDate(item.due_on)}</strong></div><div class="planner-fact"><span>Impact</span><strong>${escapeHtml(impactText)}</strong></div></div><div class="recommendation"><strong>${escapeHtml(recommendationHeading)}</strong><p>${escapeHtml(recommendationText)}</p><span class="target-note ${item.minimum_target_met && !item.selected_target_met ? 'optional' : ''}">${targetNote}</span></div><div><h3>Ranked paths</h3><div class="path-list">${paths}</div></div><div><h3>Affected account evidence</h3><div class="instance-list">${instances}</div></div><div class="queue-meta"><span>Primary owner: ${escapeHtml(item.primary_owner || '—')}</span><span>Required partners: ${escapeHtml((item.required_partners || []).join(' · ') || '—')}</span>${item.assignee ? `<span>Slack follow-up: ${escapeHtml(item.assignee)}</span>` : ''}${item.regression_count ? `<span>Workstream regressions: ${fmt(item.regression_count)}</span>` : ''}</div><div class="workstream-actions">${remediationActionButtons(item)}<button class="button tiny secondary" type="button" data-workstream-history="${escapeHtml(item.fingerprint)}">Load history</button><span class="copy-feedback" id="copy-${escapeHtml(item.fingerprint)}">${escapeHtml(copied)}</span></div><div id="history-${escapeHtml(item.fingerprint)}" class="history"></div></div></details>`;
-      }).join('');
-      document.querySelectorAll('[data-open-account-id]').forEach(button => button.addEventListener('click', event => { event.preventDefault(); selectAccount(button.dataset.openAccountId); }));
-      document.querySelectorAll('[data-remediation-action]').forEach(button => button.addEventListener('click', event => { event.preventDefault(); applyRemediationAction(button); }));
-      document.querySelectorAll('[data-workstream-history]').forEach(button => button.addEventListener('click', event => { event.preventDefault(); loadWorkstreamHistory(button); }));
+      $('#remediationEmpty').hidden = workstreams.length > 0;
+      if (!workstreams.length) {
+        $('#remediationEmpty').innerHTML = '<strong>Nothing to fix.</strong>Every account passed its evidence checks.';
+      }
+      patchList($('#remediationWorkstreams'), workstreams, {
+        key: item => item.fingerprint,
+        tag: 'details',
+        className: 'workstream-card',
+        render: (item, node) => {
+          const priority = ['P0', 'P1', 'P2'].includes(item.priority) ? item.priority : 'P2';
+          const resolved = item.status === 'governed' || item.status === 'waived';
+          const selectedPath = item.selected_path || (item.paths || []).find(path => path.id === item.selected_path_id) || {};
+          const accountIds = (item.instances || []).map(instance => String(instance.account_id));
+          const targetNote = item.minimum_target_met
+            ? (item.selected_target_met ? 'This fix has been confirmed by a fresh data pull.' : 'Checked. The stronger fix is still available but optional.')
+            : 'Evidence has not passed its check yet.';
+          const instances = (item.instances || []).map(instance => `<article class="instance-item">${verificationChip(instance.validation_tier || instance.current_tier)}<div><strong>${escapeHtml(instance.account_name || instance.account_id)} · ${escapeHtml(dimensionLabel(instance.dimension))}</strong><p>${escapeHtml(instance.summary || '')}</p>${instance.regression_count ? `<p>Came back ${plural(instance.regression_count, 'time')} after being fixed.</p>` : ''}</div><button class="button tiny secondary" type="button" data-action="select-account" data-account-id="${escapeHtml(instance.account_id)}">View account</button></article>`).join('');
+          const paths = (item.paths || []).map(path => renderPathOption(path, item)).join('');
+          const outbox = item.slack_outbox || {};
+          const outboxState = outbox.status === 'pending' ? `Message queued ${new Date(outbox.queued_at).toLocaleString()}. Tell Glean Pi “send pending Hours Recon messages”.` : (outbox.status === 'sending' ? 'Glean Pi is sending the message now.' : (outbox.status === 'needs_review' ? `Message delivery needs review${outbox.error ? `: ${outbox.error}` : '.'}` : ''));
+          const sourceActions = item.source_action_outbox || [];
+          const sourcePending = sourceActions.filter(action => ['pending', 'executing', 'needs_review'].includes(action.status));
+          const sourceCompleted = sourceActions.filter(action => action.status === 'completed');
+          const sourceState = sourcePending.length ? `${plural(sourcePending.length, 'change')} queued · tell Glean Pi “execute pending Hours Recon source actions”` : (sourceCompleted.length ? `${plural(sourceCompleted.length, 'change')} applied. Refresh to confirm.` : '');
+          const slackState = outboxState || (item.slack_sent_at ? `Message sent ${new Date(item.slack_sent_at).toLocaleString()}` : (item.slack_copied_at ? `Message copied ${new Date(item.slack_copied_at).toLocaleString()}; not sent.` : (item.mcp_request_copied_at ? `Request copied ${new Date(item.mcp_request_copied_at).toLocaleString()}; no source write is implied.` : '')));
+          const copied = [sourceState, slackState].filter(Boolean).join(' · ');
+          const selectedAlternate = item.selected_path_id !== item.recommended_path_id;
+          const recommendationHeading = selectedAlternate ? 'You chose a different fix' : 'Why this fix';
+          const recommendationText = selectedAlternate ? `The recommended fix was different: ${item.recommendation_reason || ''} Your choice is still valid and is what gets tracked.` : (item.recommendation_reason || '');
+          node.innerHTML = `<summary><span class="urgency ${resolved ? 'done' : priority.toLowerCase()}">${escapeHtml(resolved ? statusLabel(item.status) : urgencyLabel(priority))}</span><span class="workstream-title"><strong>${escapeHtml(item.title)}</strong><span class="workstream-summary-meta">${escapeHtml(`${urgencyNoteFor(accountIds)} · ${plural(item.affected_account_count, 'account')} · ${statusLabel(item.status)}`)}</span></span><span class="workstream-due">Due ${fmtShortDate(item.due_on)}</span></summary>
+            <div class="workstream-body">
+              <div class="planner-summary">
+                <div class="planner-fact"><span>Chosen fix</span><strong>${escapeHtml(selectedPath.title || 'Recommended fix')}</strong></div>
+                <div class="planner-fact"><span>Handled by</span><strong>${escapeHtml(routeLabel(item.route))}</strong></div>
+                <div class="planner-fact"><span>Time needed</span><strong>${escapeHtml(effortLabel(selectedPath.effort))}</strong></div>
+                <div class="planner-fact"><span>Owner</span><strong>${escapeHtml(item.primary_owner || '—')}</strong></div>
+              </div>
+              <div class="recommendation"><strong>${escapeHtml(recommendationHeading)}</strong><p>${escapeHtml(recommendationText)}</p><span class="target-note ${item.minimum_target_met && !item.selected_target_met ? 'optional' : ''}">${escapeHtml(targetNote)}</span></div>
+              <div><h3>Ways to fix this</h3><div class="path-list">${paths}</div></div>
+              <div><h3>Affected accounts</h3><div class="instance-list">${instances}</div></div>
+              <div class="queue-meta"><span>Help from: ${escapeHtml((item.required_partners || []).join(' · ') || '—')}</span>${item.assignee ? `<span>Following up with: ${escapeHtml(item.assignee)}</span>` : ''}</div>
+              <div class="workstream-actions">${remediationActionButtons(item)}<button class="button tiny secondary" type="button" data-action="workstream-history" data-workstream-history="${escapeHtml(item.fingerprint)}">Show history</button><span class="copy-feedback" id="copy-${escapeHtml(item.fingerprint)}">${escapeHtml(copied)}</span></div>
+              <div id="history-${escapeHtml(item.fingerprint)}" class="history"></div>
+            </div>`;
+        },
+      });
+    }
+
+    function renderQualitySummary(queue) {
+      const governance = state.data.governance || {};
+      const split = governance.metrics?.remaining_hours;
+      const capped = Number(governance.coverage_capped_account_count || 0);
+      const parts = [];
+      if (split) parts.push(`<span><strong>${fmt(split.governed)}h</strong> of remaining hours are checked and trusted · <strong>${fmt(split.provisional)}h</strong> are not yet checked</span>`);
+      if (capped) parts.push(`<span>${escapeHtml(plural(capped, 'account'))} cannot be checked until the data pull is current</span>`);
+      if (!queue.available && queue.unavailable_message) parts.push(`<span>${escapeHtml(queue.unavailable_message)}</span>`);
+      if (split) parts.push(`<span class="technical" title="Exact governed and provisional split">${escapeHtml(governanceSplitText(split))}</span>`);
+      $('#qualitySummary').innerHTML = parts.join('');
+    }
+
+    function renderExceptions() {
+      const rows = state.data.exceptions || [];
+      $('#diagnosticsTabCount').textContent = fmt(rows.length);
+      $('#exceptionEmpty').hidden = rows.length > 0;
+      patchList($('#exceptions'), rows, {
+        key: (item, index) => `${item.type}:${item.account_id || item.project_id || item.rocketlane_customer || index}`,
+        className: 'exception',
+        render: (item, node) => {
+          const subject = item.account_name || item.rocketlane_customer || item.opportunity_name || item.project_name || 'Unknown record';
+          const suggestion = item.suggested_account ? ` Possible match: ${item.suggested_account} (${Math.round(item.suggestion_score * 100)}% confident).` : '';
+          node.innerHTML = `<div><strong>${escapeHtml(subject)}</strong><span class="exception-type">${escapeHtml(titleCase(item.type))}</span></div><p>${escapeHtml(item.message || '')}${escapeHtml(suggestion)}</p>`;
+        },
+      });
     }
 
     async function loadWorkstreamHistory(button) {
@@ -664,12 +1134,12 @@
       try {
         const response = await fetch(`/api/remediation/workstreams/${encodeURIComponent(workstreamId)}`, { cache: 'no-store' });
         const result = await response.json();
-        if (!response.ok) throw new Error(result.error || `Could not load workstream history (${response.status})`);
+        if (!response.ok) throw new Error(result.error || `Could not load history (${response.status})`);
         const events = result.workstream?.events || [];
         target.innerHTML = events.length ? `<strong>Recent history</strong><ol class="evidence-steps">${events.slice(0, 25).map(item => {
           const payload = Object.entries(item.payload || {}).map(([key, value]) => `${titleCase(key)}: ${typeof value === 'object' ? JSON.stringify(value) : String(value)}`).join(' · ');
           return `<li>${escapeHtml(new Date(item.created_at).toLocaleString())} · ${escapeHtml(titleCase(item.event_type))} · ${escapeHtml(item.actor)}${payload ? ` · ${escapeHtml(payload)}` : ''}</li>`;
-        }).join('')}</ol>` : 'No history recorded.';
+        }).join('')}</ol>` : 'No history yet.';
       } catch (error) {
         setError(error.message);
       } finally {
@@ -687,10 +1157,75 @@
         body: JSON.stringify({ action, expected_version: Number(version), ...payload }),
       });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || `Remediation action failed (${response.status})`);
+      if (!response.ok) throw new Error(result.error || `Action failed (${response.status})`);
       return result;
     }
 
+    /* ---------- Dialog prompts (replacing window.prompt / window.confirm) ---------- */
+    function openFormDialog({ title, description = '', fields = [], confirmLabel = 'Confirm' }) {
+      const dialog = $('#promptDialog');
+      const form = $('#promptForm');
+      $('#promptTitle').textContent = title;
+      $('#promptDescription').textContent = description;
+      $('#promptDescription').hidden = !description;
+      $('#promptError').textContent = '';
+      $('#promptConfirm').textContent = confirmLabel;
+      $('#promptFields').innerHTML = fields.map((field, index) => {
+        const id = `prompt-field-${index}`;
+        const attributes = [
+          `id="${id}"`,
+          `name="${escapeHtml(field.name)}"`,
+          `type="${escapeHtml(field.type || 'text')}"`,
+          field.value ? `value="${escapeHtml(field.value)}"` : '',
+          field.min ? `min="${escapeHtml(field.min)}"` : '',
+          field.required === false ? '' : 'required',
+          field.placeholder ? `placeholder="${escapeHtml(field.placeholder)}"` : '',
+        ].filter(Boolean).join(' ');
+        return `<div class="field"><label for="${id}">${escapeHtml(field.label)}</label><input ${attributes}>${field.help ? `<p class="prompt-field-help">${escapeHtml(field.help)}</p>` : ''}</div>`;
+      }).join('');
+      dialog.showModal();
+      const first = $('#promptFields').querySelector('input');
+      if (first) first.focus(); else $('#promptConfirm').focus();
+      return new Promise(resolve => {
+        let settled = false;
+        const cleanup = () => {
+          form.removeEventListener('submit', onSubmit);
+          dialog.removeEventListener('close', onClose);
+          dialog.removeEventListener('cancel', onCancel);
+        };
+        const finish = value => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve(value);
+        };
+        const onSubmit = event => {
+          event.preventDefault();
+          const values = {};
+          for (const field of fields) {
+            const input = form.elements.namedItem(field.name);
+            const raw = String(input?.value || '').trim();
+            if (field.required !== false && !raw) { $('#promptError').textContent = `${field.label} is required.`; input?.focus(); return; }
+            values[field.name] = raw;
+          }
+          // Settle before closing: a dialog close event must not resolve twice.
+          finish(values);
+          dialog.close();
+        };
+        const onCancel = () => finish(null);
+        const onClose = () => finish(null);
+        form.addEventListener('submit', onSubmit);
+        dialog.addEventListener('cancel', onCancel);
+        dialog.addEventListener('close', onClose);
+      });
+    }
+
+    async function confirmAction({ title, description, confirmLabel = 'Confirm' }) {
+      const result = await openFormDialog({ title, description, fields: [], confirmLabel });
+      return result !== null;
+    }
+
+    /* ---------- Execution workspace ---------- */
     function executionList(items, emptyText = 'None') {
       return items?.length ? `<ul class="execution-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : `<p class="source-note">${escapeHtml(emptyText)}</p>`;
     }
@@ -702,7 +1237,7 @@
     }
 
     function buildGleanSourceExecutionPrompt(workspace, sourceActions) {
-      if (!sourceActions?.length) throw new Error('Queue the reviewed source actions before opening Glean.');
+      if (!sourceActions?.length) throw new Error('Queue the reviewed changes before opening Glean.');
       const changes = sourceActions.map(action => ({
         outbox_id: action.id,
         outbox_version: Number(action.version),
@@ -738,8 +1273,50 @@
       if (button) button.disabled = !(state.execution?.sourceActions || []).length;
     }
 
+    // A placeholder such as <confirmed contracted hours> is a prompt, not a value.
+    const PLACEHOLDER = /^<[^>]+>$/;
+    function fieldEditorRow(operationIndex, name, value, fieldIndex) {
+      const id = `srcfield-${operationIndex}-${fieldIndex}`;
+      const label = `<label for="${id}"><span class="field-key">${escapeHtml(name)}</span>${typeof value === 'string' && PLACEHOLDER.test(value) ? '<span class="field-hint">You need to supply this</span>' : '<span class="field-hint">Pre-filled from evidence</span>'}</label>`;
+      if (typeof value === 'boolean') {
+        return `<div class="field-row">${label}<input id="${id}" type="checkbox" data-field-name="${escapeHtml(name)}" data-field-type="boolean" ${value ? 'checked' : ''}></div>`;
+      }
+      if (typeof value === 'number') {
+        return `<div class="field-row">${label}<input id="${id}" type="number" step="any" data-field-name="${escapeHtml(name)}" data-field-type="number" value="${escapeHtml(String(value))}"></div>`;
+      }
+      if (value !== null && typeof value === 'object') {
+        return `<div class="field-row">${label}<textarea id="${id}" data-field-name="${escapeHtml(name)}" data-field-type="json" spellcheck="false">${escapeHtml(JSON.stringify(value, null, 2))}</textarea></div>`;
+      }
+      const text = String(value ?? '');
+      const isPlaceholder = PLACEHOLDER.test(text);
+      return `<div class="field-row">${label}<input id="${id}" type="text" data-field-name="${escapeHtml(name)}" data-field-type="string" value="${isPlaceholder ? '' : escapeHtml(text)}" placeholder="${escapeHtml(isPlaceholder ? text.slice(1, -1) : '')}"></div>`;
+    }
+
+    function collectProposedFields(editor) {
+      const fields = {};
+      for (const input of editor.querySelectorAll('[data-field-name]')) {
+        const name = input.dataset.fieldName;
+        const type = input.dataset.fieldType;
+        if (type === 'boolean') { fields[name] = input.checked; continue; }
+        const raw = String(input.value ?? '').trim();
+        if (type === 'json') {
+          try { fields[name] = JSON.parse(input.value); }
+          catch (error) { throw new Error(`“${name}” must contain valid JSON.`); }
+          continue;
+        }
+        if (type === 'number') {
+          if (raw === '' || Number.isNaN(Number(raw))) throw new Error(`“${name}” must be a number.`);
+          fields[name] = Number(raw);
+          continue;
+        }
+        if (!raw) throw new Error(`Enter a value for “${name}”.`);
+        fields[name] = raw;
+      }
+      return fields;
+    }
+
     function renderExecutionWorkspace(workspace, workstream) {
-      if (!workspace) throw new Error('The execution workspace was not returned.');
+      if (!workspace) throw new Error('The next-steps workspace was not returned.');
       state.execution = {
         workspace,
         workstreamId: workstream.fingerprint,
@@ -751,31 +1328,31 @@
       const operations = (workspace.operations || []).map((operation, operationIndex) => {
         const writeReady = supportedWriteTools.has(operation.tool);
         const unsupported = !writeReady || String(operation.status || '').includes('unsupported');
-        const records = (operation.record_ids || []).join(', ') || 'Resolve during preflight';
-        const fields = escapeHtml(JSON.stringify(operation.proposed_fields || {}, null, 2));
+        const records = (operation.record_ids || []).join(', ') || 'Found during pre-checks';
+        const entries = Object.entries(operation.proposed_fields || {});
         const fieldEditor = writeReady
-          ? `<textarea class="execution-fields source-fields" data-source-operation-index="${operationIndex}" aria-label="Reviewed proposed fields for ${escapeHtml(operation.object)}">${fields}</textarea>`
-          : `<pre class="execution-fields">${fields}</pre>`;
-        return `<article class="execution-card execution-operation ${unsupported ? 'unsupported' : ''}"><h3><span class="pill ${writeReady ? 'mcp' : ''}">${writeReady ? 'Write available' : 'Owner handoff'}</span>${escapeHtml(titleCase(operation.system))} · ${escapeHtml(operation.object)}</h3><p><strong>Tool:</strong> ${escapeHtml(operation.tool || 'No safe connector write registered')} · <strong>Records:</strong> ${escapeHtml(records)}</p>${fieldEditor}<div><strong>Required preflight</strong>${executionList(operation.preflight || [])}</div>${operation.limitation ? `<p class="source-note"><strong>Boundary:</strong> ${escapeHtml(operation.limitation)}</p>` : ''}</article>`;
-      }).join('') || '<div class="execution-card">No concrete operation is available from the current evidence.</div>';
+          ? `<div class="field-table" data-source-operation-index="${operationIndex}">${entries.map(([name, value], fieldIndex) => fieldEditorRow(operationIndex, name, value, fieldIndex)).join('')}</div>`
+          : `<pre class="execution-fields">${escapeHtml(JSON.stringify(operation.proposed_fields || {}, null, 2))}</pre>`;
+        return `<article class="execution-card execution-operation ${unsupported ? 'unsupported' : ''}"><h3><span class="pill ${writeReady ? 'mcp' : ''}">${writeReady ? 'Glean can write this' : 'Owner does this'}</span>${escapeHtml(titleCase(operation.system))} · ${escapeHtml(operation.object)}</h3><p class="source-note"><strong>Records:</strong> ${escapeHtml(records)}</p>${fieldEditor}<div><strong>Pre-checks Glean must run</strong>${executionList(operation.preflight || [])}</div>${operation.limitation ? `<p class="source-note"><strong>Limit:</strong> ${escapeHtml(operation.limitation)}</p>` : ''}</article>`;
+      }).join('') || '<div class="execution-card">There is no concrete change to propose from the current evidence.</div>';
       const recordCards = (workspace.records || []).map(record => {
         const links = (record.links || []).map(link => `<li><a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.label)}</a></li>`).join('');
-        return `<article class="execution-card"><h3>${escapeHtml(record.account_name)} · ${escapeHtml(titleCase(record.dimension))}</h3>${executionList(record.findings || [], 'No additional findings.')}${links ? `<div><strong>Source records</strong><ul class="execution-links">${links}</ul></div>` : '<p class="source-note">No source link is available.</p>'}</article>`;
+        return `<article class="execution-card"><h3>${escapeHtml(record.account_name)} · ${escapeHtml(dimensionLabel(record.dimension))}</h3>${executionList(record.findings || [], 'No extra findings.')}${links ? `<div><strong>Open the source record</strong><ul class="execution-links">${links}</ul></div>` : '<p class="source-note">No direct link available.</p>'}</article>`;
       }).join('');
       const notices = executionList(workspace.notices || []);
-      const limitations = executionList(workspace.limitations || [], 'No additional connector limitations.');
-      const inputs = executionList(workspace.required_inputs || [], 'No additional business input is required beyond confirmation.');
+      const limitations = executionList(workspace.limitations || [], 'No extra limits.');
+      const inputs = executionList(workspace.required_inputs || [], 'Nothing beyond your confirmation.');
       const sourceExecutionAvailable = state.data?.remediation_queue?.source_execution?.available === true;
       const sourceFieldEditors = (workspace.operations || []).filter(operation => supportedWriteTools.has(operation.tool)).length;
       const slackMcpAvailable = state.data?.remediation_queue?.slack_delivery?.available === true;
       const handoffs = workspace.slack_handoffs || [];
-      const handoffRows = handoffs.map(item => `<article class="handoff-item"><strong>${escapeHtml(item.recipient_label || item.recipient)}</strong><span>${fmt(item.entry_ids?.length || 0)} submitted entr${item.entry_ids?.length === 1 ? 'y' : 'ies'} · ${escapeHtml((item.issues || []).join(' · '))}</span></article>`).join('');
-      const slackSetupNote = slackMcpAvailable ? 'Review and queue this message, then tell Glean Pi “send pending Hours Recon messages.” Pi will send it through your connected Slack identity and return the message link.' : 'The local remediation queue is unavailable. Use Copy instead.';
-      $('#executionSubtitle').textContent = `${workspace.selected_path?.title || 'Selected path'} · ${modeLabel}`;
-      $('#executionContent').innerHTML = `<div class="execution-banner"><strong>Approval boundary:</strong> Hours Recon prepared this workspace but did not write Salesforce or Rocketlane. Glean MCP must re-read the records and ask for explicit confirmation immediately before every supported write.</div><div class="execution-grid"><div class="execution-column"><section><h2>Proposed source actions</h2><div class="execution-column">${operations}</div>${sourceFieldEditors ? `<div class="execution-card"><strong>Reviewed write queue</strong><p class="source-note">Replace every &lt;placeholder&gt; with a concrete value. Queueing does not write immediately: Glean Pi will fresh-read the records, show the exact before/after values, and require final confirmation immediately before each write.</p><div class="execution-button-row"><button class="button" id="queueSourceActions" type="button" ${sourceExecutionAvailable ? '' : 'disabled'}>Queue reviewed source actions</button><button class="button secondary" id="openGleanExecution" type="button">Open Glean with queued changes</button><span class="execution-feedback" id="sourceQueueFeedback"></span></div><p class="source-note">Queue the reviewed actions first. Glean then pre-fills the exact outbox IDs, target records, and reviewed field/value changes; press Send in Chat to start. Auto-send from an external link is intentionally blocked by Glean security.</p></div>` : ''}</section><section><h2>Affected records</h2><div class="execution-column">${recordCards}</div></section></div><aside class="execution-column"><article class="execution-card"><h3>Before execution</h3><strong>Required inputs</strong>${inputs}<strong>Connector boundaries</strong>${limitations}<strong>Safety</strong>${notices}</article><article class="execution-card execution-copy"><h3>MCP execution request</h3><p class="source-note">Copy this into Glean. The request requires read-before-write, exact payload review, and confirmation.</p><textarea id="mcpRequest" readonly aria-label="MCP execution request"></textarea><div class="execution-button-row"><button class="button" id="copyMcpRequest" type="button">Copy MCP request</button><a class="button secondary" id="openMcpWorkspace" target="_blank" rel="noreferrer">Open Glean for MCP</a><span class="execution-feedback" id="mcpCopyFeedback"></span></div></article><article class="execution-card execution-copy slack"><h3>Owner follow-up via Slack MCP</h3><p class="source-note">${escapeHtml(slackSetupNote)} ${workspace.recipient_suggestions?.length ? `Suggested from source ownership: ${escapeHtml(workspace.recipient_suggestions.join(' · '))}.` : ''}</p>${handoffRows ? `<div><strong>Time-entry submitter handoffs</strong><div class="handoff-list">${handoffRows}</div><div class="execution-button-row"><button class="button" id="queueAllSlackHandoffs" type="button" ${slackMcpAvailable ? '' : 'disabled'}>Queue all ${handoffs.length} submitter messages</button><span class="source-note">Each person receives only their own flagged entries.</span></div></div>` : ''}<div class="field"><label for="executionRecipient">Slack user, email, @handle, channel, or Slack ID</label><input id="executionRecipient" value="${escapeHtml(workspace.default_recipient || workspace.recipient_role || '')}"></div><textarea id="slackDraft" aria-label="Reviewed Slack message"></textarea><div class="execution-button-row"><button class="button" id="queueSlackDraft" type="button" ${slackMcpAvailable ? '' : 'disabled'}>Queue for Slack MCP</button><button class="button secondary" id="copySlackDraft" type="button">Copy instead</button><span class="execution-feedback" id="slackCopyFeedback"></span></div></article></aside></div>`;
+      const handoffRows = handoffs.map(item => `<article class="handoff-item"><strong>${escapeHtml(item.recipient_label || item.recipient)}</strong><span>${plural(item.entry_ids?.length || 0, 'entry', 'entries')} · ${escapeHtml((item.issues || []).join(' · '))}</span></article>`).join('');
+      const slackSetupNote = slackMcpAvailable ? 'Review the message, queue it, then tell Glean Pi “send pending Hours Recon messages”. It sends from your own Slack account and returns the link.' : 'The local queue is unavailable, so use Copy instead.';
+      $('#executionSubtitle').textContent = `${workspace.selected_path?.title || 'Selected fix'} · ${modeLabel}`;
+      $('#executionContent').innerHTML = `<div class="execution-banner"><strong>Nothing has been changed yet.</strong> Hours Recon prepared this plan but did not write to Salesforce or Rocketlane. Glean re-reads every record and asks you to confirm immediately before each write.</div><div class="execution-grid"><div class="execution-column"><section><h2>Proposed changes</h2><div class="execution-column">${operations}</div>${sourceFieldEditors ? `<div class="execution-card"><strong>Send these changes to Glean</strong><p class="source-note">Fill in every value above. Queueing does not write anything: Glean Pi re-reads each record, shows the exact before and after, and asks for final confirmation before every write.</p><div class="execution-button-row"><button class="button" id="queueSourceActions" type="button" ${sourceExecutionAvailable ? '' : 'disabled'}>Queue reviewed source actions</button><button class="button secondary" id="openGleanExecution" type="button">Open Glean with queued changes</button><span class="execution-feedback" id="sourceQueueFeedback"></span></div><p class="source-note">Queue first, then open Glean. It arrives pre-filled with the outbox IDs, target records, and your reviewed values; press Send in Chat to start. Auto-send from an external link is intentionally blocked by Glean security.</p></div>` : ''}</section><section><h2>Affected records</h2><div class="execution-column">${recordCards}</div></section></div><aside class="execution-column"><article class="execution-card"><h3>Before you start</h3><strong>What you need</strong>${inputs}<strong>What Glean cannot do</strong>${limitations}<strong>Safety</strong>${notices}</article><article class="execution-card execution-copy"><h3>Instructions for Glean</h3><p class="source-note">Copy this into Glean if you prefer to drive it yourself. It requires read-before-write and explicit confirmation.</p><textarea id="mcpRequest" readonly aria-label="Instructions for Glean"></textarea><div class="execution-button-row"><button class="button" id="copyMcpRequest" type="button">Copy instructions</button><a class="button secondary" id="openMcpWorkspace" target="_blank" rel="noreferrer">Open Glean</a><span class="execution-feedback" id="mcpCopyFeedback"></span></div></article><article class="execution-card execution-copy slack"><h3>Ask the owner in Slack</h3><p class="source-note">${escapeHtml(slackSetupNote)} ${workspace.recipient_suggestions?.length ? `Suggested owners: ${escapeHtml(workspace.recipient_suggestions.join(' · '))}.` : ''}</p>${handoffRows ? `<div><strong>One message per person who logged time</strong><div class="handoff-list">${handoffRows}</div><div class="execution-button-row"><button class="button" id="queueAllSlackHandoffs" type="button" ${slackMcpAvailable ? '' : 'disabled'}>Queue all ${handoffs.length} messages</button><span class="source-note">Each person receives only their own flagged entries.</span></div></div>` : ''}<div class="field"><label for="executionRecipient">Slack person, email, @handle, or channel</label><input id="executionRecipient" value="${escapeHtml(workspace.default_recipient || workspace.recipient_role || '')}"></div><textarea id="slackDraft" aria-label="Message to send"></textarea><div class="execution-button-row"><button class="button" id="queueSlackDraft" type="button" ${slackMcpAvailable ? '' : 'disabled'}>Queue message</button><button class="button secondary" id="copySlackDraft" type="button">Copy instead</button><span class="execution-feedback" id="slackCopyFeedback"></span></div></article></aside></div>`;
       $('#mcpRequest').value = workspace.mcp_request || '';
       const template = workspace.slack_draft?.message || '';
-      const updateSlackPreview = () => { $('#slackDraft').value = template.replaceAll('{{recipient}}', $('#executionRecipient').value.trim() || workspace.recipient_role || 'source owner'); };
+      const updateSlackPreview = () => { $('#slackDraft').value = template.replaceAll('{{recipient}}', $('#executionRecipient').value.trim() || workspace.recipient_role || 'the owner'); };
       updateSlackPreview();
       $('#executionRecipient').addEventListener('input', updateSlackPreview);
       let mcpUrl = 'https://app.glean.com/chat';
@@ -820,14 +1397,14 @@
       setError('');
       let copied = false;
       try {
-        await writeClipboard(current.workspace.mcp_request, 'Clipboard access failed. No source write was attempted.');
+        await writeClipboard(current.workspace.mcp_request, 'Clipboard access failed. Nothing was changed.');
         copied = true;
         const result = await postRemediationAction(current.workstreamId, current.version, 'record_mcp_request_copy');
         current.version = Number(result.workstream.version);
         syncRemediationWorkstream(result.workstream);
-        $('#mcpCopyFeedback').textContent = 'Copied · not executed';
+        $('#mcpCopyFeedback').textContent = 'Copied · nothing executed';
       } catch (error) {
-        setError(copied ? 'The MCP request was copied, but Hours Recon could not record the copy. No source write was attempted.' : error.message);
+        setError(copied ? 'The instructions were copied, but Hours Recon could not record that. Nothing was changed.' : error.message);
       } finally { button.disabled = false; }
     }
 
@@ -850,14 +1427,18 @@
       const actions = [];
       try {
         for (const editor of editors) {
-          const proposedFields = JSON.parse(editor.value);
-          if (!proposedFields || Array.isArray(proposedFields) || typeof proposedFields !== 'object') throw new Error('Each proposed-fields editor must contain a JSON object.');
-          if (/<[^>]+>/.test(JSON.stringify(proposedFields))) throw new Error('Replace every <placeholder> before queueing source actions.');
+          const proposedFields = collectProposedFields(editor);
+          if (/<[^>]+>/.test(JSON.stringify(proposedFields))) throw new Error('Replace every <placeholder> with a real value before queueing.');
           actions.push({ operationIndex: Number(editor.dataset.sourceOperationIndex), proposedFields });
         }
-      } catch (error) { setError(`Review the proposed source fields: ${error.message}`); return; }
-      if (!actions.length) { setError('No write-capable source actions are available.'); return; }
-      if (!window.confirm(`Queue ${actions.length} reviewed source action${actions.length === 1 ? '' : 's'}? Nothing will be written until Glean Pi performs a fresh read and asks for final confirmation.`)) return;
+      } catch (error) { setError(`Check the proposed changes: ${error.message}`); return; }
+      if (!actions.length) { setError('There is nothing Glean can write for this fix.'); return; }
+      const confirmed = await confirmAction({
+        title: `Queue ${plural(actions.length, 'change')}?`,
+        description: 'Nothing is written yet. Glean Pi will re-read each record and ask for your final confirmation before it writes.',
+        confirmLabel: 'Queue changes',
+      });
+      if (!confirmed) return;
       button.disabled = true;
       setError('');
       let queued = 0;
@@ -869,7 +1450,7 @@
             body: JSON.stringify({ expected_version: current.version, operation_index: action.operationIndex, proposed_fields: action.proposedFields, confirmed: true }),
           });
           const result = await response.json();
-          if (!response.ok) throw new Error(result.error || `Source-action queueing failed (${response.status})`);
+          if (!response.ok) throw new Error(result.error || `Queueing failed (${response.status})`);
           current.version = Number(result.workstream.version);
           current.sourceActions = pendingSourceActionsForWorkspace(current.workspace, result.workstream);
           syncRemediationWorkstream(result.workstream);
@@ -878,10 +1459,10 @@
           $('#sourceQueueFeedback').textContent = `Queued ${queued} of ${actions.length}…`;
         }
         await loadData();
-        $('#sourceQueueFeedback').textContent = `Queued ${queued} · tell Pi “execute pending Hours Recon source actions”`;
+        $('#sourceQueueFeedback').textContent = `Queued ${queued} · tell Glean Pi “execute pending Hours Recon source actions”`;
       } catch (error) {
         await loadData();
-        setError(`${error.message} ${queued} action${queued === 1 ? '' : 's'} queued before the error; no source write was performed by the dashboard.`);
+        setError(`${error.message} ${plural(queued, 'change')} queued before the error; the dashboard wrote nothing.`);
       } finally { button.disabled = false; }
     }
 
@@ -895,7 +1476,7 @@
         body: JSON.stringify({ expected_version: current.version, recipient, message, confirmed: true }),
       });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || `Slack MCP queueing failed (${response.status})`);
+      if (!response.ok) throw new Error(result.error || `Queueing failed (${response.status})`);
       current.version = Number(result.workstream.version);
       syncRemediationWorkstream(result.workstream);
       return result;
@@ -906,7 +1487,12 @@
       const current = state.execution;
       const handoffs = current?.workspace?.slack_handoffs || [];
       if (!current || !handoffs.length) return;
-      if (!window.confirm(`Queue ${handoffs.length} reviewed messages, one for each time-entry submitter? They will not be sent until you tell Glean Pi to send pending Hours Recon messages.`)) return;
+      const confirmed = await confirmAction({
+        title: `Queue ${plural(handoffs.length, 'message')}?`,
+        description: 'One message per person who logged time. Nothing sends until you tell Glean Pi to send pending Hours Recon messages.',
+        confirmLabel: 'Queue messages',
+      });
+      if (!confirmed) return;
       button.disabled = true;
       setError('');
       let queued = 0;
@@ -918,10 +1504,10 @@
           $('#slackCopyFeedback').textContent = `Queued ${queued} of ${handoffs.length}…`;
         }
         await loadData();
-        $('#slackCopyFeedback').textContent = `All ${queued} submitter messages queued · tell Pi “send pending Hours Recon messages”`;
+        $('#slackCopyFeedback').textContent = `All ${queued} queued · tell Glean Pi “send pending Hours Recon messages”`;
       } catch (error) {
         await loadData();
-        setError(`${error.message} ${queued} message${queued === 1 ? '' : 's'} queued before the error; nothing was sent by the dashboard.`);
+        setError(`${error.message} ${plural(queued, 'message')} queued before the error. Nothing was sent by the dashboard.`);
       } finally { button.disabled = false; }
     }
 
@@ -931,9 +1517,14 @@
       if (!current) return;
       const recipient = $('#executionRecipient').value.trim();
       const message = $('#slackDraft').value.trim();
-      if (!recipient) { setError('Enter a Slack user, email, @handle, channel, or Slack ID.'); return; }
-      if (!message) { setError('Review the Slack message before queueing.'); return; }
-      if (!window.confirm(`Queue this reviewed message for ${recipient}? It will not be sent until you tell Glean Pi to send pending Hours Recon messages.`)) return;
+      if (!recipient) { setError('Enter a Slack person, email, @handle, or channel.'); return; }
+      if (!message) { setError('Review the message before queueing it.'); return; }
+      const confirmed = await confirmAction({
+        title: `Queue this message for ${recipient}?`,
+        description: 'It will not be sent until you tell Glean Pi to send pending Hours Recon messages.',
+        confirmLabel: 'Queue message',
+      });
+      if (!confirmed) return;
       button.disabled = true;
       setError('');
       $('#slackCopyFeedback').textContent = 'Queueing…';
@@ -942,7 +1533,7 @@
         syncRemediationWorkstream(result.workstream);
         $('#slackDraft').value = result.slack_message || message;
         const status = result.outbox?.status || 'pending';
-        $('#slackCopyFeedback').textContent = status === 'sent' ? 'Already sent' : 'Queued · tell Pi “send pending Hours Recon messages”';
+        $('#slackCopyFeedback').textContent = status === 'sent' ? 'Already sent' : 'Queued · tell Glean Pi “send pending Hours Recon messages”';
       } catch (error) {
         $('#slackCopyFeedback').textContent = '';
         await refreshExecutionVersion(current);
@@ -955,7 +1546,7 @@
       const current = state.execution;
       if (!current) return;
       const recipient = $('#executionRecipient').value.trim();
-      if (!recipient) { setError('Enter a recipient name, @handle, or team label before copying the Slack draft.'); return; }
+      if (!recipient) { setError('Enter a recipient before copying the message.'); return; }
       button.disabled = true;
       setError('');
       let copied = false;
@@ -964,14 +1555,14 @@
         current.version = Number(prepared.workstream.version);
         syncRemediationWorkstream(prepared.workstream);
         $('#slackDraft').value = prepared.slack_message;
-        await writeClipboard(prepared.slack_message, 'The Slack handoff was prepared, but clipboard access failed. Nothing was marked as copied or sent.');
+        await writeClipboard(prepared.slack_message, 'The message was prepared, but clipboard access failed. Nothing was marked as copied or sent.');
         copied = true;
         const recorded = await postRemediationAction(current.workstreamId, current.version, 'record_slack_copy');
         current.version = Number(recorded.workstream.version);
         syncRemediationWorkstream(recorded.workstream);
         $('#slackCopyFeedback').textContent = `Copied for ${recipient} · not sent`;
       } catch (error) {
-        setError(copied ? 'The Slack handoff was copied, but Hours Recon could not record the copy. It was not sent.' : error.message);
+        setError(copied ? 'The message was copied, but Hours Recon could not record that. It was not sent.' : error.message);
       } finally { button.disabled = false; }
     }
 
@@ -981,20 +1572,30 @@
       const payload = {};
       if (action === 'select_path') payload.path_id = button.dataset.pathId;
       if (action === 'snooze') {
-        const until = window.prompt('Snooze until (YYYY-MM-DD)');
-        if (!until) return;
-        payload.until = until;
+        const values = await openFormDialog({
+          title: 'Snooze this item',
+          description: 'It stays open but drops out of the active list until this date.',
+          fields: [{ name: 'until', label: 'Snooze until', type: 'date', min: new Date().toISOString().slice(0, 10) }],
+          confirmLabel: 'Snooze',
+        });
+        if (!values) return;
+        payload.until = values.until;
       }
       if (action === 'waive') {
-        const reason = window.prompt('Temporary exception reason');
-        if (!reason) return;
-        const approvedBy = window.prompt('Approver name or role');
-        if (!approvedBy) return;
-        const expiresOn = window.prompt('Exception expires on (YYYY-MM-DD)');
-        if (!expiresOn) return;
-        payload.reason = reason;
-        payload.approved_by = approvedBy;
-        payload.expires_on = expiresOn;
+        const values = await openFormDialog({
+          title: 'Add a temporary exception',
+          description: 'Use this when the gap is known and accepted for now. It reopens automatically when the exception expires.',
+          fields: [
+            { name: 'reason', label: 'Why is this acceptable?', type: 'text', placeholder: 'Customer is mid-renewal' },
+            { name: 'approved_by', label: 'Who approved it?', type: 'text', placeholder: 'Name or role' },
+            { name: 'expires_on', label: 'Exception expires on', type: 'date', min: new Date().toISOString().slice(0, 10) },
+          ],
+          confirmLabel: 'Add exception',
+        });
+        if (!values) return;
+        payload.reason = values.reason;
+        payload.approved_by = values.approved_by;
+        payload.expires_on = values.expires_on;
       }
       button.disabled = true;
       setError('');
@@ -1019,27 +1620,50 @@
       }
     }
 
-    function renderExceptions() {
-      const rows = state.data.exceptions || [];
-      $('#exceptionCount').textContent = `${rows.length} item${rows.length === 1 ? '' : 's'}`;
-      $('#exceptionEmpty').hidden = rows.length > 0;
-      $('#exceptions').innerHTML = rows.map(item => {
-        const subject = item.account_name || item.rocketlane_customer || item.opportunity_name || 'Unknown record';
-        const suggestion = item.suggested_account ? ` Suggested match: ${item.suggested_account} (${Math.round(item.suggestion_score * 100)}%).` : '';
-        return `<article class="exception"><span class="exception-type">${escapeHtml(item.type)}</span><strong>${escapeHtml(subject)}</strong><p>${escapeHtml(item.message || '')}${escapeHtml(suggestion)}</p></article>`;
-      }).join('');
-    }
+    /* ---------- Event delegation ---------- */
+    // One router keeps every handler alive across re-renders.
+    const actionHandlers = {
+      refresh: () => refreshData(),
+      'select-account': button => selectAccount(button.dataset.accountId),
+      'close-detail': () => closeDetail(),
+      'remediation-tab': button => selectRemediationTab(button.dataset.remediationTab),
+      'remediation-action': button => applyRemediationAction(button),
+      'workstream-history': button => loadWorkstreamHistory(button),
+      'prompt-cancel': () => $('#promptDialog').close(),
+    };
 
-    $('#refreshButton').addEventListener('click', refreshData);
-    document.querySelectorAll('[data-remediation-tab]').forEach(button => {
-      button.addEventListener('click', () => selectRemediationTab(button.dataset.remediationTab));
-      button.addEventListener('keydown', event => {
-        if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
-        event.preventDefault();
-        selectRemediationTab(button.dataset.remediationTab === 'planner' ? 'slack' : 'planner', true);
-      });
+    document.addEventListener('click', event => {
+      const target = event.target.closest('[data-action]');
+      if (target) {
+        const handler = actionHandlers[target.dataset.action];
+        if (handler) { event.preventDefault(); handler(target, event); }
+        return;
+      }
+      const row = event.target.closest('tr[data-account-row]');
+      if (row) selectAccount(row.dataset.accountRow);
     });
-    $('#search').addEventListener('input', event => { state.filters.search = event.target.value; renderAccounts(); });
+
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && state.selectedId && !$('#executionDialog').open && !$('#promptDialog').open) {
+        closeDetail();
+        return;
+      }
+      const tab = event.target.closest('[data-remediation-tab]');
+      if (tab && ['ArrowLeft', 'ArrowRight'].includes(event.key)) {
+        event.preventDefault();
+        const order = ['planner', 'slack', 'diagnostics'];
+        const index = order.indexOf(tab.dataset.remediationTab);
+        const next = order[(index + (event.key === 'ArrowRight' ? 1 : order.length - 1)) % order.length];
+        selectRemediationTab(next, true);
+      }
+    });
+
+    $('#search').addEventListener('input', event => {
+      state.filters.search = event.target.value;
+      clearTimeout(state.searchTimer);
+      // Filtering must never rebuild the detail sheet the user is reading.
+      state.searchTimer = setTimeout(renderAccounts, 140);
+    });
     $('#riskFilter').addEventListener('change', event => { state.filters.risk = event.target.value; renderAccounts(); });
     $('#sort').addEventListener('change', event => { state.filters.sort = event.target.value; renderAccounts(); });
     $('#weeklyOnly').addEventListener('change', event => { state.filters.weeklyOnly = event.target.checked; renderAccounts(); });

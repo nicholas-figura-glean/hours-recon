@@ -28,6 +28,49 @@ METRIC_FIELDS = (
     "future_entitlement_hours",
     "overage_hours",
 )
+# Retrieval-coverage flags are machine keys. They must never reach a person
+# unlabelled: an earlier build rendered the internal "complete" sentinel as if
+# it were the name of a dataset ("coverage is incomplete for: complete").
+COVERAGE_LABELS = {
+    "accounts": "Salesforce accounts",
+    "opportunities": "Salesforce opportunities",
+    "projects": "Rocketlane projects",
+    "time_entries": "Rocketlane time entries",
+    "pagination_complete": "every page of results",
+}
+COVERAGE_REQUIREMENTS = {
+    "entitlement_source": ("accounts", "opportunities"),
+    "hours_mapping": ("accounts", "opportunities"),
+    "service_period": ("accounts", "opportunities"),
+    "project_linkage": ("projects",),
+    "time_quality": ("time_entries", "pagination_complete"),
+}
+
+
+def _join(labels: Sequence[str]) -> str:
+    items = list(labels)
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def coverage_labels(keys: Iterable[str]) -> List[str]:
+    """Human dataset names for retrieval-coverage keys, ignoring sentinels."""
+    return [COVERAGE_LABELS[key] for key in keys if key in COVERAGE_LABELS]
+
+
+def _coverage_summary(missing: Sequence[str], *, stale: bool) -> str:
+    labels = coverage_labels(missing)
+    if labels and stale:
+        return (
+            "This evidence has not been re-checked: the last data pull is older than today "
+            f"and did not return {_join(labels)}."
+        )
+    if labels:
+        return f"The last data pull did not return {_join(labels)}, so this evidence could not be checked."
+    if stale:
+        return "The last data pull is older than today, so this evidence has not been re-checked."
+    return "The last data pull was not confirmed complete, so this evidence has not been re-checked."
 
 
 def _dimension(
@@ -364,40 +407,48 @@ def _apply_coverage_caps(
     dimensions: Dict[str, Dict[str, Any]],
     coverage: Optional[Mapping[str, Any]],
 ) -> Dict[str, Dict[str, Any]]:
+    """Cap evidence that the last retrieval could not actually verify.
+
+    The cap is deliberately conservative and unchanged: unverified data may
+    never be reported as governed. What changed is the explanation. The cap
+    carries a readable summary and keeps the underlying dimension so callers
+    can plan real remediation work instead of one retrieval problem restated
+    once per account per dimension.
+    """
     if coverage is None:
         return dimensions
-    required = {
-        "entitlement_source": ("accounts", "opportunities"),
-        "hours_mapping": ("accounts", "opportunities"),
-        "service_period": ("accounts", "opportunities"),
-        "project_linkage": ("projects",),
-        "time_quality": ("time_entries", "pagination_complete"),
-    }
-    complete = coverage.get("complete") is True and all(
+    verified = coverage.get("complete") is True and all(
         coverage.get(key) is True
-        for keys in required.values()
+        for keys in COVERAGE_REQUIREMENTS.values()
         for key in keys
     )
-    if complete:
+    if verified:
         return dimensions
+    verification_failed = coverage.get("complete") is False
+    stale = coverage.get("through_date_current") is False
     result = dict(dimensions)
-    for name, keys in required.items():
+    for name, keys in COVERAGE_REQUIREMENTS.items():
         missing = [key for key in keys if coverage.get(key) is not True]
-        if coverage.get("complete") is not True:
-            missing = ["complete", *missing]
-        if not missing:
+        if not missing and coverage.get("complete") is True:
             continue
         current = dimensions[name]
-        cap_tier = "T4" if any(coverage.get(key) is False for key in missing) else "T3"
+        cap_tier = "T4" if (verification_failed or any(coverage.get(key) is False for key in missing)) else "T3"
         if TIER_RANK[current["tier"]] >= TIER_RANK[cap_tier]:
             continue
         result[name] = _dimension(
             cap_tier,
             "incomplete_source_coverage",
-            f"Source retrieval coverage is incomplete or unverified for: {', '.join(missing)}.",
-            "Run a new account-isolated retrieval with all coverage flags explicitly true.",
+            _coverage_summary(missing, stale=stale),
+            "Run a new data pull through today so this evidence can be re-checked.",
             refs=current.get("refs", []),
-            details={"missing_coverage": missing, "underlying_tier": current.get("tier"), "coverage": dict(coverage)},
+            details={
+                "missing_coverage": missing,
+                "missing_coverage_labels": coverage_labels(missing),
+                "source_data_is_stale": stale,
+                "underlying_tier": current.get("tier"),
+                "underlying": dict(current),
+                "coverage": dict(coverage),
+            },
         )
     return result
 
@@ -439,6 +490,7 @@ def attach_governance(
     portfolio_provisional = {field: 0.0 for field in METRIC_FIELDS}
     tier_counts = {tier: 0 for tier in TIER_RANK}
     remediation_accounts = 0
+    coverage_capped_accounts = 0
 
     for account in report.get("accounts", []):
         for package in account.get("packages", []):
@@ -454,10 +506,21 @@ def attach_governance(
         worst_rank = max(int(item["rank"]) for item in dimensions.values())
         overall = f"T{worst_rank}"
         governed = overall in GOVERNED_TIERS
+        coverage_capped = any(
+            item.get("reason_code") == "incomplete_source_coverage" for item in dimensions.values()
+        )
         gaps = []
         for dimension_name in DIMENSION_ORDER:
             item = dimensions[dimension_name]
-            if int(item["rank"]) >= 3:
+            if item.get("reason_code") == "incomplete_source_coverage":
+                # Retrieval coverage is one portfolio-level condition, not a
+                # per-account, per-dimension backlog. Plan the real evidence
+                # weakness underneath it, if any, and let the report-level
+                # freshness signal carry the retrieval problem exactly once.
+                item = dict((item.get("details") or {}).get("underlying") or {})
+                if not item:
+                    continue
+            if int(item.get("rank", 4)) >= 3:
                 gaps.append({
                     "dimension": dimension_name,
                     "tier": item["tier"],
@@ -485,6 +548,7 @@ def attach_governance(
             "mode": mode,
             "overall_tier": overall,
             "status": "governed" if governed else "provisional",
+            "coverage_capped": coverage_capped,
             "limiting_dimensions": [name for name, item in dimensions.items() if int(item["rank"]) == worst_rank],
             "dimensions": dimensions,
             "gaps": gaps,
@@ -493,6 +557,8 @@ def attach_governance(
         tier_counts[overall] += 1
         if gaps:
             remediation_accounts += 1
+        if coverage_capped:
+            coverage_capped_accounts += 1
 
     reported_metrics = report.get("metrics", {})
     governance_metrics = {}
@@ -518,6 +584,7 @@ def attach_governance(
         "overall_tier": overall_portfolio,
         "account_tier_counts": tier_counts,
         "remediation_account_count": remediation_accounts,
+        "coverage_capped_account_count": coverage_capped_accounts,
         "metrics": governance_metrics,
     }
     report.setdefault("meta", {})["governance_mode"] = mode

@@ -8,6 +8,7 @@ import re
 from datetime import date, timedelta
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Sequence, Tuple
 
+from .evidence import coverage_labels
 from .remediation_policy import (
     MINIMUM_GOVERNED_TIER,
     POLICY_VERSION,
@@ -18,7 +19,20 @@ from .remediation_policy import (
 )
 
 PRIORITY_RANK = {"P0": 0, "P1": 1, "P2": 2}
+PRIORITY_ORDER = ("P0", "P1", "P2")
 DEFAULT_SLA_DAYS = {"P0": 5, "P1": 10, "P2": 20}
+# Gaps that make the hours themselves unmeasurable. When one of these is at T4
+# the account's apparent risk cannot be trusted, so the gap outranks the
+# account's currently visible exposure.
+MEASUREMENT_BLOCKING_REASONS = frozenset({
+    "no_recognized_entitlement",
+    "unresolved_entitlement_evidence",
+    "no_hours_mapping",
+    "unresolved_hours_mapping",
+    "no_rocketlane_project",
+    "usage_unobservable_without_project",
+    "invalid_time_evidence",
+})
 METRIC_FIELDS = (
     "sold_hours",
     "billed_hours",
@@ -88,27 +102,55 @@ def add_business_days(start: date, days: int) -> date:
     return current
 
 
-def _has_expiring_package(account: Mapping[str, Any], maximum_days: int = 30) -> bool:
-    return any(
-        float(item.get("remaining_hours", 0) or 0) > 0
-        and 0 <= int(item.get("days_to_expiration", maximum_days + 1)) <= maximum_days
+def days_to_soonest_expiration(account: Mapping[str, Any]) -> Any:
+    """Days until the first package holding usable hours expires, if any."""
+    days = [
+        int(item["days_to_expiration"])
         for item in account.get("packages", [])
-    )
+        if float(item.get("remaining_hours", 0) or 0) > 0 and item.get("days_to_expiration") is not None
+    ]
+    return min(days) if days else None
+
+
+def account_urgency(account: Mapping[str, Any]) -> str:
+    """Rank an account by hours at stake and time remaining.
+
+    Evidence tier is deliberately not an input. An unverified mapping on an
+    account with no expiring hours is hygiene; a verified mapping on an account
+    losing hours this month is not. Ranking on tier made every item P0 and
+    destroyed the signal the priority column exists to carry.
+    """
+    overage = float(account.get("overage_hours", 0) or 0)
+    expired = float(account.get("expired_unused_hours", 0) or 0)
+    at_risk = float(account.get("at_risk_hours", 0) or 0)
+    sold = float(account.get("sold_hours", 0) or 0)
+    billed = float(account.get("billed_hours", 0) or 0)
+    days = days_to_soonest_expiration(account)
+    if overage > 0 or expired > 0:
+        return "P0"
+    if at_risk > 0 and days is not None and days <= 30:
+        return "P0"
+    if billed > 0 and sold <= 0:
+        return "P1"
+    if at_risk > 0 and days is not None and days <= 90:
+        return "P1"
+    return "P2"
+
+
+def _escalate(priority: str) -> str:
+    return PRIORITY_ORDER[max(0, PRIORITY_ORDER.index(priority) - 1)]
 
 
 def _priority(account: Mapping[str, Any], gap: Mapping[str, Any]) -> str:
-    tier = str(gap.get("tier") or "T4")
+    priority = account_urgency(account)
+    reason = str(gap.get("reason_code") or "")
     dimension = str(gap.get("dimension") or "")
-    if (
-        tier == "T4"
-        or float(account.get("overage_hours", 0) or 0) > 0
-        or (dimension == "project_linkage" and float(account.get("sold_hours", 0) or 0) > 0)
-        or _has_expiring_package(account)
-    ):
-        return "P0"
-    if dimension in {"entitlement_source", "hours_mapping", "service_period", "project_linkage"}:
-        return "P1"
-    return "P2"
+    blocks_measurement = reason in MEASUREMENT_BLOCKING_REASONS or (
+        dimension == "project_linkage" and float(account.get("sold_hours", 0) or 0) > 0
+    )
+    if blocks_measurement and str(gap.get("tier") or "") == "T4":
+        return _escalate(priority)
+    return priority
 
 
 def _clean_key(value: Any, maximum: int = 180) -> str:
@@ -145,9 +187,9 @@ def _group_identity(account: Mapping[str, Any], gap: Mapping[str, Any]) -> Tuple
     details = dict(gap.get("details") or {})
 
     if reason == "incomplete_source_coverage":
-        missing = sorted({str(value) for value in details.get("missing_coverage", []) if value}) or ["unverified"]
-        label = ", ".join(missing)
-        return "source_coverage", "coverage:" + "|".join(missing), f"Complete source retrieval coverage for {label}"
+        missing = sorted({str(value) for value in details.get("missing_coverage", []) if value})
+        labels = coverage_labels(missing) or ["the full dataset"]
+        return "source_coverage", "coverage:" + "|".join(missing or ["unverified"]), f"Re-pull {', '.join(labels)}"
 
     if dimension in {"hours_mapping", "entitlement_source"}:
         keys = _weak_package_keys(account, dimension)

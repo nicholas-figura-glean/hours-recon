@@ -306,20 +306,18 @@ def _path_operations(
     if path_id == "project_linkage.salesforce_account_id.t1":
         mode = "mcp_write"
         for record in records:
-            opportunity_links = list(record.get("opportunity_links", []))
-            if len(opportunity_links) > 1:
-                required_inputs.append(
-                    f"Select the correct Salesforce Opportunity URL for {record.get('account_name')} from the listed candidates."
-                )
             for project_id in record.get("project_ids", []):
-                proposed_fields: Dict[str, Any] = {"externalReferenceId": record.get("account_id")}
-                if len(opportunity_links) == 1:
-                    proposed_fields["Link to Salesforce Opportunity (resolve Rocketlane field ID in preflight)"] = opportunity_links[0]["url"]
+                # Only externalReferenceId is proposed. Rocketlane has no
+                # "Link to Salesforce Opportunity" project field, and the
+                # opportunity is already carried by the OppID custom field, so
+                # proposing it produced an unresolvable label that blocked the
+                # whole write. The Account ID alone earns T1 and is unambiguous
+                # no matter how many opportunities the account has.
                 operations.append(_operation(
                     system="rocketlane", tool="update_project", object_name="Project",
                     record_ids=[str(project_id)],
-                    proposed_fields=proposed_fields,
-                    status="ready_after_preflight" if len(opportunity_links) <= 1 else "needs_confirmed_opportunity",
+                    proposed_fields={"externalReferenceId": record.get("account_id")},
+                    status="ready_after_preflight",
                     preflight=rl_preflight,
                 ))
     elif path_id == "project_linkage.customer_id_crosswalk.t2":
@@ -513,21 +511,12 @@ def _slack_message(
                 project_id = change["project_id"]
                 account_id = change["account_id"]
                 account_name = change["account_name"]
-                opportunity_links = change["opportunity_links"]
                 verified_lines.append(
                     f"- Rocketlane project {project_id} currently links to {account_name or 'the account'} "
                     "only by normalized customer name; it does not store the Salesforce Account ID."
                 )
                 verified_lines.append(f"- The verified Salesforce Account ID is {account_id}.")
                 change_lines.append(f"- Set Rocketlane project {project_id} `externalReferenceId` to `{account_id}`.")
-                if len(opportunity_links) == 1:
-                    change_lines.append(
-                        f"- Set its `Link to Salesforce Opportunity` field to `{opportunity_links[0]['url']}`."
-                    )
-                elif len(opportunity_links) > 1:
-                    change_lines.append(
-                        "- Select the correct `Link to Salesforce Opportunity` value from the candidate URLs under Records; do not guess."
-                    )
             verified_lines = list(dict.fromkeys(verified_lines))[:3]
             deadline = f" by {due}" if due else ""
             return (

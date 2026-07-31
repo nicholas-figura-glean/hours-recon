@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from hours_recon.config import ROOT, load_json
 from hours_recon.dates import business_today
+from hours_recon.freshness import describe_freshness
 from hours_recon.http_client import ApiError, request_json
 from hours_recon.mcp_snapshot import McpSnapshotError, publish_mcp_snapshot
 from hours_recon.reconcile import reconcile
@@ -18,6 +19,8 @@ from hours_recon.rocketlane import RocketlaneClient
 from hours_recon.sample_data import build_demo_sources
 from hours_recon.service import ReconciliationService
 from hours_recon.storage import write_cache
+from hours_recon.trend import advance as advance_trend_baseline
+from hours_recon.trend import attach_trend
 
 PACKAGES = load_json(ROOT / "config" / "packages.json")
 ALIASES = {"aliases": {}}
@@ -103,8 +106,8 @@ class DashboardMarkupTests(unittest.TestCase):
         self.assertIn("function applyRemediationAction(button)", html)
         self.assertIn("Governance evidence", html)
         self.assertIn("Governed ${fmt(split.governed)}h · Provisional ${fmt(split.provisional)}h", html)
-        self.assertIn("Ranked paths", html)
-        self.assertIn("MCP execution workspace", html)
+        self.assertIn("Ways to fix this", html)
+        self.assertIn("Next steps", html)
         self.assertIn("Select and open next steps", html)
         self.assertIn("data-remediation-action=\"prepare_execution\"", html)
         self.assertIn("data-remediation-action=\"select_path\"", html)
@@ -135,7 +138,7 @@ class DashboardMarkupTests(unittest.TestCase):
         self.assertIn("String(b.sent_at || b.queued_at || '').localeCompare", html)
         self.assertIn("Each person receives only their own flagged entries.", html)
         self.assertIn("/slack/queue", html)
-        self.assertIn("Queue for Slack MCP", html)
+        self.assertIn("Queue message", html)
         self.assertIn("Copy instead", html)
         self.assertIn("data-remediation-action=\"snooze\"", html)
         self.assertIn("data-remediation-action=\"waive\"", html)
@@ -155,6 +158,69 @@ class DashboardMarkupTests(unittest.TestCase):
         self.assertIn("/api/remediation/slack/outbox", app_source)
         self.assertIn("/api/remediation/source/outbox", app_source)
         self.assertIn("hsa1_[a-f0-9]{64}", app_source)
+
+    def test_dashboard_presents_one_clear_answer_before_the_governance_detail(self):
+        html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+        # A single hero figure, a short act-on-these list, and movement.
+        self.assertIn('id="heroValue"', html)
+        self.assertIn("At risk in the next 90 days", html)
+        self.assertIn('id="attentionSection"', html)
+        self.assertIn("Needs attention", html)
+        self.assertIn("function renderAttention()", html)
+        self.assertIn("function deltaChip(entry, betterWhen)", html)
+        self.assertIn("since last refresh", html)
+        # Staleness is one banner with an action, not a governance backlog.
+        self.assertIn('id="freshnessBanner"', html)
+        self.assertIn("function renderFreshnessBanner(freshness)", html)
+        self.assertIn("These counts are unreliable until you refresh", html)
+        # The governance apparatus is secondary, and its empty state explains itself.
+        self.assertIn('id="dataQuality"', html)
+        self.assertIn("queue.unavailable_message", html)
+        self.assertIn("Checks run on your own data", html)
+
+    def test_dashboard_uses_plain_language_instead_of_internal_vocabulary(self):
+        html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+        for label in ("Where the hours came from", "How hours were counted", "Rocketlane link", "Time entry quality"):
+            self.assertIn(label, html)
+        # Effort bands are shown as time, and tiers as a checked/not-checked state.
+        self.assertIn("const EFFORT_LABELS", html)
+        self.assertIn("about 30 minutes", html)
+        self.assertIn("const verificationChip = (tier, extra = '')", html)
+        self.assertIn("Not checked", html)
+        self.assertIn("const URGENCY_LABELS = { P0: 'Act now'", html)
+        # The raw fingerprint no longer occupies a summary column.
+        self.assertNotIn("item.fingerprint.slice(0, 17)", html)
+
+    def test_dashboard_patches_the_dom_and_delegates_events(self):
+        html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+        # Keyed patching is what preserves open cards, scroll, and focus.
+        self.assertIn("function patchList(container, items, { key, tag = 'div', className = '', render })", html)
+        self.assertIn("const actionHandlers = {", html)
+        self.assertIn("event.target.closest('[data-action]')", html)
+        self.assertIn("state.searchTimer = setTimeout(renderAccounts, 140)", html)
+        # Native prompt/confirm are gone; every input is a dialog form.
+        self.assertNotIn("window.prompt(", html)
+        self.assertNotIn("window.confirm(", html)
+        self.assertIn("function openFormDialog({ title, description = '', fields = [], confirmLabel = 'Confirm' })", html)
+        self.assertIn("async function confirmAction({ title, description, confirmLabel = 'Confirm' })", html)
+        self.assertIn('id="promptDialog"', html)
+        # The detail panel is a dismissible sheet, not an aria-live blob.
+        self.assertIn('class="sheet" id="detail"', html)
+        self.assertIn("function closeDetail()", html)
+        self.assertNotIn('id="detail" aria-live="polite"', html)
+
+    def test_source_action_editor_replaces_raw_json_but_keeps_the_placeholder_guard(self):
+        html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("function fieldEditorRow(operationIndex, name, value, fieldIndex)", html)
+        self.assertIn("function collectProposedFields(editor)", html)
+        self.assertIn('data-field-name=', html)
+        self.assertIn("data-source-operation-index=", html)
+        # Typed values must survive the round trip, and placeholders must not.
+        self.assertIn("const PLACEHOLDER = /^<[^>]+>$/", html)
+        self.assertIn("Replace every <placeholder> with a real value before queueing.", html)
+        self.assertIn("fields[name] = Number(raw)", html)
+        self.assertIn("fields[name] = input.checked", html)
+        self.assertNotIn("textarea class=\"execution-fields source-fields\"", html)
 
     def test_source_action_outbox_cli_and_skill_require_preflight_and_confirmation(self):
         script = (ROOT / "scripts" / "hours_recon_source_outbox.py").read_text(encoding="utf-8")
@@ -523,5 +589,180 @@ class CacheSafetyTests(unittest.TestCase):
             self.assertFalse(service.data["meta"]["remediation_observation"]["revalidation_performed"])
 
 
+class FreshnessTests(unittest.TestCase):
+    """A retrieval problem must be stated once, in words, with an action."""
+
+    def test_current_mcp_pull_reports_no_banner(self):
+        today = date(2026, 7, 31)
+        result = describe_freshness({
+            "mode": "mcp", "mcp_through_date": "2026-07-31", "mcp_scope_verified": True,
+            "mcp_coverage": {"complete": True, "accounts": True, "opportunities": True, "projects": True, "time_entries": True, "pagination_complete": True},
+        }, report_date=today)
+        self.assertEqual("current", result["state"])
+        self.assertTrue(result["is_current"])
+        self.assertFalse(result["blocks_verification"])
+        self.assertIsNone(result["action_label"])
+
+    def test_stale_pull_is_described_in_days_not_as_governance_failures(self):
+        result = describe_freshness({
+            "mode": "mcp", "mcp_through_date": "2026-07-24", "mcp_scope_verified": True,
+            "mcp_coverage": {"complete": False, "accounts": True, "opportunities": True, "projects": True, "time_entries": True, "pagination_complete": True, "through_date_current": False},
+        }, report_date=date(2026, 7, 31))
+        self.assertEqual("stale", result["state"])
+        self.assertEqual(7, result["days_behind"])
+        self.assertIn("7 days old", result["headline"])
+        self.assertIn("2026-07-24", result["detail"])
+        self.assertEqual("Run Hours Recon MCP refresh", result["action_hint"])
+
+    def test_incomplete_pull_names_the_missing_datasets_in_english(self):
+        result = describe_freshness({
+            "mode": "mcp", "mcp_through_date": "2026-07-31", "mcp_scope_verified": True,
+            "mcp_coverage": {"complete": False, "accounts": True, "opportunities": False, "projects": True, "time_entries": False, "pagination_complete": True},
+        }, report_date=date(2026, 7, 31))
+        self.assertEqual("incomplete", result["state"])
+        self.assertIn("Salesforce opportunities", result["detail"])
+        self.assertIn("Rocketlane time entries", result["detail"])
+        self.assertNotIn("complete,", result["detail"])
+
+    def test_demo_mode_explains_itself_rather_than_looking_broken(self):
+        result = describe_freshness({"mode": "demo"}, report_date=date(2026, 7, 31))
+        self.assertEqual("demo", result["state"])
+        self.assertIn("example accounts", result["detail"])
+
+
+class TrendTests(unittest.TestCase):
+    """Deltas must stay stable on reload and only advance when data changes."""
+
+    @staticmethod
+    def _report(as_of, at_risk):
+        return {
+            "meta": {"as_of": as_of, "refreshed_at": f"{as_of}T09:00:00Z"},
+            "metrics": {
+                "at_risk_hours": at_risk, "remaining_hours": 100.0, "sold_hours": 200.0,
+                "billed_hours": 100.0, "expired_unused_hours": 0.0, "overage_hours": 0.0,
+            },
+            "accounts": [{
+                "id": "A1", "at_risk_hours": at_risk, "remaining_hours": 100.0, "sold_hours": 200.0,
+                "billed_hours": 100.0, "expired_unused_hours": 0.0, "overage_hours": 0.0,
+            }],
+        }
+
+    def test_first_report_has_no_movement_and_reload_does_not_invent_one(self):
+        first = self._report("2026-07-01", 10)
+        attach_trend(first, None)
+        self.assertFalse(first["trend"]["available"])
+        baseline = advance_trend_baseline(None, first)
+
+        reloaded = self._report("2026-07-01", 10)
+        attach_trend(reloaded, baseline)
+        self.assertFalse(reloaded["trend"]["available"])
+        unchanged = advance_trend_baseline(baseline, reloaded)
+        self.assertIsNone(unchanged["previous"])
+
+    def test_changed_data_produces_movement_that_survives_a_reload(self):
+        first = self._report("2026-07-01", 10)
+        baseline = advance_trend_baseline(None, first)
+        second = self._report("2026-07-08", 25)
+        attach_trend(second, baseline)
+        self.assertTrue(second["trend"]["available"])
+        self.assertEqual({"previous": 10.0, "delta": 15.0}, second["trend"]["metrics"]["at_risk_hours"])
+        self.assertEqual({"previous": 10.0, "delta": 15.0}, second["accounts"][0]["trend"]["fields"]["at_risk_hours"])
+
+        baseline = advance_trend_baseline(baseline, second)
+        reloaded = self._report("2026-07-08", 25)
+        attach_trend(reloaded, baseline)
+        self.assertEqual({"previous": 10.0, "delta": 15.0}, reloaded["trend"]["metrics"]["at_risk_hours"])
+
+    def test_a_report_cached_by_an_earlier_build_still_renders_the_hero(self):
+        """Derived presentation fields must be recomputed, not assumed present."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sf, rl = base_sources([
+                {"id": "T1", "project_id": "P1", "date": "2026-02-01", "minutes": 60, "billable": True},
+            ])
+            report = reconcile(sf, rl, package_config=PACKAGES, account_aliases=ALIASES, as_of=date(2026, 12, 20), mode="mcp")
+            # Simulate a cache written before the attention list existed.
+            report.pop("attention")
+            for key in ("at_risk_account_count", "overage_account_count", "attention_account_count", "soonest_expiration_days", "soonest_expiration_date"):
+                report["metrics"].pop(key, None)
+            report["meta"].update({"mcp_requester_email": "alex@example.com", "mcp_through_date": "2026-12-20"})
+            cache = root / "cache.json"
+            write_cache(cache, report)
+            service = ReconciliationService({
+                "mode": "mcp", "timezone": "America/Denver", "requester_email": "", "mcp_requester_email": "alex@example.com",
+                "packages": PACKAGES, "account_aliases": ALIASES, "cache_path": cache,
+                "mcp_snapshot_path": root / "missing.json", "cache_max_age_days": 30,
+                "governance_mode": "observe_only", "remediation_mode": "off",
+                "remediation_db_path": root / "private" / "queue.sqlite3", "remediation_scope_id": "",
+            })
+            data = service.data
+            self.assertTrue(data["attention"])
+            self.assertEqual(1, data["metrics"]["at_risk_account_count"])
+            self.assertIsNotNone(data["metrics"]["soonest_expiration_days"])
+
+    def test_service_attaches_freshness_and_movement_and_never_baselines_demo_data(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            settings = {
+                "mode": "demo", "timezone": "America/Denver", "requester_email": "", "mcp_requester_email": "",
+                "packages": PACKAGES, "account_aliases": ALIASES, "cache_path": root / "cache.json",
+                "mcp_snapshot_path": root / "missing.json", "cache_max_age_days": 30,
+                "governance_mode": "observe_only", "remediation_mode": "off",
+                "remediation_db_path": root / "private" / "queue.sqlite3", "remediation_scope_id": "",
+            }
+            data = ReconciliationService(settings).data
+            self.assertEqual("demo", data["meta"]["freshness"]["state"])
+            self.assertFalse(data["trend"]["available"])
+            self.assertFalse((root / "cache_trend.json").exists())
+            self.assertEqual("demo", data["remediation_queue"]["unavailable_reason"])
+            self.assertIn("Connect Salesforce", data["remediation_queue"]["unavailable_message"])
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class CachePathOverrideTests(unittest.TestCase):
+    """The report cache must be redirectable.
+
+    A hard-coded cache path means any second instance -- a verification run, a
+    scratch run against a fixture -- silently overwrites the real portfolio's
+    cached report with someone else's accounts.
+    """
+
+    def _settings(self, env):
+        import importlib
+        from hours_recon import config as config_module
+        saved = {key: os.environ.get(key) for key in env}
+        os.environ.update({k: v for k, v in env.items() if v is not None})
+        for key, value in env.items():
+            if value is None:
+                os.environ.pop(key, None)
+        try:
+            importlib.reload(config_module)
+            return config_module.settings()
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            importlib.reload(config_module)
+
+    def test_cache_path_defaults_to_the_real_report(self):
+        resolved = self._settings({"HOURS_RECON_CACHE_PATH": None})
+        self.assertEqual("reconciliation.json", resolved["cache_path"].name)
+        self.assertEqual("var", resolved["cache_path"].parent.name)
+
+    def test_cache_path_can_be_redirected(self):
+        resolved = self._settings({"HOURS_RECON_CACHE_PATH": "var/scratch/verify.json"})
+        self.assertTrue(str(resolved["cache_path"]).endswith("var/scratch/verify.json"))
+        self.assertNotEqual("reconciliation.json", resolved["cache_path"].name)
+
+    def test_trend_baseline_follows_the_redirected_cache(self):
+        """Otherwise a scratch run poisons the real week-over-week baseline."""
+        from hours_recon.service import ReconciliationService
+        resolved = self._settings({"HOURS_RECON_CACHE_PATH": "var/scratch/verify.json"})
+        service = ReconciliationService.__new__(ReconciliationService)
+        service.settings = resolved
+        self.assertTrue(str(service._trend_path()).endswith("var/scratch/verify_trend.json"))

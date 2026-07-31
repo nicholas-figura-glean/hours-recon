@@ -224,12 +224,36 @@ def reconcile(
         "accounts": ordered_accounts,
         "exceptions": sorted(exceptions, key=lambda item: (item.get("type", ""), item.get("account_name") or item.get("rocketlane_customer") or "")),
     }
+    attach_attention(report)
     return attach_governance(
         report,
         project_match_evidence=project_match_evidence,
         mode=governance_mode,
         source_coverage=source_coverage,
     )
+
+
+def attach_attention(report: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
+    """Derive the act-on-these list and its headline figures.
+
+    Kept separate and idempotent so a report cached by an earlier build gains
+    these fields on load instead of silently rendering an empty hero.
+    """
+    accounts = list(report.get("accounts", []))
+    metrics = report.setdefault("metrics", {})
+    attention = _attention_items(accounts)
+    at_risk_accounts = [item for item in accounts if float(item.get("at_risk_hours", 0) or 0) > 0]
+    soonest = min(
+        (found for found in (_soonest_expiration(item) for item in at_risk_accounts) if found is not None),
+        default=None,
+    )
+    metrics["at_risk_account_count"] = len(at_risk_accounts)
+    metrics["overage_account_count"] = sum(1 for item in accounts if float(item.get("overage_hours", 0) or 0) > 0)
+    metrics["attention_account_count"] = len({item["account_id"] for item in attention})
+    metrics["soonest_expiration_days"] = soonest[0] if soonest else None
+    metrics["soonest_expiration_date"] = soonest[1] if soonest else None
+    report["attention"] = attention
+    return report
 
 
 def _allocate_account(account: MutableMapping[str, Any], as_of: date) -> None:
@@ -398,3 +422,69 @@ def _risk_distribution(accounts: Iterable[Mapping[str, Any]]) -> List[Dict[str, 
         {"risk": risk, "accounts": sum(1 for item in rows if item["risk"] == risk), "remaining_hours": round(sum(float(item.get("remaining_hours", 0)) for item in rows if item["risk"] == risk), 2)}
         for risk in ["overage", "expired", "critical", "high", "medium", "healthy", "exhausted", "none"]
     ]
+
+
+def _days_phrase(days: int) -> str:
+    if days < 0:
+        return f"{abs(days)} days ago"
+    if days == 0:
+        return "today"
+    if days == 1:
+        return "tomorrow"
+    return f"in {days} days"
+
+
+def _soonest_expiration(account: Mapping[str, Any]) -> Optional[Tuple[int, str]]:
+    """Days and date for the first package still holding usable hours."""
+    candidates = [
+        (int(item["days_to_expiration"]), str(item.get("expiration_date") or ""))
+        for item in account.get("packages", [])
+        if float(item.get("remaining_hours", 0) or 0) > 0 and item.get("days_to_expiration") is not None
+    ]
+    return min(candidates) if candidates else None
+
+
+def _attention_items(accounts: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    """The short list an AIOM should act on, in the order money is being lost.
+
+    This is intentionally about hours and dates only. Evidence quality has its
+    own section; mixing the two is what buried the actionable rows.
+    """
+    items: List[Dict[str, Any]] = []
+    for account in accounts:
+        account_id = str(account.get("id") or "")
+        name = str(account.get("name") or account_id)
+        overage = float(account.get("overage_hours", 0) or 0)
+        expired = float(account.get("expired_unused_hours", 0) or 0)
+        at_risk = float(account.get("at_risk_hours", 0) or 0)
+        sold = float(account.get("sold_hours", 0) or 0)
+        billed = float(account.get("billed_hours", 0) or 0)
+        base = {"account_id": account_id, "account_name": name, "risk": account.get("risk")}
+        if overage > 0:
+            items.append({**base, "kind": "overage", "severity": 0, "hours": round(overage, 2), "days": None,
+                          "headline": f"{round(overage, 2):g}h delivered beyond what was sold",
+                          "action": "Confirm the overage and decide whether to bill, absorb, or expand."})
+        if expired > 0:
+            items.append({**base, "kind": "expired_unused", "severity": 0, "hours": round(expired, 2), "days": None,
+                          "headline": f"{round(expired, 2):g}h expired without being used",
+                          "action": "Review whether the entitlement can be extended or should be written off."})
+        soonest = _soonest_expiration(account)
+        if at_risk > 0 and soonest is not None:
+            days, expiration = soonest
+            if days <= 30:
+                severity, kind = 0, "expiring_now"
+            elif days <= 90:
+                severity, kind = 2, "expiring_soon"
+            else:
+                severity, kind = None, None
+            if severity is not None:
+                items.append({**base, "kind": kind, "severity": severity, "hours": round(at_risk, 2), "days": days,
+                              "expiration_date": expiration,
+                              "headline": f"{round(at_risk, 2):g}h expires {_days_phrase(days)}",
+                              "action": "Schedule the remaining hours or start a renewal conversation."})
+        if billed > 0 and sold <= 0:
+            items.append({**base, "kind": "usage_without_entitlement", "severity": 1, "hours": round(billed, 2), "days": None,
+                          "headline": f"{round(billed, 2):g}h billed with no recognized entitlement",
+                          "action": "Find the missing Salesforce entitlement or confirm this work is unfunded."})
+    items.sort(key=lambda item: (item["severity"], -float(item["hours"]), str(item["account_name"]).lower()))
+    return items

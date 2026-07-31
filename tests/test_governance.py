@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import sqlite3
 import stat
 import tempfile
@@ -9,10 +10,12 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from hours_recon.evidence import attach_governance
+from hours_recon.freshness import describe_freshness
 from hours_recon.inference import infer_packages
 from hours_recon.matching import match_projects_with_evidence
 from hours_recon.reconcile import reconcile
 from hours_recon.remediation import (
+    account_urgency,
     build_workstreams,
     case_fingerprint,
     format_slack_followup,
@@ -178,6 +181,87 @@ class EvidencePolicyTests(unittest.TestCase):
         self.assertEqual("T4", report["accounts"][0]["governance"]["overall_tier"])
         self.assertEqual(0.0, report["governance"]["metrics"]["sold_hours"]["governed"])
 
+    def _covered_account(self):
+        opportunity = {
+            "id": "O1", "account_id": "A1", "account_name": "Acme", "name": "Acme",
+            "close_date": "2026-01-01", "service_start_date": "2026-01-01", "service_end_date": "2027-01-01",
+            "line_items": [{
+                "id": "L1", "source": "opportunity_line_item", "name": "Glean Outcomes Packages: Starter",
+                "product_code": "Glean-Outcomes-Packages-Starter", "quantity": 1,
+            }],
+        }
+        package = infer_packages(opportunity, PACKAGE_CONFIG)[0][0]
+        project = {"id": "P1", "salesforce_account_id": "A1", "start_date": "2026-01-01", "due_date": "2027-01-01", "status": "In progress"}
+        entry = {
+            "id": "T1", "project_id": "P1", "date": "2026-02-01", "hours": 1, "billable": True,
+            "approval_status": "APPROVED", "activity_name": "Workshop", "category": "Delivery", "user_id": "U1",
+        }
+        return minimal_account(package=package, project=project, entry=entry)
+
+    def _governed(self, account, coverage):
+        fields = ("sold_hours", "billed_hours", "remaining_hours", "at_risk_hours", "expired_unused_hours", "future_entitlement_hours", "overage_hours")
+        report = {"meta": {}, "metrics": {field: account.get(field, 0) for field in fields}, "accounts": [account]}
+        attach_governance(
+            report,
+            project_match_evidence={"P1": {"basis": "salesforce_account_id"}},
+            source_coverage=coverage,
+        )
+        return report
+
+    def test_coverage_cap_never_leaks_an_internal_flag_name_into_copy(self):
+        """The sentinel "complete" must never be presented as a dataset name."""
+        report = self._governed(self._covered_account(), {
+            "complete": False, "accounts": True, "opportunities": True, "projects": True,
+            "time_entries": False, "pagination_complete": True, "through_date_current": False,
+        })
+        dimensions = report["accounts"][0]["governance"]["dimensions"]
+        time_quality = dimensions["time_quality"]
+        self.assertEqual("incomplete_source_coverage", time_quality["reason_code"])
+        self.assertIn("Rocketlane time entries", time_quality["summary"])
+        self.assertNotIn("complete,", time_quality["summary"])
+        self.assertNotIn("for: complete", time_quality["summary"])
+        for item in dimensions.values():
+            self.assertNotIn("complete.", str(item["summary"]).replace("not confirmed complete.", ""))
+        self.assertEqual(["Rocketlane time entries"], time_quality["details"]["missing_coverage_labels"])
+
+    def test_a_stale_pull_caps_evidence_without_creating_an_account_backlog(self):
+        """One retrieval problem must not become one work item per account and dimension."""
+        report = self._governed(self._covered_account(), {
+            "complete": False, "accounts": True, "opportunities": True, "projects": True,
+            "time_entries": True, "pagination_complete": True, "through_date_current": False,
+        })
+        governance = report["accounts"][0]["governance"]
+        self.assertEqual("T4", governance["overall_tier"])
+        self.assertTrue(governance["coverage_capped"])
+        self.assertEqual(0.0, report["governance"]["metrics"]["sold_hours"]["governed"])
+        # The underlying evidence is strong, so there is nothing for a person to fix.
+        self.assertEqual([], governance["gaps"])
+        self.assertEqual(
+            [], build_workstreams(
+                {"meta": {"as_of": "2026-07-22"}, "accounts": report["accounts"]},
+                scope_id="scope", portfolio_id="owner@example.com",
+            ),
+        )
+
+    def test_a_real_weakness_survives_a_coverage_cap(self):
+        """Suppressing the retrieval gap must not hide genuine evidence problems."""
+        account = self._covered_account()
+        account["projects"][0].pop("salesforce_account_id")
+        fields = ("sold_hours", "billed_hours", "remaining_hours", "at_risk_hours", "expired_unused_hours", "future_entitlement_hours", "overage_hours")
+        report = {"meta": {}, "metrics": {field: account.get(field, 0) for field in fields}, "accounts": [account]}
+        attach_governance(
+            report,
+            project_match_evidence={"P1": {"basis": "normalized_customer_name"}},
+            source_coverage={
+                "complete": False, "accounts": True, "opportunities": True, "projects": True,
+                "time_entries": True, "pagination_complete": True, "through_date_current": False,
+            },
+        )
+        gaps = report["accounts"][0]["governance"]["gaps"]
+        reasons = {gap["reason_code"] for gap in gaps}
+        self.assertIn("normalized_customer_name", reasons)
+        self.assertNotIn("incomplete_source_coverage", reasons)
+
     def test_rejected_time_is_tier_four(self):
         package = {
             "id": "O1:L1", "opportunity_id": "O1", "opportunity_name": "Acme", "line_item_id": "L1",
@@ -275,6 +359,49 @@ class RemediationPlannerTests(unittest.TestCase):
         )
         self.assertEqual("T1", next(item for item in paths if item["id"] == systemic)["target_tier"])
         self.assertIn("shared root cause", systemic_reason)
+
+    def test_priority_follows_hours_and_time_rather_than_evidence_tier(self):
+        """Ranking on tier made every item P0. Money and dates carry the signal."""
+        def account(**overrides):
+            base = {
+                "id": "A1", "name": "Acme", "sold_hours": 100, "billed_hours": 10,
+                "remaining_hours": 90, "at_risk_hours": 0, "expired_unused_hours": 0,
+                "overage_hours": 0, "packages": [],
+            }
+            base.update(overrides)
+            return base
+
+        expiring = lambda days: [{"remaining_hours": 10, "days_to_expiration": days}]
+        self.assertEqual("P0", account_urgency(account(overage_hours=4)))
+        self.assertEqual("P0", account_urgency(account(expired_unused_hours=10)))
+        self.assertEqual("P0", account_urgency(account(at_risk_hours=10, packages=expiring(12))))
+        self.assertEqual("P1", account_urgency(account(at_risk_hours=10, packages=expiring(75))))
+        self.assertEqual("P1", account_urgency(account(sold_hours=0, billed_hours=8)))
+        self.assertEqual("P2", account_urgency(account(packages=expiring(300))))
+
+        # A weak mapping on a calm account is hygiene, not an emergency.
+        calm = queue_report([{
+            "dimension": "hours_mapping", "tier": "T4", "reason_code": "tier_name",
+            "summary": "Name inference.", "recommended_action": "Use a governed mapping.",
+            "refs": ["L1"], "details": {},
+        }])
+        calm["accounts"][0].update({"at_risk_hours": 0, "overage_hours": 0, "packages": expiring(300)})
+        self.assertEqual("P2", build_workstreams(calm, scope_id="scope")[0]["priority"])
+
+        # The same evidence on an account losing hours this month is urgent.
+        urgent = copy.deepcopy(calm)
+        urgent["accounts"][0].update({"at_risk_hours": 30, "packages": expiring(9)})
+        self.assertEqual("P0", build_workstreams(urgent, scope_id="scope")[0]["priority"])
+
+    def test_a_gap_that_hides_the_hours_is_escalated_one_band(self):
+        """If usage cannot be measured, the account's apparent calm is not evidence."""
+        report = queue_report([{
+            "dimension": "project_linkage", "tier": "T4", "reason_code": "no_rocketlane_project",
+            "summary": "No project is linked.", "recommended_action": "Link the project.",
+            "refs": ["A1"], "details": {},
+        }])
+        report["accounts"][0].update({"at_risk_hours": 0, "overage_hours": 0, "sold_hours": 40, "packages": []})
+        self.assertEqual("P1", build_workstreams(report, scope_id="scope")[0]["priority"])
 
     def test_shared_product_root_cause_groups_accounts_but_retains_instances(self):
         accounts = []
@@ -381,10 +508,13 @@ class RemediationPlannerTests(unittest.TestCase):
         self.assertEqual("update_project", operation["tool"])
         self.assertEqual(["1379328"], operation["record_ids"])
         opportunity_url = "https://glean.lightning.force.com/lightning/r/Opportunity/006OPP/view"
-        self.assertEqual({
-            "externalReferenceId": "001ABC",
-            "Link to Salesforce Opportunity (resolve Rocketlane field ID in preflight)": opportunity_url,
-        }, operation["proposed_fields"])
+        # Only externalReferenceId is proposed. Rocketlane has no project field
+        # labelled "Link to Salesforce Opportunity", so proposing one produced a
+        # label that preflight could never resolve and that blocked the whole
+        # write. The opportunity is already carried by the OppID custom field.
+        self.assertEqual({"externalReferenceId": "001ABC"}, operation["proposed_fields"])
+        self.assertEqual("ready_after_preflight", operation["status"])
+        self.assertNotIn("Link to Salesforce Opportunity", json.dumps(operation))
         self.assertEqual("AISM / Rocketlane project owner", workspace["recipient_role"])
         self.assertEqual(["Alex AISM"], workspace["recipient_suggestions"])
         self.assertEqual("Alex AISM", workspace["default_recipient"])
@@ -393,7 +523,8 @@ class RemediationPlannerTests(unittest.TestCase):
         self.assertIn("project 1379328 currently links to Acme only by normalized customer name", slack_message)
         self.assertIn("verified Salesforce Account ID is 001ABC", slack_message)
         self.assertIn("Set Rocketlane project 1379328 `externalReferenceId` to `001ABC`", slack_message)
-        self.assertIn(f"Set its `Link to Salesforce Opportunity` field to `{opportunity_url}`", slack_message)
+        self.assertNotIn("Link to Salesforce Opportunity", slack_message)
+        # The opportunity still appears as reference evidence, just not as a write.
         self.assertIn(f"Salesforce Opportunity 006OPP: {opportunity_url}", slack_message)
         self.assertIn("confirm whether you’re the right owner", slack_message)
         self.assertIn("point me to the correct owner", slack_message)
@@ -403,7 +534,7 @@ class RemediationPlannerTests(unittest.TestCase):
         self.assertIn("wait for my explicit confirmation", workspace["mcp_request"])
         self.assertFalse(workspace["source_write_performed"])
 
-    def test_project_linkage_does_not_guess_when_multiple_opportunities_exist(self):
+    def test_project_linkage_is_unambiguous_when_multiple_opportunities_exist(self):
         gap = {
             "dimension": "project_linkage", "tier": "T3", "reason_code": "normalized_customer_name",
             "summary": "Matched by name.", "recommended_action": "Store a stable ID.",
@@ -422,10 +553,13 @@ class RemediationPlannerTests(unittest.TestCase):
         workstream["selected_path"] = selected
         workspace = build_execution_workspace(workstream, report)
         operation = workspace["operations"][0]
-        self.assertEqual("needs_confirmed_opportunity", operation["status"])
+        # Writing only the Account ID is unambiguous however many opportunities
+        # exist, so several opportunities no longer stall the write.
+        self.assertEqual("ready_after_preflight", operation["status"])
         self.assertEqual({"externalReferenceId": "001ABC"}, operation["proposed_fields"])
-        self.assertIn("Select the correct Salesforce Opportunity URL", workspace["required_inputs"][0])
-        self.assertIn("candidate URLs under Records; do not guess", workspace["slack_draft"]["message"])
+        self.assertEqual([], [item for item in workspace["required_inputs"] if "Opportunity" in item])
+        self.assertNotIn("Link to Salesforce Opportunity", workspace["slack_draft"]["message"])
+        # Both opportunities stay visible as evidence for the reviewer.
         self.assertIn("006FIRST/view", workspace["slack_draft"]["message"])
         self.assertIn("006SECOND/view", workspace["slack_draft"]["message"])
 

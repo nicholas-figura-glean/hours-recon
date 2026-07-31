@@ -17,7 +17,11 @@ A local, read-only AIOM dashboard that reconciles hours sold in Salesforce with 
 - Preserves unmatched accounts, unknown packages, and excess negative corrections instead of silently dropping them.
 - Scores entitlement source, hours mapping, service period, project linkage, and time quality independently from Tier 1 through Tier 4.
 - Keeps current reported totals unchanged in observe-only mode while separating governed and provisional exposure.
+- Leads with one figure: hours at risk in the next 90 days, plus a short ranked list of the accounts actively losing hours.
+- Reports how current the data is as a single explicit signal, so a stale pull reads as "refresh me", not as dozens of evidence failures.
+- Shows week-over-week movement on every headline figure once a second distinct refresh exists.
 - Converts Tier 3/4 evidence into private, deterministic remediation workstreams, grouping shared root causes across accounts while retaining an independently validated account/dimension instance.
+- Ranks that work by hours at stake and time remaining rather than by evidence tier, so priority stays meaningful.
 - Ranks transparent T2 and T1 remediation paths by effort, durability, breadth, impact, dependencies, and automatic validation; T2 is the minimum governed outcome and T1 is an optional stronger target.
 - Opens a selected-path execution workspace with source record links, approval-gated MCP change packets, connector capability boundaries, and owner-specific Slack handoffs without writing or sending from the local app.
 
@@ -63,16 +67,25 @@ The app verifies that the snapshot's Salesforce requester email matches `HOURS_R
 
 ### Test requester snapshots
 
-Keep test data for a complex requester in a separate private path such as `var/fixtures/jason_mcp_snapshot.json`; never use it as the active `HOURS_RECON_MCP_SNAPSHOT_PATH`. To exercise that dataset, launch a separate local process with a requester-specific environment file:
+Keep test data for a complex requester in a separate private path such as `var/fixtures/jason_mcp_snapshot.json`; never use it as the active `HOURS_RECON_MCP_SNAPSHOT_PATH`. To exercise that dataset, launch a separate local process with a requester-specific environment file.
+
+Redirect **every** writable path, not just the snapshot. A second process that only overrides the snapshot still writes its report to the shared cache and its planner state to the shared database, silently replacing the real portfolio with the fixture's accounts:
 
 ```dotenv
 # .env.jason-test (private and ignored by Git)
 HOURS_RECON_MODE=mcp
 HOURS_RECON_MCP_REQUESTER_EMAIL=jason.fleming@glean.com
 HOURS_RECON_MCP_SNAPSHOT_PATH=var/fixtures/jason_mcp_snapshot.json
+# Required: keep the fixture out of the real portfolio's report, trend
+# baseline (derived from cache_path), and workflow history.
+HOURS_RECON_CACHE_PATH=var/fixtures/jason_reconciliation.json
+HOURS_RECON_REMEDIATION_DB_PATH=var/fixtures/jason_remediation.sqlite3
+HOURS_RECON_PORT=8766
 ```
 
 The normal `.env` can continue to point at `var/mcp_snapshot.json` for Nick. This preserves the requester guard while letting either full, verified snapshot be refreshed independently.
+
+If the active report is ever overwritten by a fixture, it can be rebuilt from the intact snapshot without a network call: load `HOURS_RECON_MCP_SNAPSHOT_PATH` through `load_mcp_snapshot`, apply `attach_attention`, and `write_cache` it back to `cache_path`.
 
 ## Optional direct API mode
 
@@ -191,13 +204,21 @@ Five evidence dimensions are scored independently:
 
 The weakest dimension controls the account tier. Tier 1 and Tier 2 are governed; Tier 3 and Tier 4 are provisional. Observe-only mode does not replace portfolio totals. It adds governed/provisional shadow metrics and feeds each Tier 3/4 dimension into remediation planner v2.
 
+### Retrieval coverage is a data-currency signal, not a backlog
+
+An incomplete or out-of-date pull still caps every affected dimension, because unverified data must never be reported as governed. It does **not** create remediation work. One retrieval problem previously appeared once per account per dimension, which turned a single stale snapshot into dozens of high-priority items whose real remedy was one refresh.
+
+Instead, `meta.freshness` describes the condition once in plain language, with the action that resolves it, and the planner surfaces only the genuine evidence weakness underneath the cap. `hours_recon/freshness.py` owns that description; `governance.coverage_capped_account_count` reports how many accounts are waiting on a current pull.
+
 ### Workstreams, instances, and paths
 
 The planner separates three concepts:
 
-- A **workstream** is an assignable root cause. Shared ProductCode issues and incomplete retrieval coverage can group multiple accounts; account-specific service-period, project-linkage, and time-quality work remains isolated when there is no safe shared key.
+- A **workstream** is an assignable root cause. Shared ProductCode issues can group multiple accounts; account-specific service-period, project-linkage, and time-quality work remains isolated when there is no safe shared key.
 - An **instance** is one account/dimension observation under a workstream. It retains its own evidence, current tier, priority, due date, regression count, and validation result.
 - A **path** is a versioned set of ordered steps, owners, contributors, dependencies, effort, durability, execution scope, target tier, and automatic validation checks.
+
+Priority (`P0`, `P1`, `P2`) is derived in `hours_recon/remediation.py` from the account's exposure, not from its evidence tier: overage, already-expired hours, or hours expiring within 30 days are `P0`; hours expiring within 90 days or delivery with no recognized entitlement are `P1`; everything else is `P2`. A Tier 4 gap that makes the hours themselves unmeasurable escalates one band, because the account's apparent calm is then not evidence.
 
 Hours mapping, service period, and project linkage have detailed T2/T1 path catalogs. Entitlement source and time quality use the same framework with conservative paths that can be expanded independently. The recommendation policy is deterministic and versioned in `hours_recon/remediation_policy.py`; it does not ask a language model to choose a path. It normally selects the lowest-effort durable T2 path. A T1 path can rank first when it requires no additional effort, fixes a shared root cause across several accounts, or provides materially stronger evidence for high-impact exposure with only one added effort band. The dashboard always shows the rationale and every alternative.
 
@@ -230,9 +251,11 @@ Salesforce and Rocketlane source actions still run through Glean MCP: Glean perf
 
 #### Reviewed source writes through Glean Pi
 
-Write-capable proposed actions expose editable JSON in the execution workspace. The server accepts only the server-generated tool, operation index, target record IDs, and exact field-name set; reviewers may replace placeholder values but cannot add target fields or records. Unresolved placeholders, unsupported tools, stale workstream versions, and untrusted source links are rejected.
+Write-capable proposed actions are edited field by field in the execution workspace: each proposed field is a labeled input, and a `<placeholder>` becomes the input's prompt rather than literal text to overwrite. The server accepts only the server-generated tool, operation index, target record IDs, and exact field-name set; reviewers may replace placeholder values but cannot add target fields or records. Unresolved placeholders, unsupported tools, stale workstream versions, and untrusted source links are rejected.
 
-1. Review the proposed fields and replace every `<placeholder>` with a concrete value.
+Proposed fields are restricted to fields that actually exist on the target object. The T1 project-linkage packet writes only `externalReferenceId`; it does not propose a Salesforce opportunity field, because no such Rocketlane project field exists and the opportunity is already carried by the `OppID` custom field. The Account ID alone earns T1 and is unambiguous regardless of how many opportunities the account has.
+
+1. Fill in every proposed field. The editor refuses to queue while a required value is blank.
 2. Choose **Queue reviewed source actions**. This stores one `pending` item per operation but performs no source write.
 3. Tell Glean Pi: **“execute pending Hours Recon source actions.”**
 4. The `hours-recon-source-execute` skill fresh-reads the record and schema, resolves custom-field IDs, shows exact before/after values, and asks for final confirmation immediately before the write.

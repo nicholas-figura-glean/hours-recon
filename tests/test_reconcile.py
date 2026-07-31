@@ -365,5 +365,55 @@ class ConfigFixtureTests(unittest.TestCase):
         self.assertEqual(PACKAGE_CONFIG["growth_hours"], real["growth_hours"])
 
 
+class AttentionTests(unittest.TestCase):
+    """The short list an AIOM acts on, ordered by what is being lost."""
+
+    def test_expiring_overage_and_expired_rank_above_merely_soon(self):
+        opportunities = [
+            {"id": "O1", "account_id": "A1", "account_name": "Acme", "name": "Growth Package 20 hours", "close_date": "2026-01-05", "line_items": []},
+        ]
+        entries = [{"id": "T1", "project_id": "P1", "date": "2026-02-01", "minutes": 60, "billable": True, "user_email": "alex@example.com"}]
+        sf, rl = sources(opportunities, entries)
+        # Report late in the entitlement year so the remaining hours expire within 30 days.
+        report = reconcile(sf, rl, package_config=PACKAGE_CONFIG, account_aliases={"aliases": {}}, as_of=date(2026, 12, 20))
+        kinds = [item["kind"] for item in report["attention"]]
+        self.assertIn("expiring_now", kinds)
+        first = report["attention"][0]
+        self.assertEqual(0, first["severity"])
+        self.assertIn("expires", first["headline"])
+        self.assertEqual("A1", first["account_id"])
+        self.assertEqual(1, report["metrics"]["attention_account_count"])
+        self.assertEqual(16, report["metrics"]["soonest_expiration_days"])
+
+    def test_overage_is_reported_as_hours_delivered_beyond_what_was_sold(self):
+        opportunities = [{"id": "O1", "account_id": "A1", "account_name": "Acme", "name": "Growth Package 20 hours", "close_date": "2026-01-01", "line_items": []}]
+        entries = [{"id": "T1", "project_id": "P1", "date": "2026-02-01", "minutes": 25 * 60, "billable": True, "user_email": "alex@example.com"}]
+        sf, rl = sources(opportunities, entries)
+        report = reconcile(sf, rl, package_config=PACKAGE_CONFIG, account_aliases={"aliases": {}}, as_of=date(2026, 3, 1))
+        overage = next(item for item in report["attention"] if item["kind"] == "overage")
+        self.assertEqual(0, overage["severity"])
+        self.assertEqual(5.0, overage["hours"])
+        self.assertIn("beyond what was sold", overage["headline"])
+        self.assertEqual(1, report["metrics"]["overage_account_count"])
+
+    def test_billing_without_an_entitlement_is_surfaced(self):
+        opportunities = []
+        entries = [{"id": "T1", "project_id": "P1", "date": "2026-02-01", "minutes": 120, "billable": True, "user_email": "alex@example.com"}]
+        sf, rl = sources(opportunities, entries)
+        report = reconcile(sf, rl, package_config=PACKAGE_CONFIG, account_aliases={"aliases": {}}, as_of=date(2026, 3, 1))
+        item = next(item for item in report["attention"] if item["kind"] == "usage_without_entitlement")
+        self.assertEqual(1, item["severity"])
+        self.assertIn("no recognized entitlement", item["headline"])
+
+    def test_a_healthy_portfolio_produces_no_attention_items(self):
+        opportunities = [{"id": "O1", "account_id": "A1", "account_name": "Acme", "name": "Growth Package 20 hours", "close_date": "2026-01-01", "line_items": []}]
+        entries = [{"id": "T1", "project_id": "P1", "date": "2026-02-01", "minutes": 60, "billable": True, "user_email": "alex@example.com"}]
+        sf, rl = sources(opportunities, entries)
+        report = reconcile(sf, rl, package_config=PACKAGE_CONFIG, account_aliases={"aliases": {}}, as_of=date(2026, 3, 1))
+        self.assertEqual([], report["attention"])
+        self.assertEqual(0, report["metrics"]["at_risk_account_count"])
+        self.assertIsNone(report["metrics"]["soonest_expiration_days"])
+
+
 if __name__ == "__main__":
     unittest.main()

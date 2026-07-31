@@ -15,14 +15,17 @@ from uuid import uuid4
 from .dates import business_today
 from .demo import demo_report
 from .evidence import attach_governance
+from .freshness import describe_freshness
 from .matching import match_projects
 from .mcp_snapshot import McpSnapshotError, load_mcp_snapshot
-from .reconcile import reconcile
+from .reconcile import attach_attention, reconcile
 from .remediation_execution import build_execution_workspace
 from .remediation_store import QueueError, QueueValidationError, RemediationStore
 from .rocketlane import RocketlaneClient
 from .salesforce import SalesforceClient
 from .storage import read_cache, write_cache
+from .trend import advance as advance_trend_baseline
+from .trend import attach_trend
 
 
 class ReconciliationService:
@@ -89,10 +92,46 @@ class ReconciliationService:
                 )
             else:
                 self._data["meta"]["notice"] = "Demo data is shown until the first successful live refresh."
+        self._record_trend(self._data)
+
+    def _trend_path(self):
+        configured = self.settings.get("trend_path")
+        if configured:
+            return configured
+        cache_path = self.settings["cache_path"]
+        return cache_path.with_name(f"{cache_path.stem}_trend.json")
+
+    def _record_trend(self, result: Dict[str, Any]) -> None:
+        """Attach movement since the previous report and advance the baseline.
+
+        Sample data never touches the baseline, so switching to demo mode cannot
+        corrupt the comparison for real data.
+        """
+        if not isinstance(result, dict):
+            return
+        if result.get("meta", {}).get("mode") == "demo":
+            attach_trend(result, None)
+            return
+        try:
+            baseline = read_cache(self._trend_path(), -1)
+        except Exception:
+            baseline = None
+        attach_trend(result, baseline)
+        try:
+            write_cache(self._trend_path(), advance_trend_baseline(baseline, result))
+        except OSError:
+            # Movement is a convenience. Losing it must never break the report.
+            pass
 
     @property
     def data(self) -> Dict[str, Any]:
         result = copy.deepcopy(self._data)
+        # Derived presentation fields are recomputed on read so a report cached
+        # by an earlier build never renders an empty hero or attention list.
+        attach_attention(result)
+        result.setdefault("meta", {})["freshness"] = describe_freshness(
+            result.get("meta", {}), report_date=business_today(self.settings["timezone"]),
+        )
         self._attach_remediation(result)
         return result
 
@@ -184,10 +223,26 @@ class ReconciliationService:
         }
 
     def _unavailable_remediation_summary(self) -> Dict[str, Any]:
+        configured_mode = self.settings["mode"]
+        remediation_mode = self.settings.get("remediation_mode", "off")
+        if configured_mode == "demo":
+            reason = "demo"
+            message = (
+                "Data quality checks run on your own live data. Connect Salesforce and Rocketlane "
+                "in Glean Pi, then run a refresh."
+            )
+        elif remediation_mode != "observe_only":
+            reason = "disabled"
+            message = "Data quality checks are turned off. Set HOURS_RECON_REMEDIATION_MODE=observe_only to enable them."
+        else:
+            reason = "error"
+            message = "Data quality checks could not start. The dashboard numbers above are unaffected."
         return {
             "schema_version": 2,
-            "mode": self.settings.get("remediation_mode", "off"),
+            "mode": remediation_mode,
             "available": False,
+            "unavailable_reason": reason,
+            "unavailable_message": message,
             "error": self.remediation_error,
             "workstreams": [],
             "workstream_count": 0,
@@ -290,6 +345,9 @@ class ReconciliationService:
             "requester_email": self.settings["requester_email"],
             "has_live_cache": self.settings["cache_path"].exists() and self._data.get("meta", {}).get("mode") in {"live", "mcp"},
             "displayed_mode": self._data.get("meta", {}).get("mode"),
+            "freshness": describe_freshness(
+                self._data.get("meta", {}), report_date=business_today(self.settings["timezone"]),
+            ),
             "governance_mode": self.settings.get("governance_mode", "observe_only"),
             "governance_policy_version": self._data.get("governance", {}).get("policy_version"),
             "remediation_mode": self.settings.get("remediation_mode", "off"),
@@ -631,6 +689,7 @@ class ReconciliationService:
                 result["meta"]["source_coverage_complete"] = False
             result["meta"]["refreshed_at"] = datetime.now(timezone.utc).isoformat()
             self._observe_source(result)
+            self._record_trend(result)
             if result["meta"]["mode"] in {"live", "mcp"}:
                 write_cache(self.settings["cache_path"], result)
             self._data = result

@@ -20,7 +20,7 @@ Execute only actions that the user reviewed and queued in the local dashboard. T
 4. Before claiming or writing:
    - Re-read every `record_id` using the authenticated connector.
    - Read the current object/custom-field schema.
-   - Resolve descriptive field labels in `proposed_fields` to real writable field IDs. For Rocketlane `Link to Salesforce Opportunity`, require the exact custom field whose observed label matches; never create or substitute a field.
+   - Resolve descriptive field labels in `proposed_fields` to real writable field IDs. Enumerate the object's fields and require an exact observed label match; never create a field, and never substitute a similarly-named one. If no field matches, stop and report it rather than writing a near-miss — a plausible-looking substitute can destroy the very evidence the fix is meant to establish.
    - Verify the record still belongs to the queued account/workstream and the queued current path is still applicable.
    - Compare the current values with the reviewed `proposed_fields`.
 5. Show the user one compact confirmation containing the outbox ID, connector/tool, record IDs and links, exact current values, exact proposed values, and post-write validation read. Use `ask_clarifying_question` with options such as `Execute this write` and `Cancel`; the earlier dashboard review is not final write confirmation.

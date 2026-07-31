@@ -43,7 +43,10 @@ def settings() -> Dict[str, Any]:
         "cache_max_age_days": int(os.getenv("HOURS_RECON_CACHE_MAX_AGE_DAYS", "30")),
         "packages": load_json(ROOT / "config" / "packages.json"),
         "account_aliases": load_json(ROOT / "config" / "account_aliases.json"),
-        "cache_path": ROOT / "var" / "reconciliation.json",
+        # Overridable so a second instance (verification, a scratch run against a
+        # fixture) cannot overwrite the real portfolio's cached report. Without
+        # this, any non-demo run silently clobbers var/reconciliation.json.
+        "cache_path": ROOT / os.getenv("HOURS_RECON_CACHE_PATH", "var/reconciliation.json"),
         "mcp_snapshot_path": ROOT / os.getenv("HOURS_RECON_MCP_SNAPSHOT_PATH", "var/mcp_snapshot.json"),
         "governance_mode": os.getenv("HOURS_RECON_GOVERNANCE_MODE", "observe_only").lower(),
         "remediation_mode": os.getenv("HOURS_RECON_REMEDIATION_MODE", "observe_only").lower(),
