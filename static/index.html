@@ -345,6 +345,7 @@
     .entry-picker { display: grid; max-height: 240px; overflow-y: auto; border: 1px solid var(--artifact-border); border-radius: 6px; background: var(--artifact-surface); }
     .entry-row { display: grid; grid-template-columns: 18px 84px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 10px; border-top: 1px solid var(--artifact-border-soft); font-size: 12.5px; }
     .entry-row:first-child { border-top: 0; }
+    .entry-category { color: var(--artifact-faint); font-size: 11.5px; }
     .entry-row input[type="checkbox"] { width: 15px; height: 15px; min-height: 15px; accent-color: var(--artifact-accent); }
     .entry-row .entry-date { color: var(--artifact-muted); font-variant-numeric: tabular-nums; }
     .entry-row .entry-what { display: grid; gap: 1px; min-width: 0; }
@@ -465,7 +466,9 @@
     .op-targets { display: grid; gap: 5px; }
     .op-target-count { color: var(--artifact-muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; font-weight: 640; }
     .op-targets ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
-    .op-targets li { display: flex; align-items: baseline; gap: 8px; justify-content: space-between; font-size: 12.5px; padding: 3px 0; border-bottom: 1px solid var(--artifact-border-soft); }
+    .op-targets li { display: flex; align-items: baseline; gap: 8px; justify-content: space-between; font-size: 12.5px; padding: 4px 0; border-bottom: 1px solid var(--artifact-border-soft); }
+    .op-target-main { display: grid; gap: 1px; min-width: 0; }
+    .op-target-category { color: var(--artifact-muted); font-size: 11.5px; }
     .op-targets li:last-child { border-bottom: 0; }
     .op-target-name { color: var(--artifact-text); overflow-wrap: anywhere; }
     .op-target-name.unnamed { color: var(--artifact-faint); font-style: italic; }
@@ -1176,7 +1179,7 @@
         }
         const flagged = entries.filter(entry => !entry.excluded);
         const excluded = entries.filter(entry => entry.excluded);
-        const rows = entries.map(entry => `<label class="entry-row ${entry.excluded ? 'is-excluded' : ''}"><input type="checkbox" data-exclusion-entry="${escapeHtml(String(entry.id))}" data-entry-date="${escapeHtml(String(entry.date || ''))}" ${entry.excluded ? 'disabled' : ''}><span class="entry-date">${fmtSmartDate(entry.date)}</span><span class="entry-what"><strong>${escapeHtml(entry.user_name || entry.user_email || 'Unknown')}</strong><span>${escapeHtml(entry.excluded ? `Accepted: ${entry.exclusion_reason || 'no reason recorded'}` : signalText(entry.quality_signals))}</span></span><span class="entry-hours">${fmt(entry.hours)}h</span></label>`).join('');
+        const rows = entries.map(entry => `<label class="entry-row ${entry.excluded ? 'is-excluded' : ''}"><input type="checkbox" data-exclusion-entry="${escapeHtml(String(entry.id))}" data-entry-date="${escapeHtml(String(entry.date || ''))}" ${entry.excluded ? 'disabled' : ''}><span class="entry-date">${fmtSmartDate(entry.date)}</span><span class="entry-what"><strong>${escapeHtml(entry.user_name || entry.user_email || 'Unknown')}</strong><span>${escapeHtml(entry.excluded ? `Accepted: ${entry.exclusion_reason || 'no reason recorded'}` : signalText(entry.quality_signals))}</span>${entry.category ? `<span class="entry-category">${escapeHtml(entry.category)}</span>` : ''}</span><span class="entry-hours">${fmt(entry.hours)}h</span></label>`).join('');
         const id = escapeHtml(String(account.id));
         return `<div class="exclusion-body" data-exclusion-account="${id}">
           <p class="exclusion-note"><strong>${plural(flagged.length, 'entry', 'entries')} flagged${excluded.length ? `, ${excluded.length} already accepted` : ''}.</strong> Accepting an entry stops it being flagged on every future refresh. It never changes billed hours, and the account can reach checked but not a clean pass.</p>
@@ -1523,11 +1526,19 @@
       const ids = operation.record_ids || [];
       if (!ids.length) return '<p class="op-target-empty">Records are identified during the pre-checks.</p>';
       const labels = operation.record_labels || {};
+      const meta = operation.record_meta || {};
       const shown = ids.slice(0, 6);
       const rest = ids.length - shown.length;
       const rows = shown.map(id => {
         const label = labels[id];
-        return `<li>${label ? `<span class="op-target-name">${escapeHtml(label)}</span>` : '<span class="op-target-name unnamed">Unnamed record</span>'}<code>${escapeHtml(String(id))}</code></li>`;
+        // The Rocketlane category is the best clue for what a missing activity
+        // name should be, so it rides along with every entry it exists for.
+        const category = (meta[id] || {}).category;
+        const name = label
+          ? `<span class="op-target-name">${escapeHtml(label)}</span>`
+          : '<span class="op-target-name unnamed">Unnamed record</span>';
+        const tag = category ? `<span class="op-target-category">${escapeHtml(category)}</span>` : '';
+        return `<li><span class="op-target-main">${name}${tag}</span><code>${escapeHtml(String(id))}</code></li>`;
       }).join('');
       const more = rest > 0 ? `<li class="op-target-more">and ${rest} more ${rest === 1 ? 'record' : 'records'}</li>` : '';
       return `<div class="op-targets"><p class="op-target-count">${plural(ids.length, 'record')}</p><ul>${rows}${more}</ul></div>`;

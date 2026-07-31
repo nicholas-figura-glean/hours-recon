@@ -290,6 +290,11 @@ class DashboardMarkupTests(unittest.TestCase):
         # locator, and record_ids remains the value the outbox writes against.
         self.assertIn("function renderOperationTargets(operation)", html)
         self.assertIn("operation.record_labels || {}", html)
+        self.assertIn("operation.record_meta || {}", html)
+        self.assertIn("op-target-category", html)
+        # The exclusion picker shows it too: category is how you judge whether an
+        # entry is worth chasing or worth accepting.
+        self.assertIn("entry-category", html)
         self.assertIn("op-target-name", html)
         self.assertIn("record_ids: action.record_ids || []", html)
         self.assertNotIn("(operation.record_ids || []).join(', ')", html)

@@ -1575,3 +1575,68 @@ class LayoutPreferenceTests(unittest.TestCase):
         other = self.store.layout_preference(scope_id="other", portfolio_id="portfolio")
         self.assertFalse(other["customized"])
         self.assertEqual(["attention", "accounts", "overview", "quality"], other["layout"]["sections"])
+
+
+class TimeEntryCategoryTests(unittest.TestCase):
+    """Every entry missing an activity name still has a Rocketlane category, and that
+    category is the strongest available clue for what the activity should be."""
+
+    def _workspace(self):
+        report = {
+            "meta": {"as_of": "2026-07-22"},
+            "metrics": {},
+            "accounts": [{
+                "id": "A1", "name": "Acme", "sold_hours": 20, "billed_hours": 3,
+                "remaining_hours": 17, "at_risk_hours": 0, "expired_unused_hours": 0,
+                "future_entitlement_hours": 0, "overage_hours": 0, "packages": [],
+                "projects": [{
+                    "id": "P1", "name": "Acme | Implementation", "status": "completed",
+                    "start_date": "2026-01-01", "due_date": "2026-12-31",
+                }],
+                "entries": [{
+                    "id": "5001", "project_id": "P1", "date": "2025-11-20", "hours": 1.0,
+                    "user_name": "Alex Rivera", "user_email": "alex@example.com", "billable": True,
+                    "approval_status": "APPROVED", "activity_name": None,
+                    "category": "AIOM-Client Account Meetings", "category_id": "125744",
+                }],
+                "governance": {"overall_tier": "T3", "policy_version": "evidence-v1", "dimensions": {}, "gaps": []},
+            }],
+        }
+        path_id = "time_quality.complete_required_metadata.t1"
+        workstream = {
+            "fingerprint": "hrw2_" + "0" * 64, "selected_path_id": path_id, "due_on": "2026-08-27",
+            "paths": [{"id": path_id, "title": "Fix", "target_tier": "T1", "primary_owner": "AISM"}],
+            "instances": [{
+                "account_id": "A1", "account_name": "Acme", "dimension": "time_quality",
+                "reason_code": "incomplete_time_or_project_metadata",
+                "evidence": {"refs": [], "details": {}},
+            }],
+        }
+        return build_execution_workspace(workstream, report)
+
+    def test_the_category_reaches_the_operation_without_bloating_the_label(self):
+        workspace = self._workspace()
+        operation = next(item for item in workspace["operations"] if item["object"] == "Time Entry")
+        self.assertEqual(["5001"], operation["record_ids"])
+        # The label stays a single readable line...
+        self.assertEqual("Nov 20, 2025 · Alex Rivera · 1h", operation["record_labels"]["5001"])
+        # ...and the category travels beside it, structured rather than concatenated.
+        self.assertEqual("AIOM-Client Account Meetings", operation["record_meta"]["5001"]["category"])
+        self.assertEqual("125744", operation["record_meta"]["5001"]["category_id"])
+
+    def test_the_slack_handoff_names_the_work_instead_of_listing_bare_ids(self):
+        workspace = self._workspace()
+        message = workspace["slack_handoffs"][0]["message"]
+        self.assertIn("Nov 20, 2025 · 1h · AIOM-Client Account Meetings (`5001`)", message)
+        # The old unactionable form must not survive.
+        self.assertNotIn("- Time entry `5001`", message)
+
+    def test_an_entry_with_no_category_is_simply_omitted_from_the_meta(self):
+        from hours_recon.remediation_execution import _record_meta
+        meta = _record_meta({"entries": [
+            {"id": "1", "category": "AIOM-Agent Building"},
+            {"id": "2", "category": None},
+            {"id": "3"},
+        ]})
+        self.assertEqual({"1"}, set(meta))
+        self.assertNotIn("category_id", meta["1"])
