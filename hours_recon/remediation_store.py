@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 from .evidence import TIER_RANK
 from .remediation import METRIC_FIELDS, PRIORITY_RANK, build_workstreams, format_slack_followup
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 ACTIVE_WORKSTREAM_STATUSES = {"open", "acknowledged", "in_progress", "pending_validation", "snoozed"}
 
 
@@ -70,7 +70,7 @@ class RemediationStore:
         connection = self._connect()
         try:
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, 1, 2, 3, SCHEMA_VERSION}:
+            if version not in {0, 1, 2, 3, 4, SCHEMA_VERSION}:
                 raise QueueError(f"Unsupported remediation database schema version {version}.")
             if version == 1:
                 # The workstream planner intentionally starts clean: v1 cases had no
@@ -256,10 +256,10 @@ class RemediationStore:
                 "slack_message_sha256", "execution_plan_json", "execution_path_id",
                 "execution_prepared_at", "mcp_request_copied_at",
             ):
-                if version in {2, SCHEMA_VERSION} and column not in workstream_columns:
+                if version in {2, 4, SCHEMA_VERSION} and column not in workstream_columns:
                     connection.execute(f"ALTER TABLE workstreams ADD COLUMN {column} TEXT")
             instance_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(instances)").fetchall()}
-            if version in {2, SCHEMA_VERSION} and "last_governed_tier" not in instance_columns:
+            if version in {2, 4, SCHEMA_VERSION} and "last_governed_tier" not in instance_columns:
                 connection.execute("ALTER TABLE instances ADD COLUMN last_governed_tier TEXT")
             connection.executescript(
                 """
@@ -337,7 +337,15 @@ class RemediationStore:
                 CREATE INDEX IF NOT EXISTS idx_time_entry_exclusions_active
                     ON time_entry_exclusions(scope_id, portfolio_id, account_id)
                     WHERE restored_at IS NULL;
-                PRAGMA user_version = 4;
+                CREATE TABLE IF NOT EXISTS layout_preferences (
+                    scope_id TEXT NOT NULL,
+                    portfolio_id TEXT NOT NULL,
+                    layout_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    updated_by TEXT NOT NULL,
+                    PRIMARY KEY (scope_id, portfolio_id)
+                );
+                PRAGMA user_version = 5;
                 """
             )
             connection.commit()
@@ -1038,6 +1046,103 @@ class RemediationStore:
             f"{row['entry_id']}:{int(row['version'])}:{0 if row['restored_at'] else 1}" for row in rows
         )
         return sha256(material.encode("utf-8")).hexdigest()[:16]
+
+    # ---------- Dashboard layout ----------
+
+    #: Only these keys are stored, and only these values. A layout preference is
+    #: cosmetic, so it must never become a channel for arbitrary persisted content.
+    LAYOUT_SLOTS = {
+        "sections": {"attention", "accounts", "overview", "quality"},
+        "hero": {"remaining", "overage", "expired"},
+        "overview_panels": {"risk", "weekly"},
+    }
+
+    @classmethod
+    def normalize_layout(cls, layout: Optional[Mapping[str, Any]]) -> Dict[str, List[str]]:
+        """Coerce a client-supplied layout into a known-good permutation.
+
+        Unknown keys are dropped, unknown or duplicated slots are dropped, and any
+        slot the client omitted is appended in its canonical order. The result is
+        always a complete permutation, so a stale or hand-edited preference can
+        never hide a section of the dashboard.
+        """
+        supplied = dict(layout or {})
+        normalized: Dict[str, List[str]] = {}
+        for group, allowed in cls.LAYOUT_SLOTS.items():
+            raw = supplied.get(group)
+            order: List[str] = []
+            if isinstance(raw, (list, tuple)):
+                for item in raw:
+                    name = str(item)
+                    if name in allowed and name not in order:
+                        order.append(name)
+            for name in cls._canonical_layout()[group]:
+                if name not in order:
+                    order.append(name)
+            normalized[group] = order
+        return normalized
+
+    @classmethod
+    def _canonical_layout(cls) -> Dict[str, List[str]]:
+        return {
+            "sections": ["attention", "accounts", "overview", "quality"],
+            "hero": ["remaining", "overage", "expired"],
+            "overview_panels": ["risk", "weekly"],
+        }
+
+    def layout_preference(self, *, scope_id: str, portfolio_id: str) -> Dict[str, Any]:
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT layout_json, updated_at FROM layout_preferences WHERE scope_id=? AND portfolio_id=?",
+                (str(scope_id), str(portfolio_id)),
+            ).fetchone()
+        finally:
+            connection.close()
+        if not row:
+            return {"layout": self.normalize_layout(None), "customized": False, "updated_at": None}
+        try:
+            stored = json.loads(row["layout_json"])
+        except (TypeError, ValueError):
+            return {"layout": self.normalize_layout(None), "customized": False, "updated_at": None}
+        return {
+            "layout": self.normalize_layout(stored),
+            "customized": True,
+            "updated_at": row["updated_at"],
+        }
+
+    def save_layout_preference(
+        self, *, scope_id: str, portfolio_id: str, layout: Mapping[str, Any], actor: str,
+    ) -> Dict[str, Any]:
+        normalized = self.normalize_layout(layout)
+        now = _utc_now()
+        connection = self._connect()
+        try:
+            connection.execute(
+                """INSERT INTO layout_preferences (scope_id, portfolio_id, layout_json, updated_at, updated_by)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(scope_id, portfolio_id) DO UPDATE SET
+                       layout_json=excluded.layout_json,
+                       updated_at=excluded.updated_at,
+                       updated_by=excluded.updated_by""",
+                (str(scope_id), str(portfolio_id), json.dumps(normalized, sort_keys=True), now, str(actor or "unknown")),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        return {"layout": normalized, "customized": True, "updated_at": now}
+
+    def reset_layout_preference(self, *, scope_id: str, portfolio_id: str) -> Dict[str, Any]:
+        connection = self._connect()
+        try:
+            connection.execute(
+                "DELETE FROM layout_preferences WHERE scope_id=? AND portfolio_id=?",
+                (str(scope_id), str(portfolio_id)),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        return {"layout": self.normalize_layout(None), "customized": False, "updated_at": None}
 
     def exclude_time_entries(
         self,

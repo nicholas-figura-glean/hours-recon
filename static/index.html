@@ -78,7 +78,8 @@
     h2 { font-size: 17px; letter-spacing: -.015em; margin: 0; }
     h3 { font-size: 14px; margin: 0; }
     .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-    .shell { max-width: 1360px; margin: 0 auto; padding: var(--artifact-space-5) var(--artifact-space-5) var(--artifact-space-7); }
+    .shell { max-width: 1360px; margin: 0 auto; padding: var(--artifact-space-5) var(--artifact-space-5) var(--artifact-space-7); display: flex; flex-direction: column; }
+    .shell > .footer { order: 100; }
 
     /* Header */
     .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--artifact-space-5); margin-bottom: var(--artifact-space-4); }
@@ -428,6 +429,38 @@
     .execution-operation.unsupported { border-left-color: var(--artifact-warning); }
     .op-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
     .op-head h3 { font-size: 13.5px; }
+    /* Arrange mode. Handles stay hidden until the operator opts in, so the default
+       view carries no drag chrome and nothing can be dragged by accident. */
+    /* An author display value beats the UA rule for [hidden], so restate it. */
+    .arrange-bar[hidden] { display: none; }
+    .arrange-bar { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; padding: 10px 14px; margin-bottom: var(--artifact-space-4); border: 1px solid var(--artifact-accent); border-radius: var(--artifact-radius); background: var(--artifact-accent-soft); font-size: 12.5px; }
+    .arrange-bar p { color: var(--artifact-text); }
+    .arrange-bar-actions { display: flex; align-items: center; gap: 8px; }
+    .arrange-status { color: var(--artifact-muted); font-size: 12px; min-height: 15px; }
+    .drag-handle { display: none; }
+    body.arranging .drag-handle { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 1px solid var(--artifact-border); border-radius: 6px; background: var(--artifact-surface); color: var(--artifact-muted); cursor: grab; font-size: 12px; line-height: 1; }
+    body.arranging .drag-handle:hover, body.arranging .drag-handle:focus-visible { border-color: var(--artifact-accent); color: var(--artifact-accent); }
+    body.arranging [data-slot] { position: relative; outline: 1px dashed var(--artifact-border); outline-offset: 3px; border-radius: var(--artifact-radius); }
+    body.arranging [data-slot].drag-source { opacity: .45; }
+    body.arranging [data-slot].drag-over { outline: 2px solid var(--artifact-accent); outline-offset: 3px; }
+    /* The handle is always taken out of flow. Left in flow it becomes a grid item and
+       collapses the two-column overview, or collides with a section's own header. */
+    body.arranging [data-layout-group] > .drag-handle { position: absolute; top: -11px; left: 14px; z-index: 3; width: auto; min-width: 22px; padding: 0 5px; background: var(--artifact-bg); }
+    /* A bare section has no padding of its own, so its heading sits directly under
+       the handle. Open a gap for it only while arranging. */
+    body.arranging section.section[data-layout-group]:not(.disclosure) { padding-top: 24px; }
+    body.arranging section.section[data-layout-group]:not(.disclosure) > .drag-handle { top: 2px; left: 2px; background: transparent; }
+    body.arranging .hero-stat { padding-top: 26px; }
+    body.arranging .hero-stat > .drag-handle { top: 5px; right: 5px; left: auto; background: var(--artifact-surface); }
+    .detail-identity { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+    .id-chip { display: inline-flex; align-items: baseline; gap: 7px; padding: 4px 9px; border: 1px solid var(--artifact-border); border-radius: 999px; background: var(--artifact-surface); color: var(--artifact-text); font-size: 12px; cursor: pointer; text-align: left; }
+    .id-chip:hover { border-color: var(--artifact-accent); }
+    .id-chip.static { cursor: default; color: var(--artifact-muted); }
+    .id-chip-label { color: var(--artifact-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-weight: 640; }
+    .id-chip code { font-family: var(--artifact-mono); font-size: 11px; color: var(--artifact-faint); }
+    .id-chip-copy { color: var(--artifact-accent); font-size: 11px; font-weight: 640; opacity: 0; }
+    .id-chip:hover .id-chip-copy, .id-chip:focus-visible .id-chip-copy { opacity: 1; }
+    .id-feedback { color: var(--artifact-accent); font-size: 11.5px; min-height: 14px; }
     .op-target-empty { color: var(--artifact-faint); font-size: 12px; }
     .op-targets { display: grid; gap: 5px; }
     .op-target-count { color: var(--artifact-muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; font-weight: 640; }
@@ -512,10 +545,19 @@
       </div>
       <div class="actions">
         <span class="sync" id="syncChip"><span class="status-dot"></span><span id="syncText">Loading</span></span>
+        <button class="button secondary" id="arrangeToggle" data-action="layout-arrange" type="button" aria-pressed="false">Arrange</button>
         <button class="button" id="refreshButton" data-action="refresh" type="button">Refresh</button>
       </div>
     </header>
 
+    <div class="arrange-bar" id="arrangeBar" hidden>
+      <p><strong>Arrange mode.</strong> Drag a tile by its handle, or focus a handle and use the arrow keys. Your layout saves automatically.</p>
+      <div class="arrange-bar-actions">
+        <span class="arrange-status" id="arrangeStatus" role="status"></span>
+        <button class="button tiny secondary" data-action="layout-reset" type="button">Reset to default</button>
+        <button class="button tiny" data-action="layout-arrange" type="button">Done</button>
+      </div>
+    </div>
     <div class="banner warn" id="freshnessBanner"></div>
     <div class="banner danger" id="error" role="alert"></div>
     <p class="sr-only" id="liveStatus" role="status"></p>
@@ -530,7 +572,7 @@
     </section>
     <p class="hero-footnote" id="heroFootnote"></p>
 
-    <section class="section" id="attentionSection" hidden>
+    <section class="section" id="attentionSection" data-slot="attention" data-layout-group="sections" hidden>
       <div class="section-title">
         <div><h2>Needs attention</h2><p>Hours being lost now, most costly first</p></div>
         <p class="source-note" id="attentionCount"></p>
@@ -538,7 +580,7 @@
       <div class="panel"><div class="attention-list" id="attentionList"></div></div>
     </section>
 
-    <section class="section">
+    <section class="section" data-slot="accounts" data-layout-group="sections">
       <div class="section-title"><div><h2>All accounts</h2><p id="resultCount"></p></div></div>
       <div class="panel">
         <div class="controls">
@@ -557,21 +599,21 @@
       </div>
     </section>
 
-    <section class="overview-grid">
-      <article class="panel">
+    <section class="overview-grid" data-slot="overview" data-layout-group="sections">
+      <article class="panel" data-slot="risk" data-layout-group="overview_panels">
         <div class="panel-head">
           <div><h2>Where the remaining hours sit</h2><p class="source-note">Unused hours grouped by how soon they expire</p></div>
           <span class="source-note" id="asOf"></span>
         </div>
         <div class="panel-body"><div class="risk-bars" id="riskBars"></div></div>
       </article>
-      <article class="panel">
+      <article class="panel" data-slot="weekly" data-layout-group="overview_panels">
         <div class="panel-head"><div><h2>This week</h2><p class="source-note" id="weeklyRange">Monday to today</p></div></div>
         <div class="panel-body"><div class="weekly-grid" id="weeklyStats"></div><p class="source-note" id="weeklyNote" hidden></p></div>
       </article>
     </section>
 
-    <details class="disclosure section" id="dataQuality">
+    <details class="disclosure section" id="dataQuality" data-slot="quality" data-layout-group="sections">
       <summary>
         <div class="disclosure-title">
           <strong>Data quality</strong>
@@ -649,6 +691,8 @@
       detailTab: 'entitlements',
       searchTimer: null,
       lastFocus: null,
+      arranging: false,
+      dragging: null,
       filters: { search: '', risk: 'all', weeklyOnly: false, sort: 'risk' },
     };
     const riskOrder = { overage: 0, expired: 1, critical: 2, high: 3, medium: 4, healthy: 5, exhausted: 6, none: 7 };
@@ -794,6 +838,7 @@
       renderRiskBars();
       renderWeekly(metrics, freshness);
       renderRemediation();
+      applyLayout();
       renderExceptions();
       if (state.selectedId) renderDetail(state.selectedId);
       const refreshed = meta.refreshed_at ? new Date(meta.refreshed_at).toLocaleString() : 'not yet';
@@ -845,12 +890,12 @@
       $('#heroContext').innerHTML = atRisk > 0
         ? `${escapeHtml(`across ${plural(accounts, 'account')}${soonest}`)} ${deltaChip(trend?.at_risk_hours, 'down')}`
         : `No unused hours expire in the next 90 days. ${deltaChip(trend?.at_risk_hours, 'down')}`;
-      const stats = [
-        { label: 'Hours remaining', value: metrics.remaining_hours, field: 'remaining_hours', better: 'up', alert: false },
-        { label: 'Over budget', value: metrics.overage_hours, field: 'overage_hours', better: 'down', alert: Number(metrics.overage_hours || 0) > 0 },
-        { label: 'Expired unused', value: metrics.expired_unused_hours, field: 'expired_unused_hours', better: 'down', alert: Number(metrics.expired_unused_hours || 0) > 0 },
-      ];
-      $('#heroStats').innerHTML = stats.map(stat => `<div class="hero-stat ${stat.alert ? 'alert' : ''}"><span>${escapeHtml(stat.label)}</span><strong>${fmt(stat.value)}</strong>${deltaChip(trend?.[stat.field], stat.better)}</div>`).join('');
+      const stats = orderSlots('hero', [
+        { slot: 'remaining', label: 'Hours remaining', value: metrics.remaining_hours, field: 'remaining_hours', better: 'up', alert: false },
+        { slot: 'overage', label: 'Over budget', value: metrics.overage_hours, field: 'overage_hours', better: 'down', alert: Number(metrics.overage_hours || 0) > 0 },
+        { slot: 'expired', label: 'Expired unused', value: metrics.expired_unused_hours, field: 'expired_unused_hours', better: 'down', alert: Number(metrics.expired_unused_hours || 0) > 0 },
+      ]);
+      $('#heroStats').innerHTML = stats.map(stat => `<div class="hero-stat ${stat.alert ? 'alert' : ''}" data-slot="${stat.slot}" data-layout-group="hero">${dragHandle(stat.label)}<span>${escapeHtml(stat.label)}</span><strong>${fmt(stat.value)}</strong>${deltaChip(trend?.[stat.field], stat.better)}</div>`).join('');
       const footnotes = [
         `${fmt(metrics.sold_hours)}h sold`,
         `${fmt(metrics.billed_hours)}h delivered`,
@@ -1053,6 +1098,7 @@
           <div class="detail-header">
             <div class="detail-title">
               <h2 id="detailHeading">${escapeHtml(account.name)}</h2>
+              ${renderAccountIdentity(account)}
               <div class="detail-kpis">${kpiTiles}</div>
               ${remediation?.active_workstream_count ? `<p class="source-note">${escapeHtml(`${plural(remediation.active_workstream_count, 'open data-quality item')} · ${urgencyLabel(remediation.highest_priority)}`)}</p>` : ''}
             </div>
@@ -1456,6 +1502,23 @@
     const PLACEHOLDER = /^<[^>]+>$/;
     // Bulk cleanup lists always lead with the human label. The ID stays visible but
     // subordinate: it is how you find the record in Rocketlane or Salesforce.
+    // The Salesforce Account ID is the value you paste into Rocketlane's
+    // externalReferenceId to establish linkage, so it has to be readable and
+    // copyable from the account itself, not just from a remediation card.
+    function renderAccountIdentity(account) {
+      const chips = [];
+      if (account.id) {
+        chips.push(`<button class="id-chip" type="button" data-action="copy-value" data-copy-value="${escapeHtml(String(account.id))}" title="Copy the Salesforce Account ID"><span class="id-chip-label">Salesforce account</span><code>${escapeHtml(String(account.id))}</code><span class="id-chip-copy" aria-hidden="true">Copy</span></button>`);
+      }
+      for (const project of (account.projects || []).slice(0, 4)) {
+        const name = project.name || 'Unnamed project';
+        chips.push(`<button class="id-chip" type="button" data-action="copy-value" data-copy-value="${escapeHtml(String(project.id ?? ''))}" title="Copy the Rocketlane project ID"><span class="id-chip-label">Rocketlane project</span><strong>${escapeHtml(name)}</strong><code>${escapeHtml(String(project.id ?? '—'))}</code></button>`);
+      }
+      const extra = Math.max(0, (account.projects || []).length - 4);
+      if (extra) chips.push(`<span class="id-chip static">and ${extra} more ${extra === 1 ? 'project' : 'projects'}</span>`);
+      return chips.length ? `<div class="detail-identity">${chips.join('')}</div><p class="id-feedback" id="idFeedback"></p>` : '';
+    }
+
     function renderOperationTargets(operation) {
       const ids = operation.record_ids || [];
       if (!ids.length) return '<p class="op-target-empty">Records are identified during the pre-checks.</p>';
@@ -1952,12 +2015,214 @@
       } finally { button.disabled = false; }
     }
 
+    async function copyIdentifier(button) {
+      const value = button.dataset.copyValue || '';
+      const feedback = $('#idFeedback');
+      if (!value) return;
+      try {
+        await writeClipboard(value, 'Clipboard access failed.');
+        if (feedback) feedback.textContent = `Copied ${value}`;
+      } catch (error) {
+        if (feedback) feedback.textContent = error.message;
+      }
+    }
+
+    /* ---------- Dashboard layout ---------- */
+    // Sections are repositioned with CSS `order`, never by moving DOM nodes: the
+    // account table and workstream list are patched in place on every refresh, and
+    // reparenting them mid-render would drop event bindings and scroll position.
+    const LAYOUT_GROUPS = {
+      sections: ['attention', 'accounts', 'overview', 'quality'],
+      hero: ['remaining', 'overage', 'expired'],
+      overview_panels: ['risk', 'weekly'],
+    };
+    const SLOT_LABELS = {
+      attention: 'Needs attention', accounts: 'All accounts', overview: 'Overview panels',
+      quality: 'Data quality', remaining: 'Hours remaining', overage: 'Over budget',
+      expired: 'Expired unused', risk: 'Where the remaining hours sit', weekly: 'This week',
+    };
+
+    function currentLayout() {
+      const stored = state.data?.layout?.layout || {};
+      const layout = {};
+      for (const [group, canonical] of Object.entries(LAYOUT_GROUPS)) {
+        const supplied = Array.isArray(stored[group]) ? stored[group] : [];
+        const order = supplied.filter(slot => canonical.includes(slot));
+        for (const slot of canonical) if (!order.includes(slot)) order.push(slot);
+        layout[group] = order;
+      }
+      return layout;
+    }
+
+    // Used by renderers that build their own children (the hero tiles).
+    function orderSlots(group, items) {
+      const order = currentLayout()[group] || [];
+      return [...items].sort((a, b) => order.indexOf(a.slot) - order.indexOf(b.slot));
+    }
+
+    function dragHandle(label) {
+      return `<button class="drag-handle" type="button" draggable="true" data-drag-handle aria-label="Move ${escapeHtml(label)}" title="Drag, or use the arrow keys">⠿</button>`;
+    }
+
+    // renderHero takes its data as arguments; the layout code has none to hand.
+    function refreshHeroTiles() {
+      if (!state.data) return;
+      renderHero(state.data.metrics, state.data.meta?.freshness || { state: 'unknown', is_current: false });
+    }
+
+    function applyLayout() {
+      const layout = currentLayout();
+      for (const [group, order] of Object.entries(layout)) {
+        if (group === 'hero') continue; // The hero renderer orders its own children.
+        order.forEach((slot, index) => {
+          const node = document.querySelector(`[data-layout-group="${group}"][data-slot="${slot}"]`);
+          // Sections start at 10 so the topbar, hero, and banners keep their natural place.
+          if (node) node.style.order = String(group === 'sections' ? index + 10 : index);
+        });
+      }
+      ensureDragHandles();
+    }
+
+    function ensureDragHandles() {
+      for (const node of document.querySelectorAll('[data-layout-group]:not(.hero-stat)')) {
+        if (node.querySelector(':scope > [data-drag-handle]')) continue;
+        node.insertAdjacentHTML('afterbegin', dragHandle(SLOT_LABELS[node.dataset.slot] || 'tile'));
+      }
+    }
+
+    function setArrangeStatus(text) {
+      const status = $('#arrangeStatus');
+      if (status) status.textContent = text;
+    }
+
+    function toggleArrangeMode(force) {
+      const active = force === undefined ? !state.arranging : Boolean(force);
+      state.arranging = active;
+      document.body.classList.toggle('arranging', active);
+      $('#arrangeBar').hidden = !active;
+      $('#arrangeToggle').setAttribute('aria-pressed', String(active));
+      $('#arrangeToggle').textContent = active ? 'Done arranging' : 'Arrange';
+      if (active) { ensureDragHandles(); setArrangeStatus(''); }
+    }
+
+    async function persistLayout(layout, description = 'Layout updated') {
+      state.data.layout = { ...(state.data.layout || {}), layout, customized: true };
+      applyLayout();
+      refreshHeroTiles();
+      try {
+        const response = await fetch('/api/layout/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Hours-Recon-Action-Token': state.data.remediation_queue?.action_token || '' },
+          body: JSON.stringify({ layout }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `Could not save the layout (${response.status})`);
+        state.data.layout = result;
+        setArrangeStatus(`${description} · saved`);
+      } catch (error) {
+        // The move stays on screen; only the persistence failed, and saying so is
+        // better than silently reverting a change the operator just made.
+        setArrangeStatus(`${description} · not saved: ${error.message}`);
+      }
+    }
+
+    function moveSlot(group, slot, delta) {
+      const layout = currentLayout();
+      const order = layout[group];
+      const from = order.indexOf(slot);
+      const to = from + delta;
+      if (from < 0 || to < 0 || to >= order.length) return false;
+      order.splice(to, 0, ...order.splice(from, 1));
+      persistLayout(layout, `${SLOT_LABELS[slot] || slot} moved to position ${to + 1} of ${order.length}`);
+      return true;
+    }
+
+    function dropSlot(group, dragged, target) {
+      if (dragged === target) return;
+      const layout = currentLayout();
+      const order = layout[group];
+      const from = order.indexOf(dragged);
+      const to = order.indexOf(target);
+      if (from < 0 || to < 0) return;
+      order.splice(to, 0, ...order.splice(from, 1));
+      persistLayout(layout, `${SLOT_LABELS[dragged] || dragged} moved to position ${to + 1} of ${order.length}`);
+    }
+
+    async function resetLayout() {
+      try {
+        const response = await fetch('/api/layout/reset', {
+          method: 'POST',
+          headers: { 'X-Hours-Recon-Action-Token': state.data.remediation_queue?.action_token || '' },
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Could not reset the layout.');
+        state.data.layout = result;
+        applyLayout();
+        refreshHeroTiles();
+        setArrangeStatus('Layout reset to default');
+      } catch (error) { setArrangeStatus(`Not reset: ${error.message}`); }
+    }
+
+    function layoutTileFor(node) {
+      const tile = node?.closest?.('[data-layout-group]');
+      return tile && tile.dataset.slot ? tile : null;
+    }
+
+    document.addEventListener('dragstart', event => {
+      if (!state.arranging) return;
+      const tile = layoutTileFor(event.target.closest('[data-drag-handle]'));
+      if (!tile) return;
+      state.dragging = { group: tile.dataset.layoutGroup, slot: tile.dataset.slot };
+      tile.classList.add('drag-source');
+      event.dataTransfer.effectAllowed = 'move';
+      // Firefox refuses to start a drag without payload; the value itself is unused.
+      event.dataTransfer.setData('text/plain', tile.dataset.slot);
+    });
+
+    document.addEventListener('dragover', event => {
+      const dragging = state.dragging;
+      if (!dragging) return;
+      const tile = layoutTileFor(event.target);
+      if (!tile || tile.dataset.layoutGroup !== dragging.group) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      if (tile.dataset.slot !== dragging.slot) tile.classList.add('drag-over');
+    });
+
+    document.addEventListener('dragleave', event => {
+      const tile = layoutTileFor(event.target);
+      if (tile) tile.classList.remove('drag-over');
+    });
+
+    document.addEventListener('drop', event => {
+      const dragging = state.dragging;
+      if (!dragging) return;
+      const tile = layoutTileFor(event.target);
+      if (tile && tile.dataset.layoutGroup === dragging.group) {
+        event.preventDefault();
+        dropSlot(dragging.group, dragging.slot, tile.dataset.slot);
+      }
+      clearDragState();
+    });
+
+    document.addEventListener('dragend', clearDragState);
+
+    function clearDragState() {
+      state.dragging = null;
+      for (const node of document.querySelectorAll('.drag-over, .drag-source')) {
+        node.classList.remove('drag-over', 'drag-source');
+      }
+    }
+
     /* ---------- Event delegation ---------- */
     // One router keeps every handler alive across re-renders.
     const actionHandlers = {
       refresh: () => refreshData(),
       'select-account': button => selectAccount(button.dataset.accountId),
       'close-detail': () => closeDetail(),
+      'copy-value': button => copyIdentifier(button),
+      'layout-arrange': () => toggleArrangeMode(),
+      'layout-reset': () => resetLayout(),
       'detail-tab': button => selectDetailTab(button.dataset.detailTab),
       'exclusion-select-before': button => selectEntriesBefore(button),
       'exclusion-apply': button => applyExclusion(button),
@@ -1980,6 +2245,27 @@
     });
 
     document.addEventListener('keydown', event => {
+      // Arrow keys on a focused drag handle are the accessible equivalent of a drag,
+      // and the reliable fallback if pointer dragging misbehaves.
+      const handle = event.target.closest?.('[data-drag-handle]');
+      if (handle && state.arranging) {
+        const tile = layoutTileFor(handle);
+        const horizontal = tile?.dataset.layoutGroup !== 'sections';
+        const back = horizontal ? 'ArrowLeft' : 'ArrowUp';
+        const forward = horizontal ? 'ArrowRight' : 'ArrowDown';
+        if (tile && [back, forward].includes(event.key)) {
+          event.preventDefault();
+          const slot = tile.dataset.slot;
+          const group = tile.dataset.layoutGroup;
+          if (moveSlot(group, slot, event.key === forward ? 1 : -1)) {
+            // The hero re-renders its children, so re-acquire the handle by slot.
+            requestAnimationFrame(() => {
+              document.querySelector(`[data-layout-group="${group}"][data-slot="${slot}"] [data-drag-handle]`)?.focus();
+            });
+          }
+          return;
+        }
+      }
       // Escape is handled natively by <dialog>; see the cancel listener below.
       const detailTab = event.target.closest('[data-detail-tab]');
       if (detailTab && ['ArrowLeft', 'ArrowRight'].includes(event.key)) {

@@ -244,6 +244,36 @@ class DashboardMarkupTests(unittest.TestCase):
         self.assertNotIn('class="sheet"', html)
         self.assertNotIn("sheetScrim", html)
 
+    def test_layout_is_reorderable_by_drag_or_keyboard_and_saves_server_side(self):
+        html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+        # Every reorderable region is addressable by slot.
+        for slot in ("attention", "accounts", "overview", "quality", "risk", "weekly"):
+            self.assertIn(f'data-slot="{slot}"', html)
+        self.assertIn('data-layout-group="sections"', html)
+        self.assertIn('data-layout-group="overview_panels"', html)
+        # Sections move by CSS order, never by reparenting nodes the renderer patches.
+        self.assertIn("node.style.order = String(group === 'sections' ? index + 10 : index)", html)
+        self.assertIn(".shell { max-width: 1360px", html)
+        self.assertIn("flex-direction: column", html)
+        # Arrange is an explicit mode, so nothing can be dragged by accident.
+        self.assertIn('id="arrangeToggle"', html)
+        self.assertIn("'layout-arrange': () => toggleArrangeMode()", html)
+        self.assertIn("'layout-reset': () => resetLayout()", html)
+        self.assertIn(".drag-handle { display: none; }", html)
+        self.assertIn(".arrange-bar[hidden] { display: none; }", html)
+        # Keyboard reordering is a first-class path, not a fallback bolted on.
+        self.assertIn("const back = horizontal ? 'ArrowLeft' : 'ArrowUp'", html)
+        self.assertIn("/api/layout/save", html)
+        self.assertIn("/api/layout/reset", html)
+        self.assertIn("X-Hours-Recon-Action-Token", html)
+
+    def test_the_salesforce_account_id_is_copyable_from_the_account_itself(self):
+        html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("function renderAccountIdentity(account)", html)
+        self.assertIn("Salesforce account", html)
+        self.assertIn("Rocketlane project", html)
+        self.assertIn("'copy-value': button => copyIdentifier(button)", html)
+
     def test_source_action_editor_replaces_raw_json_but_keeps_the_placeholder_guard(self):
         html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
         self.assertIn("function fieldEditorRow(operationIndex, name, value, fieldIndex, valueLabel)", html)

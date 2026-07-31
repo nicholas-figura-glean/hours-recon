@@ -25,7 +25,12 @@ from hours_recon.remediation import (
 )
 from hours_recon.remediation_execution import build_execution_workspace
 from hours_recon.remediation_policy import path_options, rank_paths, validate_paths
-from hours_recon.remediation_store import QueueConflict, QueueValidationError, RemediationStore
+from hours_recon.remediation_store import (
+    SCHEMA_VERSION,
+    QueueConflict,
+    QueueValidationError,
+    RemediationStore,
+)
 from hours_recon.service import ReconciliationService
 
 
@@ -1157,7 +1162,7 @@ class RemediationStoreTests(unittest.TestCase):
             self.assertIn("slack_outbox", tables)
             self.assertIn("source_action_outbox", tables)
 
-    def test_v1_database_is_cleanly_reset_to_v4(self):
+    def test_v1_database_is_cleanly_reset_to_the_current_schema(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "queue.sqlite3"
             with sqlite3.connect(str(path)) as connection:
@@ -1166,7 +1171,7 @@ class RemediationStoreTests(unittest.TestCase):
                 connection.execute("PRAGMA user_version=1")
                 connection.commit()
             store = RemediationStore(path)
-            self.assertEqual(4, store.health(scope_id="scope")["schema_version"])
+            self.assertEqual(SCHEMA_VERSION, store.health(scope_id="scope")["schema_version"])
             with sqlite3.connect(str(path)) as connection:
                 tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 workstream_columns = {row[1] for row in connection.execute("PRAGMA table_info(workstreams)")}
@@ -1512,3 +1517,61 @@ class RecordLabelTests(unittest.TestCase):
         self.assertEqual("2026-13-01", _short_date("2026-13-01"))
         self.assertEqual("", _entry_label({}))
         self.assertEqual("Alex", _entry_label({"user_name": "Alex"}))
+
+
+class LayoutPreferenceTests(unittest.TestCase):
+    """A cosmetic preference must never be able to hide part of the dashboard."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.store = RemediationStore(Path(self.directory.name) / "queue.sqlite3")
+        self.scope = {"scope_id": "scope", "portfolio_id": "portfolio"}
+
+    def test_default_is_the_canonical_order_and_is_not_marked_customized(self):
+        result = self.store.layout_preference(**self.scope)
+        self.assertFalse(result["customized"])
+        self.assertEqual(["attention", "accounts", "overview", "quality"], result["layout"]["sections"])
+        self.assertEqual(["remaining", "overage", "expired"], result["layout"]["hero"])
+
+    def test_a_saved_order_round_trips_and_reset_restores_the_default(self):
+        self.store.save_layout_preference(
+            layout={"sections": ["quality", "accounts", "overview", "attention"]}, actor="nick", **self.scope,
+        )
+        stored = self.store.layout_preference(**self.scope)
+        self.assertTrue(stored["customized"])
+        self.assertEqual(["quality", "accounts", "overview", "attention"], stored["layout"]["sections"])
+        self.store.reset_layout_preference(**self.scope)
+        self.assertFalse(self.store.layout_preference(**self.scope)["customized"])
+
+    def test_a_partial_order_is_completed_rather_than_hiding_the_omitted_sections(self):
+        normalized = RemediationStore.normalize_layout({"sections": ["quality"]})
+        self.assertEqual(["quality", "attention", "accounts", "overview"], normalized["sections"])
+        # Every group is always present and complete, even when the client sent none.
+        self.assertEqual(set(RemediationStore.LAYOUT_SLOTS), set(normalized))
+
+    def test_unknown_duplicated_and_malformed_slots_are_discarded(self):
+        normalized = RemediationStore.normalize_layout({
+            "sections": ["quality", "quality", "bogus", {"nested": True}, 7],
+            "evil": ["payload"],
+            "hero": "not-a-list",
+        })
+        self.assertEqual(["quality", "attention", "accounts", "overview"], normalized["sections"])
+        self.assertNotIn("evil", normalized)
+        self.assertEqual(["remaining", "overage", "expired"], normalized["hero"])
+
+    def test_a_corrupt_stored_row_degrades_to_the_default_instead_of_raising(self):
+        self.store.save_layout_preference(layout={"sections": ["quality"]}, actor="nick", **self.scope)
+        connection = sqlite3.connect(str(self.store.path))
+        connection.execute("UPDATE layout_preferences SET layout_json='{not json'")
+        connection.commit()
+        connection.close()
+        result = self.store.layout_preference(**self.scope)
+        self.assertFalse(result["customized"])
+        self.assertEqual(["attention", "accounts", "overview", "quality"], result["layout"]["sections"])
+
+    def test_layouts_are_isolated_per_scope(self):
+        self.store.save_layout_preference(layout={"sections": ["quality"]}, actor="nick", **self.scope)
+        other = self.store.layout_preference(scope_id="other", portfolio_id="portfolio")
+        self.assertFalse(other["customized"])
+        self.assertEqual(["attention", "accounts", "overview", "quality"], other["layout"]["sections"])

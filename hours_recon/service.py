@@ -134,6 +134,7 @@ class ReconciliationService:
             result.get("meta", {}), report_date=business_today(self.settings["timezone"]),
         )
         self._attach_remediation(result)
+        result["layout"] = self.layout_preference()
         return result
 
     def _downgrade_stale_cached_governance(self, result: Dict[str, Any]) -> None:
@@ -695,6 +696,36 @@ class ReconciliationService:
         )
         self.reload()
         return result
+
+    # ---------- Dashboard layout ----------
+
+    def layout_preference(self) -> Dict[str, Any]:
+        """Never fail the dashboard over a cosmetic preference."""
+        if not self.remediation_store:
+            return {"layout": RemediationStore.normalize_layout(None), "customized": False, "updated_at": None}
+        try:
+            return self.remediation_store.layout_preference(
+                scope_id=self._active_scope_id(), portfolio_id=self._active_portfolio_id(),
+            )
+        except Exception:
+            return {"layout": RemediationStore.normalize_layout(None), "customized": False, "updated_at": None}
+
+    def save_layout(self, layout: Mapping[str, Any]) -> Dict[str, Any]:
+        if not self.remediation_store:
+            raise QueueError("Layout preferences are unavailable.")
+        return self.remediation_store.save_layout_preference(
+            scope_id=self._active_scope_id(),
+            portfolio_id=self._active_portfolio_id(),
+            layout=layout,
+            actor=self._exclusion_actor(),
+        )
+
+    def reset_layout(self) -> Dict[str, Any]:
+        if not self.remediation_store:
+            raise QueueError("Layout preferences are unavailable.")
+        return self.remediation_store.reset_layout_preference(
+            scope_id=self._active_scope_id(), portfolio_id=self._active_portfolio_id(),
+        )
 
     def _exclusion_actor(self) -> str:
         meta = (self._data or {}).get("meta", {})

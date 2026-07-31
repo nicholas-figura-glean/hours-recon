@@ -228,6 +228,26 @@ class HoursReconHandler(BaseHTTPRequestHandler):
             except QueueError as exc:
                 self._json(503, {"error": str(exc)})
             return
+        layout_match = re.fullmatch(r"/api/layout/(save|reset)", path)
+        if layout_match:
+            if not secrets.compare_digest(self.headers.get("X-Hours-Recon-Action-Token", ""), self.service.action_token):
+                self._json(403, {"error": "Invalid remediation action token."})
+                return
+            try:
+                if layout_match.group(1) == "reset":
+                    result = self.service.reset_layout()
+                else:
+                    body = self._read_json_body(8192)
+                    layout = body.get("layout")
+                    if not isinstance(layout, dict):
+                        raise QueueValidationError("Layout must be a JSON object.")
+                    result = self.service.save_layout(layout)
+                self._json(200, result)
+            except (QueueValidationError, ValueError, TypeError, KeyError) as exc:
+                self._json(400, {"error": str(exc) or "Invalid layout request."})
+            except QueueError as exc:
+                self._json(503, {"error": str(exc)})
+            return
         exclusion_match = re.fullmatch(r"/api/remediation/time-exclusions/(preview|apply|restore)", path)
         if exclusion_match:
             if not secrets.compare_digest(self.headers.get("X-Hours-Recon-Action-Token", ""), self.service.action_token):
