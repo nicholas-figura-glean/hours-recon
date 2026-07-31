@@ -573,13 +573,13 @@ class RemediationPlannerTests(unittest.TestCase):
             "dimension": "time_quality", "tier": "T3", "reason_code": "incomplete_time_or_project_metadata",
             "summary": "Time metadata is incomplete.", "recommended_action": "Correct Rocketlane metadata.",
             "refs": ["9001", "9002"],
-            "details": {"approval_pending": 1, "missing_activity": 1, "stale_or_incomplete_projects": 1},
+            "details": {"approval_pending": 1, "missing_category": 1, "stale_or_incomplete_projects": 1},
         }
         report = queue_report([gap])
         report["accounts"][0].update({
             "projects": [{"id": "77", "name": "Acme Outcomes", "customer_id": "88", "start_date": "2026-01-01", "due_date": "2026-12-31"}],
             "entries": [
-                {"id": "9001", "project_id": "77", "date": "2026-07-01", "billable": True, "approval_status": "SUBMITTED", "activity_name": None, "category": "Delivery", "user_id": "11", "user_name": "Taylor Submitter", "user_email": "taylor@example.com"},
+                {"id": "9001", "project_id": "77", "date": "2026-07-01", "billable": True, "approval_status": "SUBMITTED", "activity_name": None, "category": None, "user_id": "11", "user_name": "Taylor Submitter", "user_email": "taylor@example.com"},
                 {"id": "9002", "project_id": "77", "date": "2026-07-02", "billable": True, "approval_status": "APPROVED", "activity_name": "Discovery", "category": "Delivery", "user_id": "12", "user_name": "Healthy Author", "user_email": "healthy@example.com"},
             ],
         })
@@ -588,8 +588,12 @@ class RemediationPlannerTests(unittest.TestCase):
         workstream["selected_path"] = next(path for path in workstream["paths"] if path["id"] == workstream["recommended_path_id"])
         workspace = build_execution_workspace(workstream, report)
         tools = [operation["tool"] for operation in workspace["operations"]]
-        self.assertIn("update_time_entry", tools)
         self.assertIn("update_project", tools)
+        # Category is a nested Rocketlane object, so it is delegated rather than written.
+        category = next(item for item in workspace["operations"] if item["object"] == "Time Entry")
+        self.assertIsNone(category["tool"])
+        self.assertEqual(["9001"], category["record_ids"])
+        self.assertIn("nested Rocketlane object", category["limitation"])
         approval = next(operation for operation in workspace["operations"] if operation["object"] == "Time Entry approval workflow")
         self.assertIsNone(approval["tool"])
         self.assertEqual(["9001"], approval["record_ids"])
@@ -1210,9 +1214,9 @@ class TimeEntryExclusionTests(unittest.TestCase):
 
     def test_excluded_entry_reaches_t2_but_never_t1(self):
         from hours_recon.evidence import _time_quality_dimension
-        account = self._account([self._entry("1", activity_name="")])
+        account = self._account([self._entry("1", category="")])
         self.assertEqual("T3", _time_quality_dimension(account)["tier"])
-        governed = _time_quality_dimension(account, {"1": {"signals": ["missing_activity"]}})
+        governed = _time_quality_dimension(account, {"1": {"signals": ["missing_category"]}})
         # T2 clears the work queue; T1 stays reserved for genuinely clean source data.
         self.assertEqual("T2", governed["tier"])
         self.assertEqual("accepted_time_exceptions", governed["reason_code"])
@@ -1274,11 +1278,11 @@ class TimeEntryExclusionTests(unittest.TestCase):
 
     def test_a_new_problem_on_an_excluded_entry_reflags_it(self):
         from hours_recon.evidence import _time_quality_dimension
-        accepted = {"1": {"signals": ["missing_activity"]}}
-        same = self._account([self._entry("1", activity_name="")])
+        accepted = {"1": {"signals": ["missing_category"]}}
+        same = self._account([self._entry("1", category="")])
         self.assertEqual("T2", _time_quality_dimension(same, accepted)["tier"])
         # The entry later gets rejected: a problem the operator never reviewed.
-        worse = self._account([self._entry("1", activity_name="", approval_status="REJECTED")])
+        worse = self._account([self._entry("1", category="", approval_status="REJECTED")])
         result = _time_quality_dimension(worse, accepted)
         self.assertEqual("T4", result["tier"])
         self.assertEqual(1, result["details"]["reflagged_entries"])
@@ -1286,7 +1290,7 @@ class TimeEntryExclusionTests(unittest.TestCase):
     def test_an_excluded_entry_fixed_at_source_earns_a_real_t1(self):
         from hours_recon.evidence import _time_quality_dimension
         fixed = self._account([self._entry("1")])
-        result = _time_quality_dimension(fixed, {"1": {"signals": ["missing_activity"]}})
+        result = _time_quality_dimension(fixed, {"1": {"signals": ["missing_category"]}})
         self.assertEqual("T1", result["tier"])
         self.assertEqual("complete_approved_time", result["reason_code"])
 
@@ -1294,9 +1298,9 @@ class TimeEntryExclusionTests(unittest.TestCase):
         from hours_recon.evidence import _time_quality_dimension
         stale = [{"id": "P1", "name": "Delivery", "status": "planning", "start_date": None, "due_date": None}]
         account = self._account(
-            [self._entry("1", activity_name=""), self._entry("2", activity_name="")], projects=stale
+            [self._entry("1", category=""), self._entry("2", category="")], projects=stale
         )
-        accepted = {"1": {"signals": ["missing_activity"]}, "2": {"signals": ["missing_activity"]}}
+        accepted = {"1": {"signals": ["missing_category"]}, "2": {"signals": ["missing_category"]}}
         result = _time_quality_dimension(account, accepted)
         self.assertEqual("T3", result["tier"])
         self.assertEqual(1, result["details"]["stale_or_incomplete_projects"])
@@ -1596,7 +1600,7 @@ class TimeEntryCategoryTests(unittest.TestCase):
                 "entries": [{
                     "id": "5001", "project_id": "P1", "date": "2025-11-20", "hours": 1.0,
                     "user_name": "Alex Rivera", "user_email": "alex@example.com", "billable": True,
-                    "approval_status": "APPROVED", "activity_name": None,
+                    "approval_status": "SUBMITTED", "activity_name": None,
                     "category": "AIOM-Client Account Meetings", "category_id": "125744",
                 }],
                 "governance": {"overall_tier": "T3", "policy_version": "evidence-v1", "dimensions": {}, "gaps": []},
@@ -1616,7 +1620,10 @@ class TimeEntryCategoryTests(unittest.TestCase):
 
     def test_the_category_reaches_the_operation_without_bloating_the_label(self):
         workspace = self._workspace()
-        operation = next(item for item in workspace["operations"] if item["object"] == "Time Entry")
+        operation = next(
+            item for item in workspace["operations"]
+            if item["object"] == "Time Entry approval workflow"
+        )
         self.assertEqual(["5001"], operation["record_ids"])
         # The label stays a single readable line...
         self.assertEqual("Nov 20, 2025 · Alex Rivera · 1h", operation["record_labels"]["5001"])
@@ -1640,3 +1647,54 @@ class TimeEntryCategoryTests(unittest.TestCase):
         ]})
         self.assertEqual({"1"}, set(meta))
         self.assertNotIn("category_id", meta["1"])
+
+
+class OptionalTaskFieldTests(unittest.TestCase):
+    """Logging time in Rocketlane does not require a task, so a blank one is not a
+    defect. The category is the required field and is what we actually check."""
+
+    PROJECT = {
+        "id": "P1", "name": "Delivery", "status": "completed",
+        "start_date": "2026-01-01", "due_date": "2026-12-31",
+    }
+
+    def _entry(self, **overrides):
+        entry = {
+            "id": "1", "project_id": "P1", "date": "2026-03-01", "billable": True,
+            "approval_status": "APPROVED", "activity_name": "Workshop",
+            "category": "AIOM-Client Account Meetings", "user_id": "u1", "hours": 1.0,
+        }
+        entry.update(overrides)
+        return entry
+
+    def _account(self, entry):
+        return {"id": "A1", "name": "Acme", "sold_hours": 10.0, "projects": [self.PROJECT], "entries": [entry]}
+
+    def test_a_blank_task_is_clean(self):
+        from hours_recon.evidence import entry_quality_signals, _time_quality_dimension
+        entry = self._entry(activity_name=None)
+        self.assertEqual([], entry_quality_signals(entry, self.PROJECT))
+        dimension = _time_quality_dimension(self._account(entry))
+        self.assertEqual("T1", dimension["tier"])
+        self.assertEqual("complete_approved_time", dimension["reason_code"])
+
+    def test_a_blank_category_is_a_defect(self):
+        from hours_recon.evidence import entry_quality_signals, _time_quality_dimension
+        entry = self._entry(category=None)
+        self.assertEqual(["missing_category"], entry_quality_signals(entry, self.PROJECT))
+        self.assertEqual("T3", _time_quality_dimension(self._account(entry))["tier"])
+
+    def test_the_blank_task_count_is_still_reported_but_never_moves_the_tier(self):
+        from hours_recon.evidence import _time_quality_dimension
+        dimension = _time_quality_dimension(self._account(self._entry(activity_name=None)))
+        self.assertEqual(1, dimension["details"]["entries_without_task"])
+        self.assertEqual("T1", dimension["tier"])
+        self.assertNotIn("missing_activity", dimension["details"])
+
+    def test_a_submitter_is_never_asked_to_fill_in_an_optional_task(self):
+        from hours_recon.remediation_execution import _entry_quality_issues
+        self.assertEqual([], _entry_quality_issues(self._entry(activity_name=None), self.PROJECT))
+        self.assertEqual(
+            ["category is missing"],
+            _entry_quality_issues(self._entry(category=None), self.PROJECT),
+        )

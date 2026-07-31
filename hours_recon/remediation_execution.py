@@ -216,8 +216,8 @@ def _entry_quality_issues(entry: Mapping[str, Any], project: Mapping[str, Any] |
         issues.append("approval state is missing")
     elif approval not in {"APPROVED", "APPROVED_WITH_CHANGES"}:
         issues.append(f"approval state is {approval.lower().replace('_', ' ')}")
-    if not _safe_text(entry.get("activity_name")):
-        issues.append("activity is missing")
+    # The task/activity is optional in Rocketlane, so its absence is never an issue
+    # to chase and must not reach a submitter's Slack handoff.
     if not _safe_text(entry.get("category")):
         issues.append("category is missing")
     if not entry.get("user_id") and not entry.get("user_email"):
@@ -307,7 +307,6 @@ def _findings(instance: Mapping[str, Any]) -> List[str]:
         "approval_rejected": "rejected time entries",
         "approval_unknown": "time entries with unknown approval state",
         "invalid_entries": "invalid time entries",
-        "missing_activity": "time entries missing activity",
         "missing_category": "time entries missing category",
         "missing_user": "time entries missing contributor",
         "outside_project_dates": "time entries outside project dates",
@@ -404,7 +403,7 @@ def _path_operations(
     project_ids = _unique(value for record in records for value in record.get("project_ids", []))
     customer_ids = _unique(value for record in records for value in record.get("customer_ids", []))
     time_entry_ids = _unique(value for record in records for value in record.get("time_entry_ids", []))
-    missing_activity_ids = _unique(value for record in records for value in record.get("missing_activity_entry_ids", []))
+    missing_category_ids = _unique(value for record in records for value in record.get("missing_category_entry_ids", []))
     operations: List[Dict[str, Any]] = []
     required_inputs: List[str] = []
     limitations: List[str] = []
@@ -520,15 +519,20 @@ def _path_operations(
         limitations.append("Opportunity Product creation must be completed by the Opportunity owner or Deal Desk in Salesforce.")
     elif path_id == "time_quality.complete_required_metadata.t1":
         mode = "mcp_assisted"
-        if missing_activity_ids:
-            required_inputs.append("Correct activity name for each listed Rocketlane time entry.")
+        if missing_category_ids:
+            # Rocketlane returns category as a nested {categoryId, categoryName}
+            # object, so the write shape has to be resolved against the workspace's
+            # own category list rather than guessed from a display string.
+            required_inputs.append("Correct Rocketlane category for each listed time entry.")
             operations.append(_operation(
-            labels=known_labels, meta=known_meta,
-                system="rocketlane", tool="update_time_entry", object_name="Time Entry",
-                record_ids=missing_activity_ids,
-                proposed_fields={"activityName": "<confirmed activity for each entry>"},
-                status="needs_confirmed_values", preflight=rl_preflight,
+                labels=known_labels, meta=known_meta,
+                system="rocketlane", tool=None, object_name="Time Entry",
+                record_ids=missing_category_ids,
+                proposed_fields={"category": "<confirmed Rocketlane category for each entry>"},
+                status="unsupported_write_delegate", preflight=rl_preflight,
+                limitation="Category is a nested Rocketlane object; the author or a Rocketlane admin must set it so the correct categoryId is applied.",
             ))
+            limitations.append("Time-entry category must be set by the entry author or a Rocketlane admin.")
         if project_ids:
             required_inputs.append("Authoritative project start/due dates or lifecycle status where project metadata is incomplete.")
             operations.append(_operation(
@@ -804,7 +808,7 @@ def build_execution_workspace(
             },
             "customer_ids": customer_ids,
             "time_entry_ids": pending_ids,
-            "missing_activity_entry_ids": _unique(entry.get("id") for entry in entries if not _safe_text(entry.get("activity_name"))),
+            "missing_category_entry_ids": _unique(entry.get("id") for entry in entries if not _safe_text(entry.get("category"))),
             "time_submitter_handoffs": _time_submitter_handoffs(account) if path_id.startswith("time_quality.") else [],
             "owner_suggestions": _owner_suggestions(account, path_id),
             "links": record_links,

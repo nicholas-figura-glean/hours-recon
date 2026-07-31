@@ -320,8 +320,9 @@ def entry_quality_signals(
             signals.append("approval_rejected")
         else:
             signals.append("approval_pending")
-    if not entry.get("activity_name"):
-        signals.append("missing_activity")
+    # The task/activity is optional when logging time in Rocketlane, so an absent
+    # one is not a data-quality defect. The category is the required field and is
+    # what actually makes an entry attributable.
     if not entry.get("category"):
         signals.append("missing_category")
     if not entry.get("user_id") and not entry.get("user_email"):
@@ -413,7 +414,7 @@ def _time_quality_dimension(
     approval_unknown = 0
     approval_pending = 0
     approval_rejected = 0
-    missing_activity = 0
+    entries_without_task = 0
     missing_category = 0
     missing_user = 0
     outside_dates = 0
@@ -430,7 +431,7 @@ def _time_quality_dimension(
             else:
                 approval_pending += 1
         if not entry.get("activity_name"):
-            missing_activity += 1
+            entries_without_task += 1
         if not entry.get("category"):
             missing_category += 1
         if not entry.get("user_id") and not entry.get("user_email"):
@@ -463,7 +464,8 @@ def _time_quality_dimension(
         "approval_unknown": approval_unknown,
         "approval_pending": approval_pending,
         "approval_rejected": approval_rejected,
-        "missing_activity": missing_activity,
+        # Informational only: an optional field being blank never moves the tier.
+        "entries_without_task": entries_without_task,
         "missing_category": missing_category,
         "missing_user": missing_user,
         "outside_project_dates": outside_dates,
@@ -481,15 +483,15 @@ def _time_quality_dimension(
             "T4", "invalid_time_evidence", "One or more time entries are structurally invalid or explicitly rejected.",
             "Correct or exclude invalid/rejected entries and rerun the account pull.", refs=invalid or refs, details=details,
         )
-    if approval_unknown or approval_pending or missing_activity or missing_category or missing_user or outside_dates or stale_projects:
+    if approval_unknown or approval_pending or missing_category or missing_user or outside_dates or stale_projects:
         approval_not_required = all(bool(item.get("approval_not_required")) for item in projects) if projects else False
-        only_unknown_approval = approval_unknown and not (approval_pending or missing_activity or missing_category or missing_user or outside_dates or stale_projects)
+        only_unknown_approval = approval_unknown and not (approval_pending or missing_category or missing_user or outside_dates or stale_projects)
         tier = "T2" if only_unknown_approval and approval_not_required else "T3"
         reason = "approval_not_required" if tier == "T2" else "incomplete_time_or_project_metadata"
         return _dimension(
             tier,
             reason,
-            "Billable time is structurally valid but approval, activity, category, contributor, lifecycle, or timing evidence is incomplete.",
+            "Billable time is structurally valid but approval, category, contributor, lifecycle, or timing evidence is incomplete.",
             "Correct Rocketlane project lifecycle/dates and required time-entry metadata; document approval semantics.",
             refs=refs,
             details=details,
