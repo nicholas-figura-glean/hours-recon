@@ -96,7 +96,7 @@ class DashboardMarkupTests(unittest.TestCase):
     def test_account_detail_renders_matched_projects(self):
         html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
         self.assertIn("const projectRows = (account.projects || []).map", html)
-        self.assertIn("Matched Rocketlane projects", html)
+        self.assertIn("Rocketlane projects matched to this account", html)
         self.assertIn("No matched Rocketlane projects.", html)
 
     def test_dashboard_renders_governance_and_remediation_planner(self):
@@ -104,7 +104,7 @@ class DashboardMarkupTests(unittest.TestCase):
         self.assertIn("function renderRemediation()", html)
         self.assertIn("function renderPathOption(path, workstream)", html)
         self.assertIn("function applyRemediationAction(button)", html)
-        self.assertIn("Governance evidence", html)
+        self.assertIn("The weakest check sets the account status.", html)
         self.assertIn("Governed ${fmt(split.governed)}h · Provisional ${fmt(split.provisional)}h", html)
         self.assertIn("Ways to fix this", html)
         self.assertIn("Next steps", html)
@@ -112,18 +112,30 @@ class DashboardMarkupTests(unittest.TestCase):
         self.assertIn("data-remediation-action=\"prepare_execution\"", html)
         self.assertIn("data-remediation-action=\"select_path\"", html)
         self.assertIn("function renderExecutionWorkspace(workspace, workstream)", html)
+        # The next-steps modal must stay a numbered flow with reference detail collapsed:
+        # the previous flat two-column dump gave no cue about what to actually do.
+        self.assertIn('<div class="do-now">', html)
+        self.assertIn('Do this next', html)
+        self.assertIn('<ol class="flow">', html)
+        self.assertIn('class="flow-step ${step.optional ? \'optional\' : \'\'}"', html)
+        self.assertIn('<span class="step-num">${index + 1}</span>', html)
+        self.assertIn('Nothing has been written to Salesforce or Rocketlane yet.', html)
+        for summary in ('Affected records', 'What you need, limits, and safety', 'Drive it yourself in Glean'):
+            self.assertIn(f'<summary>{summary}', html)
+        self.assertNotIn('execution-banner', html)
+        self.assertNotIn('execution-grid', html)
         self.assertIn("function copyMcpRequest()", html)
         self.assertIn("function queueExecutionSlackDraft()", html)
         self.assertIn("function queueReviewedSourceActions()", html)
-        self.assertIn("Queue reviewed source actions", html)
-        self.assertIn("Open Glean with queued changes", html)
+        self.assertIn("Queue ${plural(sourceFieldEditors, 'change')}", html)
+        self.assertIn("id=\"openGleanExecution\" type=\"button\">Open Glean<", html)
         self.assertIn("function pendingSourceActionsForWorkspace(workspace, workstream)", html)
         self.assertIn("function buildGleanSourceExecutionPrompt(workspace, sourceActions)", html)
         self.assertIn("outbox_id: action.id", html)
         self.assertIn("record_ids: action.record_ids || []", html)
         self.assertIn("proposed_fields: action.proposed_fields || {}", html)
         self.assertIn("executionUrl.searchParams.set('message', buildGleanSourceExecutionPrompt(workspace, state.execution?.sourceActions))", html)
-        self.assertIn("Auto-send from an external link is intentionally blocked by Glean security.", html)
+        self.assertIn("Auto-send from an external link is blocked by Glean security.", html)
         self.assertIn("execute pending Hours Recon source actions", html)
         self.assertIn("function queueAllSlackHandoffs()", html)
         self.assertIn("function renderSlackQueue(queue)", html)
@@ -204,10 +216,17 @@ class DashboardMarkupTests(unittest.TestCase):
         self.assertIn("function openFormDialog({ title, description = '', fields = [], confirmLabel = 'Confirm' })", html)
         self.assertIn("async function confirmAction({ title, description, confirmLabel = 'Confirm' })", html)
         self.assertIn('id="promptDialog"', html)
-        # The detail panel is a dismissible sheet, not an aria-live blob.
-        self.assertIn('class="sheet" id="detail"', html)
+        # The account detail is a full-screen modal dialog, not a side rail or an
+        # aria-live blob: <dialog> gives us the focus trap, backdrop, and Escape.
+        self.assertIn('<dialog class="detail-dialog" id="detail"', html)
         self.assertIn("function closeDetail()", html)
+        self.assertIn("function selectDetailTab(tab, focus = false)", html)
+        self.assertIn("const DETAIL_TABS = ['entitlements', 'projects', 'time', 'evidence'];", html)
+        self.assertIn("detail.showModal()", html)
         self.assertNotIn('id="detail" aria-live="polite"', html)
+        # The old translate-X sheet and its hand-rolled scrim must be gone.
+        self.assertNotIn('class="sheet"', html)
+        self.assertNotIn("sheetScrim", html)
 
     def test_source_action_editor_replaces_raw_json_but_keeps_the_placeholder_guard(self):
         html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")

@@ -206,17 +206,34 @@
     .weekly-stat span { color: var(--artifact-muted); font-size: 12px; }
     .weekly-grid.unreliable .weekly-stat strong { color: var(--artifact-faint); }
 
-    /* Detail sheet */
-    .sheet-scrim { position: fixed; inset: 0; background: rgba(9, 20, 27, .28); opacity: 0; pointer-events: none; transition: opacity .16s ease; z-index: 40; }
-    .sheet-scrim.show { opacity: 1; pointer-events: auto; }
-    .sheet { position: fixed; top: 0; right: 0; bottom: 0; width: min(720px, 100vw); background: var(--artifact-surface); border-left: 1px solid var(--artifact-border); box-shadow: var(--artifact-shadow); transform: translateX(100%); transition: transform .18s ease; z-index: 50; display: grid; grid-template-rows: auto minmax(0, 1fr); }
-    .sheet.open { transform: translateX(0); }
-    @media (prefers-reduced-motion: reduce) { .sheet, .sheet-scrim { transition: none; } }
-    .sheet-header { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--artifact-space-4); padding: var(--artifact-space-4) var(--artifact-space-5); border-bottom: 1px solid var(--artifact-border); }
-    .sheet-title h2 { font-size: 19px; margin-bottom: 6px; }
-    .sheet-body { overflow-y: auto; padding: var(--artifact-space-4) var(--artifact-space-5) var(--artifact-space-6); display: grid; gap: var(--artifact-space-4); }
-    .detail-kpis { display: flex; flex-wrap: wrap; gap: 16px; color: var(--artifact-muted); font-size: 13px; }
-    .detail-kpis strong { color: var(--artifact-text); font-variant-numeric: tabular-nums; font-size: 15px; }
+    /* Account detail: a centred modal that owns the screen, not a cramped side rail. */
+    .detail-dialog { width: min(1240px, calc(100vw - 40px)); height: min(900px, calc(100vh - 40px)); max-width: none; max-height: none; padding: 0; border: 1px solid var(--artifact-border); border-radius: var(--artifact-radius); background: var(--artifact-surface); color: var(--artifact-text); box-shadow: var(--artifact-shadow); overflow: hidden; }
+    .detail-dialog::backdrop { background: rgba(9, 20, 27, .42); backdrop-filter: blur(3px); }
+    .detail-shell { display: grid; grid-template-rows: auto auto minmax(0, 1fr); height: 100%; min-height: 0; }
+    .detail-header { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--artifact-space-5); padding: 18px var(--artifact-space-5) 15px; border-bottom: 1px solid var(--artifact-border); }
+    .detail-title { display: grid; gap: 9px; min-width: 0; }
+    .detail-title h2 { font-size: 22px; letter-spacing: -.022em; line-height: 1.15; }
+    /* Headline numbers read as tiles; the old inline run-on hid the one that mattered. */
+    .detail-kpis { display: flex; flex-wrap: wrap; gap: 8px; }
+    .detail-kpi { display: grid; gap: 1px; align-content: start; min-width: 106px; padding: 7px 12px; border: 1px solid var(--artifact-border); border-radius: 8px; background: var(--artifact-surface-subtle); }
+    .detail-kpi strong { font-size: 18px; font-variant-numeric: tabular-nums; letter-spacing: -.02em; line-height: 1.2; }
+    .detail-kpi span { color: var(--artifact-muted); font-size: 11px; font-weight: 600; }
+    .detail-kpi.warn strong { color: var(--artifact-warning); }
+    .detail-kpi.danger strong { color: var(--artifact-danger); }
+    .detail-kpi-delta { display: inline-flex; margin-left: 5px; }
+    .detail-tabs { display: flex; gap: 4px; padding: 8px var(--artifact-space-5) 0; border-bottom: 1px solid var(--artifact-border); background: var(--artifact-surface-subtle); overflow-x: auto; }
+    /* Each pane owns its own scrolling so the table header can stay pinned.
+       .table-wrap sets overflow-x, which makes it a scroll container on BOTH
+       axes, so sticky headers only work when the wrap is the vertical scroller. */
+    .detail-body { overflow: hidden; padding: var(--artifact-space-4) var(--artifact-space-5) var(--artifact-space-5); }
+    .detail-pane { display: grid; gap: var(--artifact-space-3); height: 100%; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
+    .detail-pane[hidden] { display: none; }
+    .detail-pane > .table-wrap { overflow: auto; align-self: start; max-height: 100%; }
+    .detail-pane.pane-scroll { overflow-y: auto; grid-template-rows: auto; align-content: start; }
+    .detail-pane > .empty { align-self: start; }
+    .pane-caption { color: var(--artifact-muted); font-size: 13px; }
+    /* 100 time rows scroll a long way: keep the column headers pinned. */
+    .detail-pane > .table-wrap thead th { position: sticky; top: 0; z-index: 1; }
     .subpanel { border: 1px solid var(--artifact-border); border-radius: 8px; overflow: hidden; }
     .subpanel > h3 { padding: 10px 12px; background: var(--artifact-surface-subtle); border-bottom: 1px solid var(--artifact-border); font-size: 13px; }
     .subpanel th, .subpanel td { padding: 9px 11px; font-size: 13px; }
@@ -333,22 +350,63 @@
     .prompt-field-help { color: var(--artifact-muted); font-size: 12px; }
     .prompt-actions { display: flex; justify-content: flex-end; gap: var(--artifact-space-2); }
     .prompt-error { color: var(--artifact-danger); font-size: 12px; min-height: 16px; }
-    .execution-dialog { width: min(1180px, calc(100vw - 32px)); max-height: calc(100vh - 32px); }
+    /* Sequential, single-column flow: one decision per step beats a wall of cards. */
+    .execution-dialog { width: min(880px, calc(100vw - 32px)); max-height: calc(100vh - 32px); }
     .execution-dialog::backdrop { backdrop-filter: blur(3px); }
     .execution-shell { display: grid; max-height: calc(100vh - 34px); grid-template-rows: auto minmax(0, 1fr); }
-    .execution-header { display: flex; justify-content: space-between; gap: 16px; align-items: start; padding: 16px 18px; border-bottom: 1px solid var(--artifact-border); }
+    .execution-header { display: flex; justify-content: space-between; gap: 16px; align-items: start; padding: 16px 20px; border-bottom: 1px solid var(--artifact-border); }
     .execution-header div { display: grid; gap: 4px; }
-    .execution-content { overflow-y: auto; padding: 18px; display: grid; gap: 16px; }
-    .execution-banner { padding: 12px; border: 1px solid color-mix(in srgb, var(--artifact-warning) 35%, var(--artifact-border)); border-radius: 8px; color: var(--artifact-warning); background: var(--artifact-warning-soft); font-size: 13px; }
-    .execution-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(320px, .8fr); gap: 14px; }
+    .execution-content { overflow-y: auto; padding: 20px 22px 24px; display: grid; gap: 18px; }
+
+    /* The single orientation line: what this person does next. */
+    .do-now { display: grid; gap: 3px; padding: 12px 14px; border-radius: 9px; border: 1px solid color-mix(in srgb, var(--artifact-accent) 26%, var(--artifact-border)); background: var(--artifact-accent-soft); }
+    .do-now strong { color: var(--artifact-accent); font-size: 11px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
+    .do-now p { font-size: 13.5px; }
+
+    .flow { list-style: none; margin: 0; padding: 0; display: grid; }
+    .flow-step { position: relative; display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 14px; padding: 0 0 22px; }
+    .flow-step::before { content: ''; position: absolute; left: 12.5px; top: 30px; bottom: 2px; width: 1px; background: var(--artifact-border); }
+    .flow-step:last-child { padding-bottom: 0; }
+    .flow-step:last-child::before { display: none; }
+    .step-num { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 750; color: #fff; background: #0b6b62; border: 1px solid var(--artifact-accent); }
+    @media (prefers-color-scheme: dark) { .step-num { color: #10201d; background: var(--artifact-accent); } }
+    .flow-step.optional .step-num { color: var(--artifact-muted); background: var(--artifact-surface); border-color: var(--artifact-border); }
+    .step-main { display: grid; gap: 10px; min-width: 0; }
+    .step-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; min-height: 26px; }
+    .step-head h3 { font-size: 15px; letter-spacing: -.012em; }
+    .step-tag { flex: none; padding: 2px 8px; border: 1px solid var(--artifact-border); border-radius: 999px; background: var(--artifact-surface); color: var(--artifact-muted); font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+    .step-why { color: var(--artifact-muted); font-size: 13px; }
+    .step-body { display: grid; gap: 10px; min-width: 0; }
+
+    /* Reference material stays closed so it never competes with the steps. */
+    .reference { border: 1px solid var(--artifact-border); border-radius: 9px; background: var(--artifact-surface-subtle); }
+    .reference > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 14px; cursor: pointer; font-size: 13px; font-weight: 650; list-style: none; }
+    .reference > summary::-webkit-details-marker { display: none; }
+    .reference > summary::after { content: '+'; color: var(--artifact-muted); font-size: 15px; font-weight: 600; line-height: 1; }
+    .reference[open] > summary::after { content: '\2212'; }
+    .reference[open] > summary { border-bottom: 1px solid var(--artifact-border); }
+    .reference-count { margin-left: auto; margin-right: 4px; color: var(--artifact-faint); font-size: 12px; font-weight: 600; }
+    .reference-body { padding: 13px 14px; display: grid; gap: 12px; }
+    .reference-body > section { display: grid; gap: 6px; }
+    .reference-body > section > strong { font-size: 12px; font-weight: 700; }
+
     .execution-column { display: grid; gap: 12px; align-content: start; }
-    .execution-card { border: 1px solid var(--artifact-border); border-radius: 8px; padding: 12px; display: grid; gap: 9px; background: var(--artifact-surface-subtle); }
+    .execution-card { border: 1px solid var(--artifact-border); border-radius: 8px; padding: 12px; display: grid; gap: 9px; background: var(--artifact-surface); }
     .execution-card h3 { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
     .execution-operation { border-left: 3px solid var(--artifact-accent); }
     .execution-operation.unsupported { border-left-color: var(--artifact-warning); }
-    .execution-fields { margin: 0; padding: 9px; border-radius: 6px; overflow-x: auto; color: var(--artifact-text); background: var(--artifact-surface); border: 1px solid var(--artifact-border); font: 11px/1.5 var(--artifact-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+    .op-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+    .op-head h3 { font-size: 13.5px; }
+    .op-target { color: var(--artifact-faint); font-size: 12px; font-family: var(--artifact-mono); overflow-wrap: anywhere; }
+    /* Pre-checks are audit detail, not an instruction: keep them one click away. */
+    .op-precheck > summary { cursor: pointer; color: var(--artifact-muted); font-size: 12px; font-weight: 600; list-style: none; }
+    .op-precheck > summary::-webkit-details-marker { display: none; }
+    .op-precheck > summary::before { content: '▸ '; }
+    .op-precheck[open] > summary::before { content: '▾ '; }
+    .op-precheck .execution-list { margin-top: 6px; }
+    .execution-fields { margin: 0; padding: 9px; border-radius: 6px; overflow-x: auto; color: var(--artifact-text); background: var(--artifact-surface-subtle); border: 1px solid var(--artifact-border); font: 11px/1.5 var(--artifact-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
     /* Field-level editing replaces raw JSON so a CS owner never edits syntax. */
-    .field-table { display: grid; gap: 8px; padding: 10px; background: var(--artifact-surface); border: 1px solid var(--artifact-border); border-radius: 6px; }
+    .field-table { display: grid; gap: 8px; padding: 10px; background: var(--artifact-surface-subtle); border: 1px solid var(--artifact-border); border-radius: 6px; }
     .field-row { display: grid; grid-template-columns: minmax(140px, .8fr) minmax(160px, 1.4fr); gap: 10px; align-items: start; }
     .field-row > label { display: grid; gap: 2px; padding-top: 8px; }
     .field-row .field-key { font-family: var(--artifact-mono); font-size: 11px; overflow-wrap: anywhere; }
@@ -358,10 +416,11 @@
     .execution-links, .execution-list { margin: 0; padding-left: 20px; display: grid; gap: 5px; color: var(--artifact-muted); font-size: 13px; }
     .execution-links a { color: var(--artifact-info); overflow-wrap: anywhere; }
     .execution-copy { display: grid; gap: 8px; }
-    .execution-copy textarea { min-height: 180px; }
-    .execution-copy.slack textarea { min-height: 220px; }
+    .execution-copy textarea { min-height: 150px; }
+    .execution-copy.slack textarea { min-height: 190px; }
     .execution-button-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .execution-feedback { color: var(--artifact-healthy); font-size: 12px; font-weight: 650; }
+    .step-note { color: var(--artifact-faint); font-size: 12px; }
 
     .footer { display: grid; gap: 10px; justify-items: center; padding: var(--artifact-space-5) 0 0; color: var(--artifact-muted); font-size: 12px; text-align: center; }
     .method { max-width: 700px; }
@@ -377,7 +436,6 @@
       .hero { grid-template-columns: 1fr; }
       .overview-grid { grid-template-columns: 1fr; }
       .controls { grid-template-columns: 1fr 1fr; }
-      .execution-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 680px) {
       .shell { padding: var(--artifact-space-4); }
@@ -390,7 +448,8 @@
       .attention-action, .attention-item .button { grid-column: 2 / -1; }
       .risk-row { grid-template-columns: 84px minmax(50px, 1fr) 82px; }
       .exception { grid-template-columns: 1fr; }
-      .sheet { width: 100vw; }
+      .detail-dialog { width: 100vw; height: 100vh; border-radius: 0; border: 0; }
+      .detail-header, .detail-tabs, .detail-body { padding-left: var(--artifact-space-4); padding-right: var(--artifact-space-4); }
       .workstream-card > summary { grid-template-columns: auto 1fr; }
       .workstream-due { grid-column: 1 / -1; text-align: left; }
       .instance-item { grid-template-columns: auto 1fr; }
@@ -512,8 +571,7 @@
     </footer>
   </main>
 
-  <div class="sheet-scrim" id="sheetScrim" data-action="close-detail"></div>
-  <aside class="sheet" id="detail" role="dialog" aria-modal="false" aria-labelledby="detailHeading" aria-hidden="true" hidden></aside>
+  <dialog class="detail-dialog" id="detail" aria-labelledby="detailHeading"></dialog>
 
   <dialog class="prompt-dialog" id="promptDialog" aria-labelledby="promptTitle">
     <form class="prompt-shell" id="promptForm" method="dialog">
@@ -546,6 +604,7 @@
       selectedId: null,
       execution: null,
       remediationTab: 'planner',
+      detailTab: 'entitlements',
       searchTimer: null,
       lastFocus: null,
       filters: { search: '', risk: 'all', weeklyOnly: false, sort: 'risk' },
@@ -867,15 +926,30 @@
     }
 
     function closeDetail() {
+      if (state.selectedId === null) return;
       state.selectedId = null;
       const detail = $('#detail');
-      detail.classList.remove('open');
-      detail.setAttribute('aria-hidden', 'true');
-      detail.hidden = true;
-      $('#sheetScrim').classList.remove('show');
+      if (detail.open) detail.close();
       renderAccounts();
       if (state.lastFocus && document.contains(state.lastFocus)) state.lastFocus.focus();
       state.lastFocus = null;
+    }
+
+    const DETAIL_TABS = ['entitlements', 'projects', 'time', 'evidence'];
+
+    function selectDetailTab(tab, focus = false) {
+      const selected = DETAIL_TABS.includes(tab) ? tab : DETAIL_TABS[0];
+      state.detailTab = selected;
+      document.querySelectorAll('[data-detail-tab]').forEach(button => {
+        const active = button.dataset.detailTab === selected;
+        button.setAttribute('aria-selected', String(active));
+        button.tabIndex = active ? 0 : -1;
+        if (active && focus) button.focus();
+      });
+      DETAIL_TABS.forEach(name => {
+        const pane = document.querySelector(`#detailPane-${name}`);
+        if (pane) pane.hidden = name !== selected;
+      });
     }
 
     function renderDetail(id) {
@@ -916,34 +990,50 @@
       const coverageNote = governance?.coverage_capped
         ? '<p class="source-note">Nothing on this account can be marked checked until a complete, current data pull succeeds.</p>' : '';
       const trend = account.trend?.fields;
+      const kpis = [
+        { value: account.remaining_hours, label: 'Remaining' },
+        { value: account.at_risk_hours, label: 'At risk', tone: account.at_risk_hours > 0 ? 'warn' : '', delta: trend ? deltaChipShort(trend.at_risk_hours) : '' },
+        { value: account.expired_unused_hours, label: 'Expired unused', tone: account.expired_unused_hours > 0 ? 'danger' : '' },
+        { value: account.overage_hours, label: 'Over', tone: account.overage_hours > 0 ? 'danger' : '' },
+      ];
+      if (account.pre_entitlement_hours) kpis.push({ value: account.pre_entitlement_hours, label: 'Before entitlement', tone: 'warn' });
+      const kpiTiles = kpis.map(kpi => `<div class="detail-kpi ${kpi.tone || ''}"><strong>${fmt(kpi.value)}h${kpi.delta ? `<span class="detail-kpi-delta">${kpi.delta}</span>` : ''}</strong><span>${escapeHtml(kpi.label)}</span></div>`).join('');
+      const counts = {
+        entitlements: (account.packages || []).length,
+        projects: (account.projects || []).length,
+        time: entries.length,
+        evidence: governance ? Object.keys(governance.dimensions || {}).length : 0,
+      };
+      const tabLabels = { entitlements: 'Entitlements', projects: 'Projects', time: 'Billable time', evidence: 'Evidence' };
+      const activeTab = DETAIL_TABS.includes(state.detailTab) ? state.detailTab : DETAIL_TABS[0];
+      const tabs = DETAIL_TABS.map(name => `<button class="workspace-tab" role="tab" type="button" aria-selected="${name === activeTab}" aria-controls="detailPane-${name}" data-action="detail-tab" data-detail-tab="${name}" ${name === activeTab ? '' : 'tabindex="-1"'}>${escapeHtml(tabLabels[name])} <span class="workspace-tab-count">${fmt(counts[name])}</span></button>`).join('');
+      const pane = (name, caption, body, scroll = false) => `<section class="detail-pane ${scroll ? 'pane-scroll' : ''}" id="detailPane-${name}" role="tabpanel" ${name === activeTab ? '' : 'hidden'}><p class="pane-caption">${caption}</p>${body}</section>`;
       detail.innerHTML = `
-        <div class="sheet-header">
-          <div class="sheet-title">
-            <h2 id="detailHeading">${escapeHtml(account.name)}</h2>
-            <div class="detail-kpis">
-              <span><strong>${fmt(account.remaining_hours)}</strong> remaining</span>
-              <span><strong>${fmt(account.at_risk_hours)}</strong> at risk ${trend ? deltaChipShort(trend.at_risk_hours) : ''}</span>
-              <span><strong>${fmt(account.expired_unused_hours)}</strong> expired</span>
-              <span><strong>${fmt(account.overage_hours)}</strong> over</span>
-              ${account.pre_entitlement_hours ? `<span><strong>${fmt(account.pre_entitlement_hours)}</strong> before entitlement</span>` : ''}
+        <div class="detail-shell">
+          <div class="detail-header">
+            <div class="detail-title">
+              <h2 id="detailHeading">${escapeHtml(account.name)}</h2>
+              <div class="detail-kpis">${kpiTiles}</div>
+              ${remediation?.active_workstream_count ? `<p class="source-note">${escapeHtml(`${plural(remediation.active_workstream_count, 'open data-quality item')} · ${urgencyLabel(remediation.highest_priority)}`)}</p>` : ''}
             </div>
-            ${remediation?.active_workstream_count ? `<p class="source-note">${escapeHtml(`${plural(remediation.active_workstream_count, 'open data-quality item')} · ${urgencyLabel(remediation.highest_priority)}`)}</p>` : ''}
+            <button class="button secondary" type="button" data-action="close-detail">Close</button>
           </div>
-          <button class="button secondary" type="button" data-action="close-detail">Close</button>
-        </div>
-        <div class="sheet-body">
-          <section class="subpanel"><h3>Entitlements · used in expiry order</h3>${packageRows ? `<div class="table-wrap"><table><thead><tr><th>Package</th><th>Starts</th><th>Expires</th><th class="number">Sold</th><th class="number">Used</th><th class="number">Left</th><th>Evidence</th><th>Status</th></tr></thead><tbody>${packageRows}</tbody></table></div>` : '<div class="empty">No sold-hours package was found for this account.</div>'}</section>
-          <section class="subpanel"><h3>Matched Rocketlane projects · ${fmt(account.project_count)}</h3>${projectRows ? `<div class="table-wrap"><table><thead><tr><th>Project</th><th>Customer</th><th>Status</th><th>Start</th><th>Due</th><th class="number">Entries</th><th class="number">Hours</th></tr></thead><tbody>${projectRows}</tbody></table></div>` : '<div class="empty">No matched Rocketlane projects.</div>'}</section>
-          <section class="subpanel"><h3>Billable time · most recent 100</h3>${entryRows ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Project / work</th><th>Who / approval</th><th class="number">Hours</th></tr></thead><tbody>${entryRows}</tbody></table></div>` : '<div class="empty">No billable time matched this account.</div>'}</section>
-          <section class="subpanel"><h3>Governance evidence · the weakest check sets the account status</h3>${coverageNote}${dimensionCards ? `<div class="evidence-summary">${dimensionCards}</div>${evidenceChains ? `<div class="evidence-chains"><strong>Where each entitlement came from</strong>${evidenceChains}</div>` : ''}` : '<div class="empty">Evidence appears after the next refresh.</div>'}</section>
+          <div class="detail-tabs" role="tablist" aria-label="Account detail sections">${tabs}</div>
+          <div class="detail-body">
+            ${pane('entitlements', 'Consumed in expiry order, so the soonest deadline is drawn down first.',
+              packageRows ? `<div class="table-wrap"><table><thead><tr><th>Package</th><th>Starts</th><th>Expires</th><th class="number">Sold</th><th class="number">Used</th><th class="number">Left</th><th>Evidence</th><th>Status</th></tr></thead><tbody>${packageRows}</tbody></table></div>` : '<div class="empty">No sold-hours package was found for this account.</div>')}
+            ${pane('projects', 'Rocketlane projects matched to this account, and how each link was established.',
+              projectRows ? `<div class="table-wrap"><table><thead><tr><th>Project</th><th>Customer</th><th>Status</th><th>Start</th><th>Due</th><th class="number">Entries</th><th class="number">Hours</th></tr></thead><tbody>${projectRows}</tbody></table></div>` : '<div class="empty">No matched Rocketlane projects.</div>')}
+            ${pane('time', entries.length > 100 ? `Most recent 100 of ${plural(entries.length, 'billable entry', 'billable entries')}.` : entries.length ? `${plural(entries.length, 'billable entry', 'billable entries')}, newest first.` : 'No billable time has been logged against this account yet.',
+              entryRows ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Project / work</th><th>Who / approval</th><th class="number">Hours</th></tr></thead><tbody>${entryRows}</tbody></table></div>` : '<div class="empty">No billable time matched this account.</div>')}
+            ${pane('evidence', 'The weakest check sets the account status.',
+              `${coverageNote}${dimensionCards ? `<div class="evidence-summary">${dimensionCards}</div>${evidenceChains ? `<div class="evidence-chains"><strong>Where each entitlement came from</strong>${evidenceChains}</div>` : ''}` : '<div class="empty">Evidence appears after the next refresh.</div>'}`, true)}
+          </div>
         </div>`;
-      const wasOpen = detail.classList.contains('open');
-      detail.hidden = false;
-      detail.setAttribute('aria-hidden', 'false');
-      // Force a frame so the transform transition runs on first open.
-      requestAnimationFrame(() => detail.classList.add('open'));
-      $('#sheetScrim').classList.add('show');
-      // Re-rendering an open sheet after a data reload must not steal focus or
+      const wasOpen = detail.open;
+      if (!wasOpen) detail.showModal();
+      selectDetailTab(activeTab);
+      // Re-rendering an open modal after a data reload must not steal focus or
       // re-announce the account.
       if (!wasOpen) {
         announce(`Opened ${account.name}.`);
@@ -1323,7 +1413,16 @@
         version: Number(workstream.version),
         sourceActions: pendingSourceActionsForWorkspace(workspace, workstream),
       };
-      const modeLabel = titleCase(workspace.execution_mode || 'guided');
+      // Plain-language mode label; the raw enum ("Mcp Write") meant nothing to a CS owner.
+      const MODE_LABELS = {
+        mcp_write: 'Glean can write this',
+        mcp_assisted: 'Glean-assisted',
+        delegated: 'Owner handoff',
+        local_config: 'Config change',
+        mcp_refresh: 'Needs a refresh',
+        guided: 'Guided',
+      };
+      const modeLabel = MODE_LABELS[workspace.execution_mode] || titleCase(workspace.execution_mode || 'guided');
       const supportedWriteTools = new Set(['update_project', 'update_time_entry', 'update_salesforce_opportunity', 'SALESFORCE_UPDATE_ACCOUNT']);
       const operations = (workspace.operations || []).map((operation, operationIndex) => {
         const writeReady = supportedWriteTools.has(operation.tool);
@@ -1333,11 +1432,11 @@
         const fieldEditor = writeReady
           ? `<div class="field-table" data-source-operation-index="${operationIndex}">${entries.map(([name, value], fieldIndex) => fieldEditorRow(operationIndex, name, value, fieldIndex)).join('')}</div>`
           : `<pre class="execution-fields">${escapeHtml(JSON.stringify(operation.proposed_fields || {}, null, 2))}</pre>`;
-        return `<article class="execution-card execution-operation ${unsupported ? 'unsupported' : ''}"><h3><span class="pill ${writeReady ? 'mcp' : ''}">${writeReady ? 'Glean can write this' : 'Owner does this'}</span>${escapeHtml(titleCase(operation.system))} · ${escapeHtml(operation.object)}</h3><p class="source-note"><strong>Records:</strong> ${escapeHtml(records)}</p>${fieldEditor}<div><strong>Pre-checks Glean must run</strong>${executionList(operation.preflight || [])}</div>${operation.limitation ? `<p class="source-note"><strong>Limit:</strong> ${escapeHtml(operation.limitation)}</p>` : ''}</article>`;
+        return `<article class="execution-card execution-operation ${unsupported ? 'unsupported' : ''}"><div class="op-head"><h3>${escapeHtml(titleCase(operation.system))} · ${escapeHtml(operation.object)}</h3><span class="pill ${writeReady ? 'mcp' : ''}">${writeReady ? 'Glean writes this' : 'You or the owner'}</span></div><p class="op-target">${escapeHtml(records)}</p>${fieldEditor}<details class="op-precheck"><summary>Pre-checks Glean runs first</summary>${executionList(operation.preflight || [])}</details>${operation.limitation ? `<p class="source-note"><strong>Limit:</strong> ${escapeHtml(operation.limitation)}</p>` : ''}</article>`;
       }).join('') || '<div class="execution-card">There is no concrete change to propose from the current evidence.</div>';
       const recordCards = (workspace.records || []).map(record => {
         const links = (record.links || []).map(link => `<li><a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.label)}</a></li>`).join('');
-        return `<article class="execution-card"><h3>${escapeHtml(record.account_name)} · ${escapeHtml(dimensionLabel(record.dimension))}</h3>${executionList(record.findings || [], 'No extra findings.')}${links ? `<div><strong>Open the source record</strong><ul class="execution-links">${links}</ul></div>` : '<p class="source-note">No direct link available.</p>'}</article>`;
+        return `<article class="execution-card"><h3>${escapeHtml(record.account_name)} · ${escapeHtml(dimensionLabel(record.dimension))}</h3>${executionList(record.findings || [], 'No extra findings.')}${links ? `<ul class="execution-links">${links}</ul>` : '<p class="source-note">No direct link available.</p>'}</article>`;
       }).join('');
       const notices = executionList(workspace.notices || []);
       const limitations = executionList(workspace.limitations || [], 'No extra limits.');
@@ -1348,8 +1447,46 @@
       const handoffs = workspace.slack_handoffs || [];
       const handoffRows = handoffs.map(item => `<article class="handoff-item"><strong>${escapeHtml(item.recipient_label || item.recipient)}</strong><span>${plural(item.entry_ids?.length || 0, 'entry', 'entries')} · ${escapeHtml((item.issues || []).join(' · '))}</span></article>`).join('');
       const slackSetupNote = slackMcpAvailable ? 'Review the message, queue it, then tell Glean Pi “send pending Hours Recon messages”. It sends from your own Slack account and returns the link.' : 'The local queue is unavailable, so use Copy instead.';
+      const canWrite = sourceFieldEditors > 0;
+      // One sentence that answers "what am I supposed to do", keyed off the engine's own mode.
+      const MODE_GUIDE = {
+        mcp_write: 'Check the pre-filled values, queue them, and Glean writes them to the source system.',
+        mcp_assisted: 'Check the proposed values, queue them, then confirm each write inside Glean.',
+        delegated: 'This one belongs to the record owner. Check the detail, then send them the prepared Slack message.',
+        local_config: 'This is fixed in Hours Recon configuration, not in Salesforce or Rocketlane.',
+        mcp_refresh: 'Run a fresh Hours Recon MCP refresh so the corrected source data flows through.',
+        guided: 'Work through the steps below in order.',
+      };
+      const slackBody = `${handoffRows ? `<div class="execution-card"><strong>One message per person who logged time</strong><div class="handoff-list">${handoffRows}</div><div class="execution-button-row"><button class="button" id="queueAllSlackHandoffs" type="button" ${slackMcpAvailable ? '' : 'disabled'}>Queue all ${handoffs.length} messages</button></div><p class="step-note">Each person receives only their own flagged entries.</p></div>` : ''}<div class="execution-card execution-copy slack"><div class="field"><label for="executionRecipient">Slack person, email, @handle, or channel</label><input id="executionRecipient" value="${escapeHtml(workspace.default_recipient || workspace.recipient_role || '')}"></div><textarea id="slackDraft" aria-label="Message to send"></textarea><div class="execution-button-row"><button class="button" id="queueSlackDraft" type="button" ${slackMcpAvailable ? '' : 'disabled'}>Queue message</button><button class="button secondary" id="copySlackDraft" type="button">Copy instead</button><span class="execution-feedback" id="slackCopyFeedback"></span></div>${workspace.recipient_suggestions?.length ? `<p class="step-note">Suggested owners: ${escapeHtml(workspace.recipient_suggestions.join(' · '))}</p>` : ''}</div>`;
+      const steps = [];
+      steps.push({
+        title: canWrite ? 'Check the values Glean will write' : 'Check what has to change',
+        tag: 'You',
+        why: canWrite
+          ? 'Replace anything still shown as a placeholder. Editing here changes nothing in Salesforce or Rocketlane.'
+          : 'Glean cannot write these fields for this fix, so a person with access has to make the change.',
+        body: `<div class="execution-column">${operations}</div>`,
+      });
+      if (canWrite) {
+        steps.push({
+          title: 'Queue them, then open Glean',
+          tag: 'You → Glean',
+          why: 'Queueing saves your values locally. Glean re-reads every record and asks you to confirm before each write.',
+          body: `<div class="execution-button-row"><button class="button" id="queueSourceActions" type="button" ${sourceExecutionAvailable ? '' : 'disabled'}>Queue ${plural(sourceFieldEditors, 'change')}</button><button class="button secondary" id="openGleanExecution" type="button">Open Glean</button><span class="execution-feedback" id="sourceQueueFeedback"></span></div><p class="step-note">Queue first, then open Glean — it arrives pre-filled and you press Send. Auto-send from an external link is blocked by Glean security.</p>`,
+        });
+      }
+      steps.push({
+        title: canWrite ? 'Tell the owner' : 'Send it to the owner',
+        tag: canWrite ? 'Optional' : 'You → owner',
+        optional: canWrite,
+        why: slackSetupNote,
+        body: slackBody,
+      });
+      const flow = steps.map((step, index) => `<li class="flow-step ${step.optional ? 'optional' : ''}"><span class="step-num">${index + 1}</span><div class="step-main"><div class="step-head"><h3>${escapeHtml(step.title)}</h3><span class="step-tag">${escapeHtml(step.tag)}</span></div><p class="step-why">${escapeHtml(step.why)}</p><div class="step-body">${step.body}</div></div></li>`).join('');
+      // Everything below is evidence and escape hatches: available, but never competing with the steps.
+      const references = `<details class="reference"><summary>Affected records<span class="reference-count">${(workspace.records || []).length}</span></summary><div class="reference-body"><div class="execution-column">${recordCards || '<p class="source-note">No records attached.</p>'}</div></div></details><details class="reference"><summary>What you need, limits, and safety</summary><div class="reference-body"><section><strong>What you need</strong>${inputs}</section><section><strong>What Glean cannot do</strong>${limitations}</section><section><strong>Safety</strong>${notices}</section></div></details><details class="reference"><summary>Drive it yourself in Glean</summary><div class="reference-body execution-copy"><p class="source-note">Copy these instructions into Glean instead of queueing. They still require read-before-write and explicit confirmation.</p><textarea id="mcpRequest" readonly aria-label="Instructions for Glean"></textarea><div class="execution-button-row"><button class="button secondary" id="copyMcpRequest" type="button">Copy instructions</button><a class="button secondary" id="openMcpWorkspace" target="_blank" rel="noreferrer">Open Glean</a><span class="execution-feedback" id="mcpCopyFeedback"></span></div></div></details>`;
       $('#executionSubtitle').textContent = `${workspace.selected_path?.title || 'Selected fix'} · ${modeLabel}`;
-      $('#executionContent').innerHTML = `<div class="execution-banner"><strong>Nothing has been changed yet.</strong> Hours Recon prepared this plan but did not write to Salesforce or Rocketlane. Glean re-reads every record and asks you to confirm immediately before each write.</div><div class="execution-grid"><div class="execution-column"><section><h2>Proposed changes</h2><div class="execution-column">${operations}</div>${sourceFieldEditors ? `<div class="execution-card"><strong>Send these changes to Glean</strong><p class="source-note">Fill in every value above. Queueing does not write anything: Glean Pi re-reads each record, shows the exact before and after, and asks for final confirmation before every write.</p><div class="execution-button-row"><button class="button" id="queueSourceActions" type="button" ${sourceExecutionAvailable ? '' : 'disabled'}>Queue reviewed source actions</button><button class="button secondary" id="openGleanExecution" type="button">Open Glean with queued changes</button><span class="execution-feedback" id="sourceQueueFeedback"></span></div><p class="source-note">Queue first, then open Glean. It arrives pre-filled with the outbox IDs, target records, and your reviewed values; press Send in Chat to start. Auto-send from an external link is intentionally blocked by Glean security.</p></div>` : ''}</section><section><h2>Affected records</h2><div class="execution-column">${recordCards}</div></section></div><aside class="execution-column"><article class="execution-card"><h3>Before you start</h3><strong>What you need</strong>${inputs}<strong>What Glean cannot do</strong>${limitations}<strong>Safety</strong>${notices}</article><article class="execution-card execution-copy"><h3>Instructions for Glean</h3><p class="source-note">Copy this into Glean if you prefer to drive it yourself. It requires read-before-write and explicit confirmation.</p><textarea id="mcpRequest" readonly aria-label="Instructions for Glean"></textarea><div class="execution-button-row"><button class="button" id="copyMcpRequest" type="button">Copy instructions</button><a class="button secondary" id="openMcpWorkspace" target="_blank" rel="noreferrer">Open Glean</a><span class="execution-feedback" id="mcpCopyFeedback"></span></div></article><article class="execution-card execution-copy slack"><h3>Ask the owner in Slack</h3><p class="source-note">${escapeHtml(slackSetupNote)} ${workspace.recipient_suggestions?.length ? `Suggested owners: ${escapeHtml(workspace.recipient_suggestions.join(' · '))}.` : ''}</p>${handoffRows ? `<div><strong>One message per person who logged time</strong><div class="handoff-list">${handoffRows}</div><div class="execution-button-row"><button class="button" id="queueAllSlackHandoffs" type="button" ${slackMcpAvailable ? '' : 'disabled'}>Queue all ${handoffs.length} messages</button><span class="source-note">Each person receives only their own flagged entries.</span></div></div>` : ''}<div class="field"><label for="executionRecipient">Slack person, email, @handle, or channel</label><input id="executionRecipient" value="${escapeHtml(workspace.default_recipient || workspace.recipient_role || '')}"></div><textarea id="slackDraft" aria-label="Message to send"></textarea><div class="execution-button-row"><button class="button" id="queueSlackDraft" type="button" ${slackMcpAvailable ? '' : 'disabled'}>Queue message</button><button class="button secondary" id="copySlackDraft" type="button">Copy instead</button><span class="execution-feedback" id="slackCopyFeedback"></span></div></article></aside></div>`;
+      $('#executionContent').innerHTML = `<div class="do-now"><strong>Do this next</strong><p>${escapeHtml(MODE_GUIDE[workspace.execution_mode] || MODE_GUIDE.guided)}</p><p class="step-note">Nothing has been written to Salesforce or Rocketlane yet.</p></div><ol class="flow">${flow}</ol>${references}`;
       $('#mcpRequest').value = workspace.mcp_request || '';
       const template = workspace.slack_draft?.message || '';
       const updateSlackPreview = () => { $('#slackDraft').value = template.replaceAll('{{recipient}}', $('#executionRecipient').value.trim() || workspace.recipient_role || 'the owner'); };
@@ -1626,6 +1763,7 @@
       refresh: () => refreshData(),
       'select-account': button => selectAccount(button.dataset.accountId),
       'close-detail': () => closeDetail(),
+      'detail-tab': button => selectDetailTab(button.dataset.detailTab),
       'remediation-tab': button => selectRemediationTab(button.dataset.remediationTab),
       'remediation-action': button => applyRemediationAction(button),
       'workstream-history': button => loadWorkstreamHistory(button),
@@ -1644,8 +1782,13 @@
     });
 
     document.addEventListener('keydown', event => {
-      if (event.key === 'Escape' && state.selectedId && !$('#executionDialog').open && !$('#promptDialog').open) {
-        closeDetail();
+      // Escape is handled natively by <dialog>; see the cancel listener below.
+      const detailTab = event.target.closest('[data-detail-tab]');
+      if (detailTab && ['ArrowLeft', 'ArrowRight'].includes(event.key)) {
+        event.preventDefault();
+        const index = DETAIL_TABS.indexOf(detailTab.dataset.detailTab);
+        const step = event.key === 'ArrowRight' ? 1 : DETAIL_TABS.length - 1;
+        selectDetailTab(DETAIL_TABS[(index + step) % DETAIL_TABS.length], true);
         return;
       }
       const tab = event.target.closest('[data-remediation-tab]');
@@ -1667,6 +1810,9 @@
     $('#riskFilter').addEventListener('change', event => { state.filters.risk = event.target.value; renderAccounts(); });
     $('#sort').addEventListener('change', event => { state.filters.sort = event.target.value; renderAccounts(); });
     $('#weeklyOnly').addEventListener('change', event => { state.filters.weeklyOnly = event.target.checked; renderAccounts(); });
+    // Escape and backdrop clicks must clear selection state, not just hide the modal.
+    $('#detail').addEventListener('cancel', event => { event.preventDefault(); closeDetail(); });
+    $('#detail').addEventListener('click', event => { if (event.target === $('#detail')) closeDetail(); });
     $('#closeExecution').addEventListener('click', () => { $('#executionDialog').close(); state.execution = null; });
     $('#executionDialog').addEventListener('cancel', () => { state.execution = null; });
 
