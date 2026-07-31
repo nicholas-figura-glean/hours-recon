@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "_comment": [
+    "Pinned MCP discovery results. These values change rarely, so re-deriving",
+    "them on every refresh costs several agent turns and pulls the entire",
+    "Account describe into context. The refresh skill reuses these bindings",
+    "while still corroborating scope against live connector identity, which is",
+    "cheap because the identity calls happen anyway.",
+    "Re-verify when verified_on is older than ttl_days, when a pinned field is",
+    "rejected by the source, or when the user asks for a forced rediscovery."
+  ],
+  "ttl_days": 7,
+  "verified_on": "2026-07-31",
+  "scope_id": "salesforce:00D4S000000Ghf0UAC|rocketlane:glean.rocketlane.com",
+  "salesforce": {
+    "mcp_server": "08595c5e35ed4a49a51089a713d8c111",
+    "organization_id": "00D4S000000Ghf0UAC",
+    "tools": {
+      "user_info": "getUserInfo",
+      "object_schema": "getObjectSchema",
+      "soql": "soqlQuery"
+    },
+    "account_aiom_field": "AIOM__c",
+    "account_aiom_field_label": "AIOM",
+    "opportunity_approved_quote_field": "Approved_Quote__c",
+    "opportunity_primary_quote_field": "Ruby__PrimaryQuote__c",
+    "opportunity_service_start_field": null,
+    "opportunity_service_end_field": null,
+    "entitlement_disposition_field": null,
+    "account_schema_verified_on": "2026-07-31"
+  },
+  "rocketlane": {
+    "mcp_server": "6ff81327937a45b2b73de0c4638c7046",
+    "workspace": "glean.rocketlane.com",
+    "tools": {
+      "profile": "get_my_profile",
+      "projects": "get_projects",
+      "time_entries": "get_time_entries"
+    }
+  }
+}

@@ -45,7 +45,7 @@ Demo mode uses fictional data and is always labeled clearly in the dashboard.
 ## Refresh through MCP (recommended)
 
 1. Authenticate the Salesforce and Rocketlane integrations in Glean Pi.
-2. In this repository, ask Pi: **“Run Hours Recon MCP refresh.”** The project skill at `.glean/skills/hours-recon-refresh/SKILL.md` retrieves the source records, validates the full evidence set, atomically replaces `var/mcp_snapshot.json`, and imports the report.
+2. In this repository, ask Pi: **“Run Hours Recon MCP refresh.”** The project skill at `.glean/skills/hours-recon-refresh/SKILL.md` retrieves the source records with batched queries, normalizes and validates them in Python, atomically replaces `var/mcp_snapshot.json`, and imports the report.
 3. Configure and run the local server:
 
    ```dotenv
@@ -93,9 +93,27 @@ Set `HOURS_RECON_MODE=live`, `HOURS_RECON_REQUESTER_EMAIL`, Salesforce OAuth val
 
 The server intentionally binds only to `127.0.0.1` or `localhost`. It rejects non-loopback Host headers and cross-origin refresh requests because this local application does not provide remote-user authentication.
 
+## How the MCP refresh stays fast
+
+Refresh cost is dominated by the number of sequential agent turns and the number of tokens the agent writes, not by the local Python (a full snapshot load, reconcile, and cache write runs in well under a second). The refresh skill is therefore built around four rules:
+
+- **Batched source queries.** One SOQL query with an `OpportunityLineItems` subquery covers every account, replacing a per-account query loop. Quote-line fallbacks are a single `WHERE QuoteId IN (...)` query. `IN` lists are chunked at roughly 50 IDs.
+- **Parallel Rocketlane calls.** Rocketlane has no join language, so project searches, project fetches, and time-entry pulls stay separate calls, but they are independent and are issued in single parallel blocks.
+- **Python normalization.** The agent copies raw payloads to `var/raw_pull.json` and calls `hours_recon.mcp_normalize.normalize_raw_pull`. Field mapping, line-item source precedence, deduplication, the per-account retrieval audit, and coverage derivation happen in code. Large blocks use a columnar `{"columns": [...], "rows": [[...]]}` form with dotted column paths, which carries each key once instead of once per row.
+- **A minimal snapshot schema.** The snapshot keeps only fields with a real consumer in the reconciliation engine, the remediation workflow, the validator, or the dashboard. Queries select exactly those fields, so unused data is never fetched, never written, and never served. `test_snapshot_schema_is_locked_to_consumed_fields` pins the field set; to add a field, add its consumer first, then widen that test.
+- **Python validation.** `hours_recon.mcp_validate.validate_refresh` runs 22 deterministic checks over the snapshot and report instead of asking the agent to re-derive sums.
+
+The account-isolation guarantee is preserved, not dropped. `build_account_retrieval_audit` groups the batched result by `AccountId` and records every in-scope account, including accounts with zero Closed Won opportunities, so one account's records still cannot mask another's gaps. Coverage booleans are derived from the pagination envelopes and audits copied verbatim from the wire, never from an agent's assertion that a pull looked complete, and `publish_mcp_snapshot` still refuses anything short of complete coverage, a current through-date, and a verified scope.
+
+### Pinned MCP bindings
+
+`config/mcp_bindings.json` caches discovery results that change rarely: MCP server IDs, tool names, the Account AIOM field, and the quote field API names. This avoids re-running skill discovery and a full Account describe on every refresh; the describe is several hundred fields and slows every later turn once it is in context.
+
+Bindings are a cache, never a source of truth. A missing or corrupt file degrades to full rediscovery, `hours_recon.config.binding_freshness` expires them after `ttl_days`, and scope is still corroborated against live connector identity on every refresh. Force a rediscovery by deleting the file or asking Pi to rediscover.
+
 ## Salesforce field discovery
 
-On refresh, the connector reads the complete Account schema and discovers the AIOM field by API name, label, and whether it references `User`. If discovery is ambiguous, set the exact API field name:
+The AIOM field is normally read from `config/mcp_bindings.json`. When bindings are stale, missing, or rejected, discovery reads the complete Account schema and resolves the field by API name, label, and whether it references `User`. If discovery is ambiguous, set the exact API field name:
 
 ```dotenv
 SF_AIOM_FIELD=Your_AIOM_Field__c
@@ -325,6 +343,8 @@ python3 -m unittest discover -v
 
 The suite covers package inference, canonical ProductCode mappings, explicit service periods, evidence-tier weakest-link behavior, governed/provisional conservation, aliases and match provenance, remediation path validation and ranking, systemic grouping with account instances, deterministic fingerprints, T2 closure with optional T1 targets, retrieval idempotency, regression reopening, clean v1 reset, requester/scope isolation, Slack MCP queue idempotency, claim-before-send transitions, uncertain-delivery duplicate prevention, safe permalink evidence, preparation/copy/send tracking, private persistence, collision safety, fuzzy suggestions, FIFO allocation, pre-entitlement timing, future-entitlement isolation, inclusive expiration, overage, billable filtering, weekly activity, risk boundaries, deterministic ordering, JSON output, and total rollups.
 
+`tests/test_mcp_pipeline.py` additionally covers the batched refresh path: SOQL subquery and columnar payload equivalence, OpportunityLineItem precedence over quote lines, approved-over-primary quote selection with no combining, quote service-window inheritance, time-entry deduplication, explicit auditing of zero-opportunity accounts, stale-report-date and out-of-scope rejection, coverage derivation from pagination evidence, refusal to publish incomplete coverage, binding TTL and degradation, the locked minimal snapshot schema, and validator detection of injected count, source, scope, hours, and governance drift.
+
 ## Repository layout
 
 ```text
@@ -333,7 +353,9 @@ hours_recon/salesforce.py    Salesforce REST connector
 hours_recon/rocketlane.py    Rocketlane REST connector
 hours_recon/inference.py     Package inference and exact SKU mappings
 hours_recon/evidence.py      Tier scoring and governed/provisional partitions
-hours_recon/matching.py      Conservative matching with provenance
+hours_recon/matching.py     Conservative matching with provenance
+hours_recon/mcp_normalize.py Raw MCP payloads to schema-v1 snapshot, audits, and coverage
+hours_recon/mcp_validate.py  Deterministic snapshot and report validation checks
 hours_recon/reconcile.py     FIFO, risk, weekly checks, totals
 hours_recon/remediation_policy.py  Versioned path catalog and recommendation policy
 hours_recon/remediation.py   Workstream grouping, identities, impact, and Slack formatting
@@ -346,5 +368,6 @@ scripts/hours_recon_slack_outbox.py  Loopback Slack helper used by the Pi skill
 .glean/skills/hours-recon-slack-send/  Authenticated Slack MCP send playbook
 static/index.html            Interactive dashboard
 config/                      Package and account mappings
+config/mcp_bindings.json     Pinned MCP servers, tools, and field names (cache, not truth)
 tests/                       Unit and integration-shape tests
 ```
