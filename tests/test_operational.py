@@ -112,6 +112,15 @@ class DashboardMarkupTests(unittest.TestCase):
         # The chosen fix is one bar with one button; alternates collapse behind a
         # disclosure, and no path renders its step list inline any more.
         self.assertIn('<div class="fix-bar">', html)
+        # Accepting unfixable older entries: bulk selection only ticks boxes, and the
+        # request always carries explicit IDs so nothing is suppressed unseen.
+        self.assertIn("function renderExclusionPanel(workstream)", html)
+        self.assertIn("function selectEntriesBefore(button)", html)
+        self.assertIn("data-action=\"exclusion-apply\"", html)
+        self.assertIn("data-action=\"exclusion-restore\"", html)
+        self.assertIn("/api/remediation/time-exclusions/", html)
+        self.assertIn("It never changes billed hours", html)
+        self.assertIn("entry_ids: entryIds", html)
         self.assertIn('data-remediation-action="prepare_execution" type="button">Open next steps<', html)
         self.assertNotIn('class="path-steps"', html)
         self.assertNotIn('class="path-list"', html)

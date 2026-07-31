@@ -85,6 +85,7 @@ def reconcile(
     as_of: Optional[date] = None,
     mode: str = "live",
     governance_mode: str = "observe_only",
+    time_entry_exclusions: Optional[Mapping[str, Mapping[str, Any]]] = None,
     source_coverage: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     report_date = as_of or date.today()
@@ -230,6 +231,9 @@ def reconcile(
         project_match_evidence=project_match_evidence,
         mode=governance_mode,
         source_coverage=source_coverage,
+        # Exclusions suppress data-quality flagging only. They are applied after all
+        # hours math above, so billed/sold totals are byte-identical either way.
+        time_entry_exclusions=time_entry_exclusions,
     )
 
 

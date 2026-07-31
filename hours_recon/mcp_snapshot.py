@@ -12,7 +12,7 @@ import json
 import secrets
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Optional
 
 from .dates import business_today
 from .storage import write_cache
@@ -70,6 +70,7 @@ def load_mcp_snapshot(
     timezone_name: str,
     governance_mode: str = "observe_only",
     expected_requester_email: str = "",
+    time_entry_exclusions: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     if not path.exists():
         raise McpSnapshotError(
@@ -138,6 +139,7 @@ def load_mcp_snapshot(
         mode="mcp",
         governance_mode=governance_mode,
         source_coverage=effective_coverage,
+        time_entry_exclusions=time_entry_exclusions,
     )
     report["meta"].update({
         "source": "Salesforce MCP + Rocketlane MCP",

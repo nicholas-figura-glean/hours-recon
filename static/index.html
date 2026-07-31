@@ -328,6 +328,31 @@
     .alt-path p { color: var(--artifact-muted); font-size: 12px; }
     .alt-path-meta { color: var(--artifact-faint); font-size: 11px; }
     .alt-path .button { flex: none; }
+
+    /* Accepting unfixable older entries. Suppresses flagging only, never hours. */
+    .exclusions { border: 1px solid var(--artifact-border); border-radius: 8px; }
+    .exclusions > summary { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; color: var(--artifact-muted); font-size: 12.5px; font-weight: 650; list-style: none; }
+    .exclusions > summary::-webkit-details-marker { display: none; }
+    .exclusions > summary::after { content: '+'; margin-left: auto; font-size: 14px; }
+    .exclusions[open] > summary::after { content: '\2212'; }
+    .exclusions[open] > summary { border-bottom: 1px solid var(--artifact-border); }
+    .exclusion-body { display: grid; gap: 11px; padding: 12px; }
+    .exclusion-note { color: var(--artifact-muted); font-size: 12px; }
+    .exclusion-bulk { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--artifact-muted); }
+    /* The global input rule is width:100%, which would push the Select button onto its own line. */
+    .exclusion-bulk input[type="date"] { width: auto; flex: 0 0 auto; min-height: 32px; padding: 4px 8px; border: 1px solid var(--artifact-border); border-radius: 6px; background: var(--artifact-surface); color: var(--artifact-text); }
+    .entry-picker { display: grid; max-height: 240px; overflow-y: auto; border: 1px solid var(--artifact-border); border-radius: 6px; background: var(--artifact-surface); }
+    .entry-row { display: grid; grid-template-columns: 18px 84px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 10px; border-top: 1px solid var(--artifact-border-soft); font-size: 12.5px; }
+    .entry-row:first-child { border-top: 0; }
+    .entry-row input[type="checkbox"] { width: 15px; height: 15px; min-height: 15px; accent-color: var(--artifact-accent); }
+    .entry-row .entry-date { color: var(--artifact-muted); font-variant-numeric: tabular-nums; }
+    .entry-row .entry-what { display: grid; gap: 1px; min-width: 0; }
+    .entry-row .entry-what span { color: var(--artifact-faint); font-size: 11px; }
+    .entry-row .entry-hours { color: var(--artifact-muted); font-variant-numeric: tabular-nums; }
+    .entry-row.is-excluded { background: var(--artifact-surface-subtle); }
+    .exclusion-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .exclusion-actions input[type="text"] { flex: 1; min-width: 220px; min-height: 34px; padding: 6px 10px; border: 1px solid var(--artifact-border); border-radius: 6px; background: var(--artifact-surface); color: var(--artifact-text); }
+    .exclusion-empty { color: var(--artifact-muted); font-size: 12.5px; }
     .instance-list { display: grid; gap: 7px; }
     .instance-item { border: 1px solid var(--artifact-border-soft); border-radius: 7px; padding: 9px 10px; display: grid; grid-template-columns: auto minmax(180px, 1fr) auto; gap: 10px; align-items: center; }
     .instance-item p { color: var(--artifact-muted); font-size: 12px; }
@@ -983,7 +1008,7 @@
         const allocationPeriodNote = serviceEnd !== pkg.expiration_date ? `Counted against ${fmtSmartDate(pkg.expiration_date)}` : `${pkg.days_to_expiration} days left`;
         return `<tr><td>${escapeHtml(pkg.opportunity_name)}<span class="account-meta">${escapeHtml(pkg.tier)} · ${escapeHtml(sourceLabel)}</span><span class="account-meta">${escapeHtml(pkg.product_code || pkg.line_item_name || '')}</span></td><td>${fmtSmartDate(pkg.service_start_date || pkg.close_date)}</td><td>${fmtSmartDate(serviceEnd)}<span class="account-meta">${escapeHtml(allocationPeriodNote)}</span></td><td class="number">${fmt(pkg.sold_hours)}</td><td class="number">${fmt(pkg.consumed_hours)}</td><td class="number">${fmt(pkg.remaining_hours)}</td><td>${pkg.governance ? verificationChip(packageGovernance.overall_tier) : '—'}</td><td><span class="risk-badge ${pkg.risk}">${escapeHtml(riskLabel(pkg.risk))}</span></td></tr>`;
       }).join('');
-      const entryRows = [...entries].sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 100).map(entry => `<tr><td>${fmtSmartDate(entry.date)}${entry.pre_entitlement_hours ? `<span class="account-meta">Before entitlement: ${fmt(entry.pre_entitlement_hours)}h</span>` : ''}</td><td>${escapeHtml(entry.project_name || (account.projects || []).find(project => String(project.id) === String(entry.project_id))?.name || 'Rocketlane project')}<span class="account-meta">${escapeHtml(entry.activity_name || 'No activity recorded')} · ${escapeHtml(entry.category || 'No category')}</span></td><td>${escapeHtml(entry.user_name || entry.user_email || 'Unknown')}<span class="account-meta">${escapeHtml(entry.approval_status || 'Approval not visible')}</span></td><td class="number">${fmt(entry.hours)}</td></tr>`).join('');
+      const entryRows = [...entries].sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 100).map(entry => `<tr><td>${fmtSmartDate(entry.date)}${entry.excluded ? '<span class="account-meta">Accepted exception</span>' : ''}${entry.pre_entitlement_hours ? `<span class="account-meta">Before entitlement: ${fmt(entry.pre_entitlement_hours)}h</span>` : ''}</td><td>${escapeHtml(entry.project_name || (account.projects || []).find(project => String(project.id) === String(entry.project_id))?.name || 'Rocketlane project')}<span class="account-meta">${escapeHtml(entry.activity_name || 'No activity recorded')} · ${escapeHtml(entry.category || 'No category')}</span></td><td>${escapeHtml(entry.user_name || entry.user_email || 'Unknown')}<span class="account-meta">${escapeHtml(entry.approval_status || 'Approval not visible')}</span></td><td class="number">${fmt(entry.hours)}</td></tr>`).join('');
       const dimensionCards = governance ? Object.entries(governance.dimensions || {}).map(([name, item]) => `<article class="evidence-dimension"><div class="evidence-dimension-head"><strong>${escapeHtml(dimensionLabel(name))}</strong>${verificationChip(item.tier)}</div><p>${escapeHtml(item.summary)}</p>${isVerifiedTier(item.tier) ? '' : `<p><strong>To fix:</strong> ${escapeHtml(item.recommended_action)}</p>`}</article>`).join('') : '';
       const evidenceChains = (account.packages || []).map(pkg => {
         const chain = pkg.governance?.evidence_chain || [];
@@ -1028,7 +1053,7 @@
               packageRows ? `<div class="table-wrap"><table><thead><tr><th>Package</th><th>Starts</th><th>Expires</th><th class="number">Sold</th><th class="number">Used</th><th class="number">Left</th><th>Evidence</th><th>Status</th></tr></thead><tbody>${packageRows}</tbody></table></div>` : '<div class="empty">No sold-hours package was found for this account.</div>')}
             ${pane('projects', 'Rocketlane projects matched to this account, and how each link was established.',
               projectRows ? `<div class="table-wrap"><table><thead><tr><th>Project</th><th>Customer</th><th>Status</th><th>Start</th><th>Due</th><th class="number">Entries</th><th class="number">Hours</th></tr></thead><tbody>${projectRows}</tbody></table></div>` : '<div class="empty">No matched Rocketlane projects.</div>')}
-            ${pane('time', entries.length > 100 ? `Most recent 100 of ${plural(entries.length, 'billable entry', 'billable entries')}.` : entries.length ? `${plural(entries.length, 'billable entry', 'billable entries')}, newest first.` : 'No billable time has been logged against this account yet.',
+            ${pane('time', `${entries.length > 100 ? `Most recent 100 of ${plural(entries.length, 'billable entry', 'billable entries')}.` : entries.length ? `${plural(entries.length, 'billable entry', 'billable entries')}, newest first.` : 'No billable time has been logged against this account yet.'}${account.excluded_entry_count ? ` ${plural(account.excluded_entry_count, 'entry is', 'entries are')} an accepted exception and no longer flagged; hours still count.` : ''}`,
               entryRows ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Project / work</th><th>Who / approval</th><th class="number">Hours</th></tr></thead><tbody>${entryRows}</tbody></table></div>` : '<div class="empty">No billable time matched this account.</div>')}
             ${pane('evidence', 'The weakest check sets the account status.',
               `${coverageNote}${dimensionCards ? `<div class="evidence-summary">${dimensionCards}</div>${evidenceChains ? `<div class="evidence-chains"><strong>Where each entitlement came from</strong>${evidenceChains}</div>` : ''}` : '<div class="empty">Evidence appears after the next refresh.</div>'}`, true)}
@@ -1059,6 +1084,60 @@
       if (workstream.status === 'waived') return `<span class="source-note">Exception approved by ${escapeHtml(workstream.waiver_approved_by || '—')} until ${fmtDate(workstream.waiver_expires_on)}.</span>`;
       const controls = active ? `<button class="button tiny secondary" ${base} data-action="remediation-action" data-remediation-action="snooze" type="button">Snooze</button><button class="button tiny secondary" ${base} data-action="remediation-action" data-remediation-action="waive" type="button">Add exception</button>` : '';
       return primary + controls;
+    }
+
+    const SIGNAL_LABELS = {
+      invalid_entry: 'Invalid record',
+      approval_unknown: 'Approval not visible',
+      approval_pending: 'Approval pending',
+      approval_rejected: 'Rejected',
+      missing_activity: 'No activity',
+      missing_category: 'No category',
+      missing_user: 'No contributor',
+      outside_project_dates: 'Outside project dates',
+    };
+
+    function signalText(signals) {
+      return (signals || []).map(name => SIGNAL_LABELS[name] || titleCase(name)).join(' \u00b7 ');
+    }
+
+    // Time entries the operator can accept as unfixable. Rendered per account because
+    // an exclusion is account-scoped, and only for time_quality instances: project-level
+    // problems are not entry problems and excluding entries can never clear them.
+    function renderExclusionPanel(workstream) {
+      const accounts = (workstream.instances || [])
+        .filter(instance => instance.dimension === 'time_quality')
+        .map(instance => (state.data.accounts || []).find(item => String(item.id) === String(instance.account_id)))
+        .filter(Boolean);
+      if (!accounts.length) return '';
+      const blocks = accounts.map(account => {
+        const entries = (account.entries || []).filter(entry => (entry.quality_signals || []).length);
+        if (!entries.length) {
+          // Nothing on this account is an entry problem, so accepting entries cannot
+          // help. Say so rather than showing an affordance that does nothing.
+          return `<div class="exclusion-body" data-exclusion-account="${escapeHtml(String(account.id))}"><p class="exclusion-note"><strong>${escapeHtml(account.name)}: nothing here can be accepted.</strong> The remaining problem belongs to the Rocketlane project itself — usually missing start or due dates, or a status still set to planning — so it has to be fixed on the project.</p></div>`;
+        }
+        const flagged = entries.filter(entry => !entry.excluded);
+        const excluded = entries.filter(entry => entry.excluded);
+        const rows = entries.map(entry => `<label class="entry-row ${entry.excluded ? 'is-excluded' : ''}"><input type="checkbox" data-exclusion-entry="${escapeHtml(String(entry.id))}" data-entry-date="${escapeHtml(String(entry.date || ''))}" ${entry.excluded ? 'disabled' : ''}><span class="entry-date">${fmtSmartDate(entry.date)}</span><span class="entry-what"><strong>${escapeHtml(entry.user_name || entry.user_email || 'Unknown')}</strong><span>${escapeHtml(entry.excluded ? `Accepted: ${entry.exclusion_reason || 'no reason recorded'}` : signalText(entry.quality_signals))}</span></span><span class="entry-hours">${fmt(entry.hours)}h</span></label>`).join('');
+        const id = escapeHtml(String(account.id));
+        return `<div class="exclusion-body" data-exclusion-account="${id}">
+          <p class="exclusion-note"><strong>${plural(flagged.length, 'entry', 'entries')} flagged${excluded.length ? `, ${excluded.length} already accepted` : ''}.</strong> Accepting an entry stops it being flagged on every future refresh. It never changes billed hours, and the account can reach checked but not a clean pass.</p>
+          <div class="exclusion-bulk"><label for="cutoff-${id}">Tick everything before</label><input type="date" id="cutoff-${id}" data-exclusion-cutoff="${id}"><button class="button tiny secondary" type="button" data-action="exclusion-select-before" data-account-id="${id}">Select</button><span class="exclusion-empty" id="cutoffNote-${id}"></span></div>
+          <div class="entry-picker">${rows}</div>
+          <div class="exclusion-actions">
+            <input type="text" id="reason-${id}" placeholder="Why can these not be fixed?" aria-label="Reason for accepting these entries">
+            <button class="button tiny" type="button" data-action="exclusion-apply" data-account-id="${id}" data-workstream-id="${escapeHtml(workstream.fingerprint)}">Accept selected</button>
+            ${excluded.length ? `<button class="button tiny secondary" type="button" data-action="exclusion-restore" data-account-id="${id}" data-workstream-id="${escapeHtml(workstream.fingerprint)}">Restore all ${excluded.length}</button>` : ''}
+            <span class="execution-feedback" id="exclusionFeedback-${id}"></span>
+          </div>
+        </div>`;
+      }).filter(Boolean).join('');
+      if (!blocks) return '';
+      const totalFlagged = accounts.reduce((sum, account) => sum + (account.flagged_entry_count || 0), 0);
+      const totalExcluded = accounts.reduce((sum, account) => sum + (account.excluded_entry_count || 0), 0);
+      const count = totalFlagged ? `${totalFlagged} flagged` : totalExcluded ? `${totalExcluded} accepted` : 'project-level';
+      return `<details class="exclusions"><summary>Accept older entries you cannot fix <span class="workspace-tab-count">${escapeHtml(count)}</span></summary>${blocks}</details>`;
     }
 
     // Alternates only. The chosen fix is rendered by the fix bar, and every
@@ -1178,6 +1257,7 @@
                 <button class="button" data-workstream-id="${escapeHtml(item.fingerprint)}" data-workstream-version="${Number(item.version)}" data-action="remediation-action" data-remediation-action="prepare_execution" type="button">Open next steps</button>
               </div>
               <div class="fix-why">${recommendationText ? `<p>${escapeHtml(recommendationText)}</p>` : ''}<span class="target-note ${item.minimum_target_met && !item.selected_target_met ? 'optional' : ''}">${escapeHtml(targetNote)}</span></div>
+              ${renderExclusionPanel(item)}
               ${alternates.length ? `<details class="alt-paths"><summary>Other ways to fix this <span class="workspace-tab-count">${alternates.length}</span></summary>${alternates.map(path => renderPathOption(path, item)).join('')}</details>` : ''}
               <div><h3>Affected accounts</h3><div class="instance-list">${instances}</div></div>
               <div class="queue-meta"><span>Help from: ${escapeHtml((item.required_partners || []).join(' · ') || '—')}</span>${item.assignee ? `<span>Following up with: ${escapeHtml(item.assignee)}</span>` : ''}</div>
@@ -1755,6 +1835,93 @@
       }
     }
 
+    /* ---------- Time-entry exclusions ---------- */
+    function exclusionScope(accountId) {
+      return document.querySelector(`[data-exclusion-account="${CSS.escape(String(accountId))}"]`);
+    }
+
+    // Bulk selection only ticks boxes. The request always carries explicit entry IDs,
+    // so nothing is ever accepted that the operator could not see listed.
+    function selectEntriesBefore(button) {
+      const accountId = button.dataset.accountId;
+      const scope = exclusionScope(accountId);
+      if (!scope) return;
+      const cutoff = scope.querySelector(`[data-exclusion-cutoff]`)?.value || '';
+      const note = $(`#cutoffNote-${CSS.escape(String(accountId))}`);
+      if (!cutoff) { if (note) note.textContent = 'Pick a date first.'; return; }
+      let ticked = 0;
+      for (const box of scope.querySelectorAll('[data-exclusion-entry]')) {
+        if (box.disabled) continue;
+        const date = box.dataset.entryDate || '';
+        const match = Boolean(date) && date < cutoff;
+        box.checked = match;
+        if (match) ticked += 1;
+      }
+      if (note) note.textContent = `${plural(ticked, 'entry', 'entries')} ticked.`;
+    }
+
+    function selectedExclusionIds(accountId) {
+      const scope = exclusionScope(accountId);
+      if (!scope) return [];
+      return [...scope.querySelectorAll('[data-exclusion-entry]')]
+        .filter(box => box.checked && !box.disabled)
+        .map(box => box.dataset.exclusionEntry);
+    }
+
+    async function postExclusion(operation, body) {
+      const response = await fetch(`/api/remediation/time-exclusions/${operation}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Hours-Recon-Action-Token': state.data.remediation_queue?.action_token || '' },
+        body: JSON.stringify(body),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`);
+      return result;
+    }
+
+    async function applyExclusion(button) {
+      const accountId = button.dataset.accountId;
+      const entryIds = selectedExclusionIds(accountId);
+      const reason = ($(`#reason-${CSS.escape(String(accountId))}`)?.value || '').trim();
+      if (!entryIds.length) { setError('Tick at least one entry to accept.'); return; }
+      if (!reason) { setError('Add a short reason so the exception is auditable.'); return; }
+      const confirmed = await confirmAction({
+        title: `Accept ${plural(entryIds.length, 'entry', 'entries')}?`,
+        description: 'These stop being flagged on every future refresh. Billed hours do not change, and you can restore them at any time.',
+        confirmLabel: 'Accept entries',
+      });
+      if (!confirmed) return;
+      button.disabled = true;
+      setError('');
+      try {
+        await postExclusion('apply', { account_id: accountId, entry_ids: entryIds, reason, confirmed: true, workstream_id: button.dataset.workstreamId || '' });
+        await loadData();
+      } catch (error) {
+        setError(error.message);
+      } finally { button.disabled = false; }
+    }
+
+    async function restoreExclusion(button) {
+      const accountId = String(button.dataset.accountId);
+      const account = (state.data.accounts || []).find(item => String(item.id) === accountId);
+      const entryIds = (account?.entries || []).filter(entry => entry.excluded).map(entry => String(entry.id));
+      if (!entryIds.length) return;
+      const confirmed = await confirmAction({
+        title: `Restore ${plural(entryIds.length, 'entry', 'entries')}?`,
+        description: 'They will be flagged again on the next refresh and the account returns to the work queue.',
+        confirmLabel: 'Restore',
+      });
+      if (!confirmed) return;
+      button.disabled = true;
+      setError('');
+      try {
+        await postExclusion('restore', { entry_ids: entryIds, confirmed: true, workstream_id: button.dataset.workstreamId || '' });
+        await loadData();
+      } catch (error) {
+        setError(error.message);
+      } finally { button.disabled = false; }
+    }
+
     /* ---------- Event delegation ---------- */
     // One router keeps every handler alive across re-renders.
     const actionHandlers = {
@@ -1762,6 +1929,9 @@
       'select-account': button => selectAccount(button.dataset.accountId),
       'close-detail': () => closeDetail(),
       'detail-tab': button => selectDetailTab(button.dataset.detailTab),
+      'exclusion-select-before': button => selectEntriesBefore(button),
+      'exclusion-apply': button => applyExclusion(button),
+      'exclusion-restore': button => restoreExclusion(button),
       'remediation-tab': button => selectRemediationTab(button.dataset.remediationTab),
       'remediation-action': button => applyRemediationAction(button),
       'workstream-history': button => loadWorkstreamHistory(button),

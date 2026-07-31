@@ -316,6 +316,27 @@ class RemediationStore:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_source_action_outbox_active_operation
                     ON source_action_outbox(workstream_fingerprint, operation_index)
                     WHERE status IN ('pending', 'executing', 'needs_review');
+                -- Time entries the operator has accepted as unfixable. These suppress
+                -- data-quality flagging only; they never change billed hours. signals_json
+                -- records what was wrong at exclusion time so a NEW problem can re-flag.
+                CREATE TABLE IF NOT EXISTS time_entry_exclusions (
+                    scope_id TEXT NOT NULL,
+                    portfolio_id TEXT NOT NULL,
+                    account_id TEXT NOT NULL,
+                    entry_id TEXT NOT NULL,
+                    entry_date TEXT,
+                    signals_json TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    excluded_by TEXT NOT NULL,
+                    excluded_at TEXT NOT NULL,
+                    restored_at TEXT,
+                    restored_by TEXT,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    PRIMARY KEY (scope_id, portfolio_id, entry_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_time_entry_exclusions_active
+                    ON time_entry_exclusions(scope_id, portfolio_id, account_id)
+                    WHERE restored_at IS NULL;
                 PRAGMA user_version = 4;
                 """
             )
@@ -939,6 +960,231 @@ class RemediationStore:
             }
         finally:
             connection.close()
+
+    # ---------- time-entry exclusions ----------
+    # Exclusions are deliberately keyed on (scope, portfolio, entry_id) and never on
+    # evidence_hash: evidence_hash embeds report_as_of and so rotates every day, which
+    # would silently drop every exclusion on the next refresh.
+
+    MAX_EXCLUSION_REASON = 400
+
+    def active_time_entry_exclusions(
+        self, *, scope_id: str, portfolio_id: str
+    ) -> Dict[str, Dict[str, Any]]:
+        """Return active exclusions keyed by entry ID."""
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                """SELECT entry_id, account_id, entry_date, signals_json, reason, excluded_by, excluded_at
+                   FROM time_entry_exclusions
+                   WHERE scope_id=? AND portfolio_id=? AND restored_at IS NULL""",
+                (str(scope_id), str(portfolio_id)),
+            ).fetchall()
+        finally:
+            connection.close()
+        result: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            try:
+                signals = sorted({str(item) for item in json.loads(row["signals_json"])})
+            except (TypeError, ValueError):
+                signals = []
+            result[str(row["entry_id"])] = {
+                "entry_id": str(row["entry_id"]),
+                "account_id": str(row["account_id"]),
+                "entry_date": row["entry_date"],
+                "signals": signals,
+                "reason": row["reason"],
+                "excluded_by": row["excluded_by"],
+                "excluded_at": row["excluded_at"],
+            }
+        return result
+
+    def list_time_entry_exclusions(
+        self, *, scope_id: str, portfolio_id: str, include_restored: bool = False
+    ) -> List[Dict[str, Any]]:
+        connection = self._connect()
+        try:
+            clause = "" if include_restored else " AND restored_at IS NULL"
+            rows = connection.execute(
+                f"""SELECT * FROM time_entry_exclusions
+                    WHERE scope_id=? AND portfolio_id=?{clause}
+                    ORDER BY account_id, entry_date DESC, entry_id""",
+                (str(scope_id), str(portfolio_id)),
+            ).fetchall()
+        finally:
+            connection.close()
+        return [dict(row) for row in rows]
+
+    def time_entry_exclusion_revision(self, *, scope_id: str, portfolio_id: str) -> str:
+        """A value that changes on every exclusion mutation and never repeats.
+
+        Row version only ever increments, and restored rows are retained, so toggling
+        an exclusion off and on again yields a fresh revision. Hashing only the active
+        set would collide when the operator restores everything, and the planner would
+        dedupe away the regression.
+        """
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                """SELECT entry_id, version, restored_at FROM time_entry_exclusions
+                   WHERE scope_id=? AND portfolio_id=? ORDER BY entry_id""",
+                (str(scope_id), str(portfolio_id)),
+            ).fetchall()
+        finally:
+            connection.close()
+        if not rows:
+            return ""
+        material = "|".join(
+            f"{row['entry_id']}:{int(row['version'])}:{0 if row['restored_at'] else 1}" for row in rows
+        )
+        return sha256(material.encode("utf-8")).hexdigest()[:16]
+
+    def exclude_time_entries(
+        self,
+        *,
+        scope_id: str,
+        portfolio_id: str,
+        account_id: str,
+        entries: Sequence[Mapping[str, Any]],
+        reason: str,
+        actor: str,
+        workstream_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Record an explicit, reviewed exclusion for each entry.
+
+        Bulk selection is resolved to concrete entry IDs by the caller, so nothing is
+        ever suppressed by a standing rule that could catch entries the operator has
+        never seen.
+        """
+        clean_reason = str(reason or "").strip()
+        if not clean_reason:
+            raise QueueValidationError("Enter a reason before excluding time entries.")
+        if len(clean_reason) > self.MAX_EXCLUSION_REASON:
+            raise QueueValidationError(
+                f"Keep the exclusion reason under {self.MAX_EXCLUSION_REASON} characters."
+            )
+        clean_actor = str(actor or "").strip() or "Hours Recon operator"
+        if not str(account_id or "").strip():
+            raise QueueValidationError("An account is required to exclude time entries.")
+        prepared: List[Dict[str, Any]] = []
+        seen: set = set()
+        for entry in entries or []:
+            entry_id = str(entry.get("entry_id") or entry.get("id") or "").strip()
+            if not entry_id or entry_id in seen:
+                continue
+            seen.add(entry_id)
+            signals = sorted({str(item) for item in (entry.get("signals") or []) if str(item).strip()})
+            prepared.append({
+                "entry_id": entry_id,
+                "entry_date": str(entry.get("entry_date") or entry.get("date") or "") or None,
+                "signals": signals,
+            })
+        if not prepared:
+            raise QueueValidationError("Select at least one time entry to exclude.")
+        now = _utc_now()
+        connection = self._connect()
+        try:
+            with connection:
+                for item in prepared:
+                    connection.execute(
+                        """INSERT INTO time_entry_exclusions(
+                               scope_id, portfolio_id, account_id, entry_id, entry_date,
+                               signals_json, reason, excluded_by, excluded_at, restored_at, restored_by, version)
+                           VALUES(?,?,?,?,?,?,?,?,?,NULL,NULL,1)
+                           ON CONFLICT(scope_id, portfolio_id, entry_id) DO UPDATE SET
+                               account_id=excluded.account_id,
+                               entry_date=excluded.entry_date,
+                               signals_json=excluded.signals_json,
+                               reason=excluded.reason,
+                               excluded_by=excluded.excluded_by,
+                               excluded_at=excluded.excluded_at,
+                               restored_at=NULL,
+                               restored_by=NULL,
+                               version=time_entry_exclusions.version+1""",
+                        (
+                            str(scope_id), str(portfolio_id), str(account_id), item["entry_id"],
+                            item["entry_date"], _json(item["signals"]), clean_reason, clean_actor, now,
+                        ),
+                    )
+                self._exclusion_event(
+                    connection,
+                    workstream_id=workstream_id,
+                    event_type="time_entries_excluded",
+                    actor=clean_actor,
+                    payload={
+                        "account_id": str(account_id),
+                        "entry_ids": [item["entry_id"] for item in prepared],
+                        "reason": clean_reason,
+                    },
+                )
+        finally:
+            connection.close()
+        return {"excluded": len(prepared), "entry_ids": [item["entry_id"] for item in prepared]}
+
+    def restore_time_entries(
+        self,
+        *,
+        scope_id: str,
+        portfolio_id: str,
+        entry_ids: Sequence[str],
+        actor: str,
+        workstream_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        wanted = [str(item).strip() for item in (entry_ids or []) if str(item).strip()]
+        if not wanted:
+            raise QueueValidationError("Select at least one excluded entry to restore.")
+        clean_actor = str(actor or "").strip() or "Hours Recon operator"
+        now = _utc_now()
+        connection = self._connect()
+        try:
+            with connection:
+                placeholders = ",".join("?" for _ in wanted)
+                cursor = connection.execute(
+                    f"""UPDATE time_entry_exclusions
+                        SET restored_at=?, restored_by=?, version=version+1
+                        WHERE scope_id=? AND portfolio_id=? AND restored_at IS NULL
+                          AND entry_id IN ({placeholders})""",
+                    (now, clean_actor, str(scope_id), str(portfolio_id), *wanted),
+                )
+                restored = int(cursor.rowcount or 0)
+                if restored:
+                    self._exclusion_event(
+                        connection,
+                        workstream_id=workstream_id,
+                        event_type="time_entries_restored",
+                        actor=clean_actor,
+                        payload={"entry_ids": wanted},
+                    )
+        finally:
+            connection.close()
+        return {"restored": restored, "entry_ids": wanted}
+
+    def _exclusion_event(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        workstream_id: Optional[str],
+        event_type: str,
+        actor: str,
+        payload: Mapping[str, Any],
+    ) -> None:
+        """Best-effort audit row.
+
+        events.workstream_fingerprint is a NOT NULL foreign key, so an exclusion made
+        outside a live workstream context is still recorded on the exclusion row itself
+        rather than failing the write.
+        """
+        if not workstream_id:
+            return
+        exists = connection.execute(
+            "SELECT 1 FROM workstreams WHERE fingerprint=?", (str(workstream_id),)
+        ).fetchone()
+        if not exists:
+            return
+        self._event(
+            connection, workstream_id=str(workstream_id), instance_id=None,
+            event_type=event_type, actor=actor, payload=payload,
+        )
 
     @staticmethod
     def _validate_future_date(value: Any, label: str) -> str:

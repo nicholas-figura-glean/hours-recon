@@ -228,6 +228,45 @@ class HoursReconHandler(BaseHTTPRequestHandler):
             except QueueError as exc:
                 self._json(503, {"error": str(exc)})
             return
+        exclusion_match = re.fullmatch(r"/api/remediation/time-exclusions/(preview|apply|restore)", path)
+        if exclusion_match:
+            if not secrets.compare_digest(self.headers.get("X-Hours-Recon-Action-Token", ""), self.service.action_token):
+                self._json(403, {"error": "Invalid remediation action token."})
+                return
+            try:
+                body = self._read_json_body(65536)
+                operation = exclusion_match.group(1)
+                raw_ids = body.get("entry_ids")
+                entry_ids = [str(value) for value in raw_ids] if isinstance(raw_ids, list) else None
+                if operation == "preview":
+                    result = self.service.preview_time_entry_exclusions(
+                        str(body.get("account_id") or ""),
+                        before_date=str(body.get("before_date") or ""),
+                        entry_ids=entry_ids,
+                    )
+                elif operation == "apply":
+                    result = self.service.exclude_time_entries(
+                        str(body.get("account_id") or ""),
+                        entry_ids=entry_ids,
+                        before_date=str(body.get("before_date") or ""),
+                        reason=str(body.get("reason") or ""),
+                        confirmed=body.get("confirmed") is True,
+                        workstream_id=str(body.get("workstream_id") or ""),
+                    )
+                else:
+                    result = self.service.restore_time_entries(
+                        entry_ids=entry_ids or [],
+                        confirmed=body.get("confirmed") is True,
+                        workstream_id=str(body.get("workstream_id") or ""),
+                    )
+                self._json(200, result)
+            except QueueConflict as exc:
+                self._json(409, {"error": str(exc)})
+            except (QueueValidationError, ValueError, TypeError, KeyError) as exc:
+                self._json(400, {"error": str(exc) or "Invalid exclusion request."})
+            except QueueError as exc:
+                self._json(503, {"error": str(exc)})
+            return
         match = re.fullmatch(r"/api/remediation/workstreams/(hrw2_[a-f0-9]{64})/actions", path)
         if match:
             if not secrets.compare_digest(self.headers.get("X-Hours-Recon-Action-Token", ""), self.service.action_token):

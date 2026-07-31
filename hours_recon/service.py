@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import copy
 import re
 import secrets
@@ -9,7 +10,7 @@ from datetime import date, datetime, timezone
 from hashlib import sha256
 from threading import Lock
 from time import monotonic
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 from uuid import uuid4
 
 from .dates import business_today
@@ -253,6 +254,28 @@ class ReconciliationService:
             "source_execution": self._source_execution_status(),
         }
 
+    def _attach_flagged_entries(self, result: Dict[str, Any], exclusions: Mapping[str, Any]) -> None:
+        """Tag each account's entries so the UI can list and exclude the flagged ones."""
+        from .evidence import entry_quality_signals
+        for account in result.get("accounts", []):
+            projects = {str(item.get("id")): item for item in account.get("projects", [])}
+            flagged = 0
+            excluded = 0
+            for entry in account.get("entries", []):
+                entry_id = str(entry.get("id") or "")
+                signals = entry_quality_signals(entry, projects.get(str(entry.get("project_id"))))
+                entry["quality_signals"] = signals
+                record = exclusions.get(entry_id) if signals else None
+                is_excluded = bool(record) and not (set(signals) - set(record.get("signals") or []))
+                entry["excluded"] = is_excluded
+                if is_excluded:
+                    entry["exclusion_reason"] = record.get("reason")
+                    excluded += 1
+                elif signals:
+                    flagged += 1
+            account["flagged_entry_count"] = flagged
+            account["excluded_entry_count"] = excluded
+
     def _attach_remediation(self, result: Dict[str, Any]) -> None:
         if not self.remediation_store:
             result["remediation_queue"] = self._unavailable_remediation_summary()
@@ -290,6 +313,14 @@ class ReconciliationService:
                 for item in outbox_rows
             ]
             summary["slack_outbox"] = visible_outbox
+            # Exclusions are operator state, so they ship with the payload and stay
+            # visible rather than silently shaping the numbers.
+            exclusions = self.remediation_store.active_time_entry_exclusions(
+                scope_id=scope_id, portfolio_id=portfolio_id,
+            )
+            summary["time_entry_exclusions"] = exclusions
+            summary["time_entry_exclusion_count"] = len(exclusions)
+            self._attach_flagged_entries(result, exclusions)
             summary["slack_outbox_counts"] = {
                 status: sum(1 for item in visible_outbox if item.get("status") == status)
                 for status in ("pending", "sending", "needs_review", "sent", "cancelled")
@@ -356,6 +387,42 @@ class ReconciliationService:
             "source_execution": self._source_execution_status(),
         }
 
+    def _time_entry_exclusions(self) -> Dict[str, Dict[str, Any]]:
+        """Operator-accepted time entries, reloaded on every refresh.
+
+        Keyed on entry ID within the configured scope, so an exclusion survives a
+        refresh. Demo mode is excluded on purpose: sample data must never be shaped
+        by real operator state.
+        """
+        if not self.remediation_store or self.settings.get("mode") == "demo":
+            return {}
+        try:
+            return self.remediation_store.active_time_entry_exclusions(
+                scope_id=self._active_scope_id(),
+                portfolio_id=self._active_portfolio_id(),
+            )
+        except Exception:
+            # A degraded exclusion read must never block a refresh; the worst case is
+            # that an accepted entry is flagged again, which is the safe direction.
+            return {}
+
+    def _exclusion_digest(self) -> str:
+        """Fingerprint the exclusion state for the planner's retrieval identity.
+
+        The planner dedupes observations on retrieval_id. Accepting or restoring an
+        entry changes the derived evidence without changing the snapshot, so without
+        this the change would show in the report but never reach the work queue.
+        """
+        if not self.remediation_store or self.settings.get("mode") == "demo":
+            return ""
+        try:
+            return self.remediation_store.time_entry_exclusion_revision(
+                scope_id=self._active_scope_id(),
+                portfolio_id=self._active_portfolio_id(),
+            )
+        except Exception:
+            return ""
+
     def _load_mcp_report(self) -> Dict[str, Any]:
         return load_mcp_snapshot(
             self.settings["mcp_snapshot_path"],
@@ -364,6 +431,7 @@ class ReconciliationService:
             timezone_name=self.settings["timezone"],
             governance_mode=self.settings.get("governance_mode", "observe_only"),
             expected_requester_email=self.settings.get("mcp_requester_email", ""),
+            time_entry_exclusions=self._time_entry_exclusions(),
         )
 
     def _observe_source(self, result: Dict[str, Any]) -> None:
@@ -397,6 +465,11 @@ class ReconciliationService:
             scope_id = self._active_scope_id(result)
             coverage_complete = meta.get("source_coverage_complete") is True
             digest = sha256(str(meta).encode("utf-8")).hexdigest()
+        exclusion_digest = self._exclusion_digest()
+        if exclusion_digest:
+            retrieval_id = f"{retrieval_id}:x{exclusion_digest}"
+            digest = f"{digest}:x{exclusion_digest}"
+            meta["time_entry_exclusion_digest"] = exclusion_digest
         try:
             observation = self.remediation_store.observe(
                 result,
@@ -487,6 +560,150 @@ class ReconciliationService:
         if len(message) < len(attribution) + 2 or len(message) > 4000:
             raise QueueValidationError("Review a Slack message between 1 and 4,000 characters before queueing.")
         return message
+
+    # ---------- time-entry exclusions ----------
+    def reload(self) -> None:
+        """Recompute the report from the stored snapshot after local state changes.
+
+        An exclusion changes evidence, not source data, so this never touches
+        Salesforce or Rocketlane. Trend is deliberately not advanced: an exclusion is
+        not a new day of data.
+        """
+        if self.settings.get("mode") != "mcp":
+            return
+        path = self.settings.get("mcp_snapshot_path")
+        if not path or not path.exists():
+            return
+        if not self.lock.acquire(timeout=10):
+            raise QueueError("A refresh is in progress. Try again in a moment.")
+        try:
+            result = self._load_mcp_report()
+            self._observe_source(result)
+            write_cache(self.settings["cache_path"], result)
+            self._data = result
+        except McpSnapshotError as exc:
+            raise QueueError(str(exc)) from exc
+        finally:
+            self.lock.release()
+
+
+    def _flagged_entries_for_account(self, account_id: str) -> List[Dict[str, Any]]:
+        """Every entry on an account that currently carries a data-quality signal."""
+        from .evidence import entry_quality_signals
+        data = self._data or {}
+        account = next(
+            (item for item in data.get("accounts", []) if str(item.get("id")) == str(account_id)),
+            None,
+        )
+        if not account:
+            raise QueueValidationError("Unknown account.")
+        projects = {str(item.get("id")): item for item in account.get("projects", [])}
+        flagged: List[Dict[str, Any]] = []
+        for entry in account.get("entries", []):
+            signals = entry_quality_signals(entry, projects.get(str(entry.get("project_id"))))
+            if not signals:
+                continue
+            flagged.append({
+                "entry_id": str(entry.get("id")),
+                "entry_date": entry.get("date"),
+                "signals": signals,
+                "hours": entry.get("hours"),
+                "user_name": entry.get("user_name") or entry.get("user_email") or "",
+                "project_name": entry.get("project_name") or "",
+            })
+        flagged.sort(key=lambda item: (str(item.get("entry_date") or ""), item["entry_id"]))
+        return flagged
+
+    def preview_time_entry_exclusions(
+        self, account_id: str, *, before_date: str = "", entry_ids: Optional[Sequence[str]] = None
+    ) -> Dict[str, Any]:
+        """Resolve a bulk selection to concrete entry IDs without writing anything."""
+        flagged = self._flagged_entries_for_account(account_id)
+        already = set(self._time_entry_exclusions())
+        candidates = [item for item in flagged if item["entry_id"] not in already]
+        if before_date:
+            try:
+                cutoff = date.fromisoformat(str(before_date))
+            except ValueError as exc:
+                raise QueueValidationError("Enter a valid cutoff date.") from exc
+            candidates = [
+                item for item in candidates
+                if item.get("entry_date") and date.fromisoformat(str(item["entry_date"])) < cutoff
+            ]
+        if entry_ids is not None:
+            wanted = {str(value) for value in entry_ids}
+            candidates = [item for item in candidates if item["entry_id"] in wanted]
+        return {
+            "account_id": str(account_id),
+            "flagged_count": len(flagged),
+            "already_excluded": len(already & {item["entry_id"] for item in flagged}),
+            "entries": candidates,
+            "count": len(candidates),
+        }
+
+    def exclude_time_entries(
+        self,
+        account_id: str,
+        *,
+        entry_ids: Optional[Sequence[str]] = None,
+        before_date: str = "",
+        reason: str,
+        confirmed: bool,
+        workstream_id: str = "",
+    ) -> Dict[str, Any]:
+        """Accept specific flagged entries as unfixable.
+
+        Bulk-by-date is resolved here into an explicit list, so the stored record is
+        always a concrete set of entries the operator could see at the time.
+        """
+        if confirmed is not True:
+            raise QueueValidationError("Confirm the exclusion before applying it.")
+        if not self.remediation_store:
+            raise QueueError("The remediation planner is unavailable.")
+        if not entry_ids and not before_date:
+            raise QueueValidationError("Choose entries or a cutoff date to exclude.")
+        preview = self.preview_time_entry_exclusions(
+            account_id, before_date=before_date, entry_ids=entry_ids
+        )
+        if not preview["entries"]:
+            raise QueueValidationError("No flagged entries match that selection.")
+        result = self.remediation_store.exclude_time_entries(
+            scope_id=self._active_scope_id(),
+            portfolio_id=self._active_portfolio_id(),
+            account_id=str(account_id),
+            entries=preview["entries"],
+            reason=reason,
+            actor=self._exclusion_actor(),
+            workstream_id=workstream_id or None,
+        )
+        self.reload()
+        return {**result, "account_id": str(account_id)}
+
+    def restore_time_entries(
+        self, *, entry_ids: Sequence[str], confirmed: bool, workstream_id: str = ""
+    ) -> Dict[str, Any]:
+        if confirmed is not True:
+            raise QueueValidationError("Confirm before restoring excluded entries.")
+        if not self.remediation_store:
+            raise QueueError("The remediation planner is unavailable.")
+        result = self.remediation_store.restore_time_entries(
+            scope_id=self._active_scope_id(),
+            portfolio_id=self._active_portfolio_id(),
+            entry_ids=entry_ids,
+            actor=self._exclusion_actor(),
+            workstream_id=workstream_id or None,
+        )
+        self.reload()
+        return result
+
+    def _exclusion_actor(self) -> str:
+        meta = (self._data or {}).get("meta", {})
+        requester = meta.get("requester") if isinstance(meta.get("requester"), Mapping) else {}
+        return str(
+            requester.get("email")
+            or self.settings.get("mcp_requester_email")
+            or "Hours Recon operator"
+        )
 
     def queue_remediation_slack(
         self,
@@ -674,6 +891,7 @@ class ReconciliationService:
                     as_of=report_date,
                     mode="live",
                     governance_mode=self.settings.get("governance_mode", "observe_only"),
+                    time_entry_exclusions=self._time_entry_exclusions(),
                     source_coverage={
                         "complete": False,
                         "accounts": True,

@@ -1177,3 +1177,262 @@ class RemediationStoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TimeEntryExclusionTests(unittest.TestCase):
+    """Accepting an unfixable entry must suppress flagging and nothing else."""
+
+    PROJECT = {
+        "id": "P1", "name": "Delivery", "status": "completed",
+        "start_date": "2026-01-01", "due_date": "2026-12-31",
+    }
+
+    def _entry(self, entry_id, **overrides):
+        entry = {
+            "id": entry_id, "project_id": "P1", "date": "2026-03-01", "billable": True,
+            "approval_status": "APPROVED", "activity_name": "Workshop",
+            "category": "Consulting", "user_id": "u1", "hours": 1.0,
+        }
+        entry.update(overrides)
+        return entry
+
+    def _account(self, entries, projects=None):
+        return {
+            "id": "001ABC", "name": "Acme", "sold_hours": 10.0,
+            "projects": list(projects if projects is not None else [self.PROJECT]),
+            "entries": entries,
+        }
+
+    def test_excluded_entry_reaches_t2_but_never_t1(self):
+        from hours_recon.evidence import _time_quality_dimension
+        account = self._account([self._entry("1", activity_name="")])
+        self.assertEqual("T3", _time_quality_dimension(account)["tier"])
+        governed = _time_quality_dimension(account, {"1": {"signals": ["missing_activity"]}})
+        # T2 clears the work queue; T1 stays reserved for genuinely clean source data.
+        self.assertEqual("T2", governed["tier"])
+        self.assertEqual("accepted_time_exceptions", governed["reason_code"])
+        self.assertEqual(1, governed["details"]["excluded_entries"])
+
+    def test_exclusion_never_changes_the_hours_math(self):
+        """The validator asserts billed hours equal source minutes over every matched
+        in-window entry, so an exclusion that touched hours would fail every refresh."""
+        from hours_recon.reconcile import reconcile
+        salesforce = {
+            "requester": {"id": "U1", "name": "Alex AIOM", "email": "alex@example.com"},
+            "accounts": [{"id": "A1", "name": "Acme, Inc."}],
+            "opportunities": [{
+                "id": "O1", "account_id": "A1", "account_name": "Acme",
+                "name": "Growth Package 20 hours", "close_date": "2025-12-01", "line_items": [],
+            }],
+        }
+        rocketlane = {
+            "projects": [{
+                "id": "P1", "name": "Acme Project", "customer_name": "Acme", "status": "completed",
+                "start_date": "2026-01-01", "due_date": "2026-12-31",
+            }],
+            "entries": [
+                {"id": "T1", "project_id": "P1", "date": "2026-01-15", "minutes": 120,
+                 "billable": True, "user_email": "alex@example.com"},
+                {"id": "T2", "project_id": "P1", "date": "2026-01-16", "minutes": 60,
+                 "billable": True, "user_email": "alex@example.com"},
+            ],
+        }
+        common = dict(
+            package_config=PACKAGE_CONFIG, account_aliases={"aliases": {}}, as_of=date(2026, 2, 1),
+        )
+        base = reconcile(copy.deepcopy(salesforce), copy.deepcopy(rocketlane), **common)
+        excluded = reconcile(
+            copy.deepcopy(salesforce), copy.deepcopy(rocketlane),
+            time_entry_exclusions={
+                "T1": {"signals": ["approval_unknown", "missing_activity", "missing_category"]},
+                "T2": {"signals": ["approval_unknown", "missing_activity", "missing_category"]},
+            },
+            **common,
+        )
+        for field in ("sold_hours", "billed_hours", "remaining_hours", "at_risk_hours", "overage_hours"):
+            self.assertEqual(
+                base["metrics"][field], excluded["metrics"][field],
+                f"{field} moved when an entry was excluded",
+            )
+        self.assertEqual(
+            len(base["accounts"][0]["entries"]), len(excluded["accounts"][0]["entries"])
+        )
+        # The evidence tier is the only thing allowed to move.
+        self.assertEqual(
+            "incomplete_time_or_project_metadata",
+            base["accounts"][0]["governance"]["dimensions"]["time_quality"]["reason_code"],
+        )
+        self.assertEqual(
+            "accepted_time_exceptions",
+            excluded["accounts"][0]["governance"]["dimensions"]["time_quality"]["reason_code"],
+        )
+
+    def test_a_new_problem_on_an_excluded_entry_reflags_it(self):
+        from hours_recon.evidence import _time_quality_dimension
+        accepted = {"1": {"signals": ["missing_activity"]}}
+        same = self._account([self._entry("1", activity_name="")])
+        self.assertEqual("T2", _time_quality_dimension(same, accepted)["tier"])
+        # The entry later gets rejected: a problem the operator never reviewed.
+        worse = self._account([self._entry("1", activity_name="", approval_status="REJECTED")])
+        result = _time_quality_dimension(worse, accepted)
+        self.assertEqual("T4", result["tier"])
+        self.assertEqual(1, result["details"]["reflagged_entries"])
+
+    def test_an_excluded_entry_fixed_at_source_earns_a_real_t1(self):
+        from hours_recon.evidence import _time_quality_dimension
+        fixed = self._account([self._entry("1")])
+        result = _time_quality_dimension(fixed, {"1": {"signals": ["missing_activity"]}})
+        self.assertEqual("T1", result["tier"])
+        self.assertEqual("complete_approved_time", result["reason_code"])
+
+    def test_excluding_every_entry_cannot_clear_a_project_level_problem(self):
+        from hours_recon.evidence import _time_quality_dimension
+        stale = [{"id": "P1", "name": "Delivery", "status": "planning", "start_date": None, "due_date": None}]
+        account = self._account(
+            [self._entry("1", activity_name=""), self._entry("2", activity_name="")], projects=stale
+        )
+        accepted = {"1": {"signals": ["missing_activity"]}, "2": {"signals": ["missing_activity"]}}
+        result = _time_quality_dimension(account, accepted)
+        self.assertEqual("T3", result["tier"])
+        self.assertEqual(1, result["details"]["stale_or_incomplete_projects"])
+
+    def test_an_account_with_no_time_is_unaffected_by_exclusions(self):
+        from hours_recon.evidence import _time_quality_dimension
+        empty = self._account([])
+        self.assertEqual(
+            _time_quality_dimension(empty)["reason_code"],
+            _time_quality_dimension(empty, {"1": {"signals": []}})["reason_code"],
+        )
+
+
+class TimeEntryExclusionStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.store = RemediationStore(Path(self.directory.name) / "remediation.sqlite3")
+        self.entries = [
+            {"entry_id": "5001", "entry_date": "2025-11-02", "signals": ["missing_activity"]},
+            {"entry_id": "5002", "entry_date": "2025-11-03", "signals": ["approval_pending"]},
+        ]
+
+    def _exclude(self, entries=None, scope_id="scope"):
+        return self.store.exclude_time_entries(
+            scope_id=scope_id, portfolio_id="portfolio", account_id="001ABC",
+            entries=entries if entries is not None else self.entries,
+            reason="Closed period; Rocketlane is read-only.", actor="nick",
+        )
+
+    def test_exclusions_survive_and_are_scope_isolated(self):
+        self._exclude()
+        active = self.store.active_time_entry_exclusions(scope_id="scope", portfolio_id="portfolio")
+        self.assertEqual({"5001", "5002"}, set(active))
+        self.assertEqual(["missing_activity"], active["5001"]["signals"])
+        # A different connector scope must never inherit another scope's exceptions.
+        self.assertEqual({}, self.store.active_time_entry_exclusions(scope_id="other", portfolio_id="portfolio"))
+
+    def test_restore_reverts_and_re_excluding_reactivates(self):
+        self._exclude()
+        self.assertEqual(1, self.store.restore_time_entries(
+            scope_id="scope", portfolio_id="portfolio", entry_ids=["5001"], actor="nick",
+        )["restored"])
+        self.assertEqual({"5002"}, set(self.store.active_time_entry_exclusions(scope_id="scope", portfolio_id="portfolio")))
+        self._exclude([self.entries[0]])
+        self.assertEqual({"5001", "5002"}, set(self.store.active_time_entry_exclusions(scope_id="scope", portfolio_id="portfolio")))
+
+    def test_revision_changes_on_every_mutation_and_never_repeats(self):
+        # The planner dedupes observations on retrieval_id. If restoring everything
+        # returned the original revision, the regression would be deduped away and the
+        # work queue could never reopen.
+        seen = [self.store.time_entry_exclusion_revision(scope_id="scope", portfolio_id="portfolio")]
+        self._exclude()
+        seen.append(self.store.time_entry_exclusion_revision(scope_id="scope", portfolio_id="portfolio"))
+        self.store.restore_time_entries(
+            scope_id="scope", portfolio_id="portfolio", entry_ids=["5001", "5002"], actor="nick",
+        )
+        seen.append(self.store.time_entry_exclusion_revision(scope_id="scope", portfolio_id="portfolio"))
+        self._exclude()
+        seen.append(self.store.time_entry_exclusion_revision(scope_id="scope", portfolio_id="portfolio"))
+        self.assertEqual(len(seen), len(set(seen)), f"revision repeated across states: {seen}")
+
+    def test_a_reason_and_at_least_one_entry_are_required(self):
+        with self.assertRaises(QueueValidationError):
+            self.store.exclude_time_entries(
+                scope_id="scope", portfolio_id="portfolio", account_id="001ABC",
+                entries=self.entries, reason="   ", actor="nick",
+            )
+        with self.assertRaises(QueueValidationError):
+            self.store.exclude_time_entries(
+                scope_id="scope", portfolio_id="portfolio", account_id="001ABC",
+                entries=[], reason="valid", actor="nick",
+            )
+
+
+class ExclusionQueueLifecycleTests(unittest.TestCase):
+    """The whole point: an accepted entry must leave the work queue and stay gone."""
+
+    @staticmethod
+    def _report(tier, reason):
+        """A report whose time_quality dimension carries the given tier.
+
+        The dimension must stay time_quality across every observation: the store
+        matches stored instances by account and dimension, so resolving through a
+        different dimension would leave the original instance untouched.
+        """
+        gaps = [] if tier in {"T1", "T2"} else [{
+            "dimension": "time_quality", "tier": tier, "reason_code": reason,
+            "summary": "Time evidence is incomplete.",
+            "recommended_action": "Correct required metadata.",
+            "refs": ["5001"], "details": {},
+        }]
+        report = queue_report(gaps, overall_tier=tier, current_tier=tier)
+        report["accounts"][0]["governance"]["dimensions"] = {
+            "time_quality": {
+                "tier": tier, "rank": int(tier[1:]), "reason_code": reason,
+                "summary": "Time evidence state.", "recommended_action": "Keep metadata complete.",
+                "refs": ["5001"], "details": {},
+            }
+        }
+        return report
+
+    def test_accepting_clears_the_queue_and_restoring_reopens_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = RemediationStore(Path(temporary) / "queue.sqlite3")
+            scope = dict(scope_id="scope", portfolio_id="local-default")
+
+            store.observe(
+                self._report("T3", "incomplete_time_or_project_metadata"),
+                retrieval_id="snap1", coverage_complete=True, **scope,
+            )
+            self.assertEqual(1, store.summary(**scope)["active_workstream_count"])
+
+            # Accepting entries changes derived evidence, not the snapshot. The service
+            # folds the exclusion revision into retrieval_id precisely so this lands.
+            store.exclude_time_entries(
+                account_id="001ABC",
+                entries=[{"entry_id": "5001", "entry_date": "2025-11-02", "signals": ["missing_activity"]}],
+                reason="Closed period.", actor="nick", **scope,
+            )
+            accepted_revision = store.time_entry_exclusion_revision(**scope)
+            store.observe(
+                self._report("T2", "accepted_time_exceptions"),
+                retrieval_id=f"snap1:x{accepted_revision}", coverage_complete=True, **scope,
+            )
+            self.assertEqual(0, store.summary(**scope)["active_workstream_count"])
+            self.assertEqual("governed", store.list_workstreams(**scope)[0]["status"])
+
+            # Re-observing the SAME snapshot must not resurrect the item.
+            store.observe(
+                self._report("T2", "accepted_time_exceptions"),
+                retrieval_id=f"snap2:x{accepted_revision}", coverage_complete=True, **scope,
+            )
+            self.assertEqual(0, store.summary(**scope)["active_workstream_count"])
+
+            store.restore_time_entries(entry_ids=["5001"], actor="nick", **scope)
+            restored_revision = store.time_entry_exclusion_revision(**scope)
+            self.assertNotEqual(accepted_revision, restored_revision)
+            store.observe(
+                self._report("T3", "incomplete_time_or_project_metadata"),
+                retrieval_id=f"snap3:x{restored_revision}", coverage_complete=True, **scope,
+            )
+            self.assertEqual(1, store.summary(**scope)["active_workstream_count"])
+            self.assertEqual("open", store.list_workstreams(**scope)[0]["status"])

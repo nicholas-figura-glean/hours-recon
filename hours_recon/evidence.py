@@ -300,19 +300,99 @@ def _project_linkage_dimension(
     return worst
 
 
-def _time_quality_dimension(account: Mapping[str, Any]) -> Dict[str, Any]:
-    entries = list(account.get("entries", []))
+def entry_quality_signals(
+    entry: Mapping[str, Any], project: Optional[Mapping[str, Any]] = None
+) -> List[str]:
+    """Name every data-quality problem on a single billable time entry.
+
+    This is the unit an operator can accept and exclude. Project-level problems
+    (missing lifecycle dates, planning status) are deliberately NOT included:
+    they belong to the project, so excluding entries can never clear them.
+    """
+    signals: List[str] = []
+    if not entry.get("id") or not entry.get("project_id") or not entry.get("date") or entry.get("billable") is not True:
+        signals.append("invalid_entry")
+    approval_status = str(entry.get("approval_status") or "").strip().upper()
+    if not approval_status:
+        signals.append("approval_unknown")
+    elif approval_status not in {"APPROVED", "APPROVED_WITH_CHANGES"}:
+        if approval_status in {"REJECTED", "DENIED", "DECLINED"}:
+            signals.append("approval_rejected")
+        else:
+            signals.append("approval_pending")
+    if not entry.get("activity_name"):
+        signals.append("missing_activity")
+    if not entry.get("category"):
+        signals.append("missing_category")
+    if not entry.get("user_id") and not entry.get("user_email"):
+        signals.append("missing_user")
+    if project:
+        start = project.get("start_date")
+        due = project.get("due_date")
+        entry_date = entry.get("date")
+        if entry_date and ((start and entry_date < start) or (due and entry_date > due)):
+            signals.append("outside_project_dates")
+    return signals
+
+
+def partition_excluded_entries(
+    entries: Sequence[Mapping[str, Any]],
+    projects: Sequence[Mapping[str, Any]],
+    exclusions: Optional[Mapping[str, Mapping[str, Any]]],
+) -> Dict[str, Any]:
+    """Split entries into retained and accepted-exception sets.
+
+    An exclusion only suppresses the problems it was reviewed against. If an entry
+    later develops a signal that was not in its snapshot, it returns to the retained
+    set so the new problem is flagged rather than silently inherited.
+    """
+    project_by_id = {str(item.get("id")): item for item in projects}
+    retained: List[Mapping[str, Any]] = []
+    excluded: List[Dict[str, Any]] = []
+    reflagged: List[Dict[str, Any]] = []
+    for entry in entries:
+        entry_id = str(entry.get("id") or "")
+        record = (exclusions or {}).get(entry_id)
+        signals = entry_quality_signals(entry, project_by_id.get(str(entry.get("project_id"))))
+        if not record:
+            retained.append(entry)
+            continue
+        if not signals:
+            # The source record was actually fixed, so the exclusion is moot. Treating
+            # it as retained lets the account earn a real T1 instead of being pinned at
+            # T2 by a stale acceptance.
+            retained.append(entry)
+            continue
+        accepted = set(record.get("signals") or [])
+        new_signals = sorted(set(signals) - accepted)
+        if new_signals:
+            retained.append(entry)
+            reflagged.append({"entry_id": entry_id, "new_signals": new_signals})
+            continue
+        excluded.append({"entry_id": entry_id, "date": entry.get("date"), "signals": signals})
+    return {"retained": retained, "excluded": excluded, "reflagged": reflagged}
+
+
+def _time_quality_dimension(
+    account: Mapping[str, Any],
+    exclusions: Optional[Mapping[str, Mapping[str, Any]]] = None,
+) -> Dict[str, Any]:
+    all_entries = list(account.get("entries", []))
     projects = list(account.get("projects", []))
+    split = partition_excluded_entries(all_entries, projects, exclusions)
+    entries = list(split["retained"])
+    excluded_entries = split["excluded"]
+    reflagged_entries = split["reflagged"]
     project_by_id = {str(item.get("id")): item for item in projects}
     sold = float(account.get("sold_hours", 0) or 0)
     disposition = str(account.get("entitlement_disposition") or "").strip().lower()
-    if not entries and sold <= 0 and disposition in {"none", "not_expected", "not_applicable", "ended"}:
+    if not all_entries and sold <= 0 and disposition in {"none", "not_expected", "not_applicable", "ended"}:
         return _dimension(
             "T1", "time_quality_not_applicable",
             "No Rocketlane time is required for the governed no-entitlement disposition.",
             "Keep the disposition and effective dates current.", refs=[account.get("id")],
         )
-    if not entries:
+    if not all_entries:
         completed_without_time = any(str(item.get("status") or "").lower() == "completed" for item in projects)
         if completed_without_time:
             return _dimension(
@@ -362,9 +442,19 @@ def _time_quality_dimension(account: Mapping[str, Any]) -> Dict[str, Any]:
             entry_date = entry.get("date")
             if entry_date and ((start and entry_date < start) or (due and entry_date > due)):
                 outside_dates += 1
-            status = str(project.get("status") or "").lower()
-            if status in {"proposed", "in planning", "planning"} or not start or not due:
-                stale_projects.add(str(project.get("id")))
+
+    # Project staleness is a property of the project, not of any entry, so it is
+    # scored over the unfiltered set. Excluding every entry on a project must never
+    # make an incomplete project look complete.
+    for entry in all_entries:
+        project = project_by_id.get(str(entry.get("project_id")))
+        if not project:
+            continue
+        start = project.get("start_date")
+        due = project.get("due_date")
+        status = str(project.get("status") or "").lower()
+        if status in {"proposed", "in planning", "planning"} or not start or not due:
+            stale_projects.add(str(project.get("id")))
 
     refs = [entry.get("id") for entry in entries]
     details = {
@@ -379,6 +469,13 @@ def _time_quality_dimension(account: Mapping[str, Any]) -> Dict[str, Any]:
         "outside_project_dates": outside_dates,
         "stale_or_incomplete_projects": len(stale_projects),
     }
+    if excluded_entries:
+        details["excluded_entries"] = len(excluded_entries)
+        details["excluded_entry_ids"] = [item["entry_id"] for item in excluded_entries]
+        details["total_entry_count"] = len(all_entries)
+    if reflagged_entries:
+        details["reflagged_entries"] = len(reflagged_entries)
+        details["reflagged_entry_ids"] = [item["entry_id"] for item in reflagged_entries]
     if invalid or approval_rejected:
         return _dimension(
             "T4", "invalid_time_evidence", "One or more time entries are structurally invalid or explicitly rejected.",
@@ -396,6 +493,16 @@ def _time_quality_dimension(account: Mapping[str, Any]) -> Dict[str, Any]:
             "Correct Rocketlane project lifecycle/dates and required time-entry metadata; document approval semantics.",
             refs=refs,
             details=details,
+        )
+    if excluded_entries:
+        # Governed, but never T1: T1 means the source data is genuinely clean, and
+        # here the operator accepted known-imperfect entries instead of fixing them.
+        return _dimension(
+            "T2", "accepted_time_exceptions",
+            f"Remaining billable time is complete; {len(excluded_entries)} older "
+            f"{'entry was' if len(excluded_entries) == 1 else 'entries were'} accepted as an exception.",
+            "Re-check the accepted entries if the source records ever become editable.",
+            refs=refs, details=details,
         )
     return _dimension(
         "T1", "complete_approved_time", "Billable time has complete identifiers, metadata, project dates, and approval evidence.",
@@ -483,6 +590,7 @@ def attach_governance(
     project_match_evidence: Optional[Mapping[str, Mapping[str, Any]]] = None,
     mode: str = "observe_only",
     source_coverage: Optional[Mapping[str, Any]] = None,
+    time_entry_exclusions: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Attach evidence tiers and governed/provisional shadow metrics in place."""
     project_evidence = project_match_evidence or {}
@@ -501,7 +609,7 @@ def attach_governance(
             "hours_mapping": _mapping_dimension(account),
             "service_period": _service_period_dimension(account),
             "project_linkage": _project_linkage_dimension(account, project_evidence),
-            "time_quality": _time_quality_dimension(account),
+            "time_quality": _time_quality_dimension(account, time_entry_exclusions),
         }, source_coverage)
         worst_rank = max(int(item["rank"]) for item in dimensions.values())
         overall = f"T{worst_rank}"
