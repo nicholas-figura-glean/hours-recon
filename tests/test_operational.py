@@ -246,7 +246,7 @@ class DashboardMarkupTests(unittest.TestCase):
 
     def test_source_action_editor_replaces_raw_json_but_keeps_the_placeholder_guard(self):
         html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-        self.assertIn("function fieldEditorRow(operationIndex, name, value, fieldIndex)", html)
+        self.assertIn("function fieldEditorRow(operationIndex, name, value, fieldIndex, valueLabel)", html)
         self.assertIn("function collectProposedFields(editor)", html)
         self.assertIn('data-field-name=', html)
         self.assertIn("data-source-operation-index=", html)
@@ -256,6 +256,13 @@ class DashboardMarkupTests(unittest.TestCase):
         self.assertIn("fields[name] = Number(raw)", html)
         self.assertIn("fields[name] = input.checked", html)
         self.assertNotIn("textarea class=\"execution-fields source-fields\"", html)
+        # Bulk cleanup targets lead with the human label; the ID stays as a subordinate
+        # locator, and record_ids remains the value the outbox writes against.
+        self.assertIn("function renderOperationTargets(operation)", html)
+        self.assertIn("operation.record_labels || {}", html)
+        self.assertIn("op-target-name", html)
+        self.assertIn("record_ids: action.record_ids || []", html)
+        self.assertNotIn("(operation.record_ids || []).join(', ')", html)
 
     def test_source_action_outbox_cli_and_skill_require_preflight_and_confirmation(self):
         script = (ROOT / "scripts" / "hours_recon_source_outbox.py").read_text(encoding="utf-8")

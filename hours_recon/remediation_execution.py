@@ -58,6 +58,70 @@ def _unique(values: Iterable[Any]) -> List[str]:
     return sorted({_safe_text(value, 240) for value in values if _safe_text(value, 240)})
 
 
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _short_date(value: Any) -> str:
+    """2026-02-20 -> 'Feb 20'. Falls back to the raw value if it is not a date."""
+    text = _safe_text(value, 40)
+    match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", text)
+    if not match:
+        return text
+    year, month, day = (int(part) for part in match.groups())
+    if not 1 <= month <= 12:
+        return text
+    return f"{_MONTHS[month - 1]} {day}, {year}"
+
+
+def _entry_label(entry: Mapping[str, Any]) -> str:
+    """'Feb 20, 2026 - Awaneendra Tiwari - 1h': enough to find the row in Rocketlane."""
+    person = _safe_text(entry.get("user_name") or entry.get("user_email"), 80)
+    hours = entry.get("hours")
+    parts = [part for part in (_short_date(entry.get("date")), person) if part]
+    if isinstance(hours, (int, float)) and hours:
+        rendered = f"{hours:g}".rstrip(".")
+        parts.append(f"{rendered}h")
+    activity = _safe_text(entry.get("activity_name"), 60)
+    if activity:
+        parts.append(activity)
+    return " · ".join(parts)
+
+
+def _record_labels(account: Mapping[str, Any]) -> Dict[str, str]:
+    """Human labels for every record ID this account can contribute to an operation.
+
+    A bare Rocketlane project or time-entry ID tells an operator nothing, and the
+    Salesforce Account ID written into externalReferenceId is equally opaque. The
+    IDs stay authoritative for the write; these are for the human reading the card.
+    """
+    labels: Dict[str, str] = {}
+    account_id = _safe_text(account.get("id"), 240)
+    account_name = _safe_text(account.get("name"), 180)
+    if account_id and account_name:
+        labels[account_id] = account_name
+    for project in account.get("projects", []):
+        project_id = _safe_text(project.get("id"), 240)
+        name = _safe_text(project.get("name"), 180)
+        if project_id and name:
+            labels[project_id] = name
+        customer_id = _safe_text(project.get("customer_id"), 240)
+        customer_name = _safe_text(project.get("customer_name"), 180)
+        if customer_id and customer_name:
+            # Distinguish the Rocketlane customer from the Salesforce account it maps to.
+            labels[customer_id] = f"{customer_name} (Rocketlane customer)"
+    for package in account.get("packages", []):
+        opportunity_id = _safe_text(package.get("opportunity_id"), 240)
+        name = _safe_text(package.get("opportunity_name") or package.get("name"), 180)
+        if opportunity_id and name:
+            labels[opportunity_id] = name
+    for entry in account.get("entries", []):
+        entry_id = _safe_text(entry.get("id"), 240)
+        label = _entry_label(entry)
+        if entry_id and label:
+            labels[entry_id] = label
+    return labels
+
+
 def _record_links(
     account: Mapping[str, Any],
     *,
@@ -261,13 +325,28 @@ def _operation(
     status: str,
     preflight: Sequence[str],
     limitation: str | None = None,
+    labels: Mapping[str, str] | None = None,
 ) -> Dict[str, Any]:
+    """record_ids stays the authoritative machine value: it is what the outbox writes
+    against. record_labels and field_value_labels are display-only companions."""
+    known = dict(labels or {})
+    identifiers = list(record_ids)
+    fields = dict(proposed_fields)
     return {
         "system": system,
         "tool": tool,
         "object": object_name,
-        "record_ids": list(record_ids),
-        "proposed_fields": dict(proposed_fields),
+        "record_ids": identifiers,
+        "record_labels": {
+            str(identifier): known[str(identifier)]
+            for identifier in identifiers if str(identifier) in known
+        },
+        "proposed_fields": fields,
+        "field_value_labels": {
+            name: known[str(value)]
+            for name, value in fields.items()
+            if isinstance(value, str) and str(value) in known
+        },
         "status": status,
         "requires_confirmation": True,
         "preflight": list(preflight),
@@ -278,7 +357,9 @@ def _operation(
 def _path_operations(
     path_id: str,
     records: Sequence[Mapping[str, Any]],
+    labels: Mapping[str, str] | None = None,
 ) -> tuple[List[Dict[str, Any]], List[str], List[str], str]:
+    known_labels = dict(labels or {})
     account_ids = _unique(record.get("account_id") for record in records)
     opportunity_ids = _unique(value for record in records for value in record.get("opportunity_ids", []))
     project_ids = _unique(value for record in records for value in record.get("project_ids", []))
@@ -314,6 +395,7 @@ def _path_operations(
                 # whole write. The Account ID alone earns T1 and is unambiguous
                 # no matter how many opportunities the account has.
                 operations.append(_operation(
+            labels=known_labels,
                     system="rocketlane", tool="update_project", object_name="Project",
                     record_ids=[str(project_id)],
                     proposed_fields={"externalReferenceId": record.get("account_id")},
@@ -327,6 +409,7 @@ def _path_operations(
             for record in records for customer_id in record.get("customer_ids", [])
         }
         operations.append(_operation(
+            labels=known_labels,
             system="hours_recon", tool=None, object_name="config/account_aliases.json",
             record_ids=customer_ids, proposed_fields={"rocketlane_customer_ids": mappings},
             status="local_review_required",
@@ -343,6 +426,7 @@ def _path_operations(
         both = path_id.endswith("both_explicit_boundaries.t1")
         required_inputs.append("Authoritative service start and end dates from the accepted agreement." if both else "One authoritative service boundary from the accepted agreement.")
         operations.append(_operation(
+            labels=known_labels,
             system="salesforce", tool="update_salesforce_opportunity", object_name="Opportunity",
             record_ids=opportunity_ids,
             proposed_fields={
@@ -356,6 +440,7 @@ def _path_operations(
         mode = "mcp_write"
         required_inputs.append("Confirmed contracted hours and the governed writable Salesforce field that stores them.")
         operations.append(_operation(
+            labels=known_labels,
             system="salesforce", tool="update_salesforce_opportunity", object_name="Opportunity",
             record_ids=opportunity_ids,
             proposed_fields={"Id": "<each listed Opportunity ID>", "governed explicit-hours field": "<confirmed contracted hours>"},
@@ -365,6 +450,7 @@ def _path_operations(
         mode = "delegated"
         required_inputs.append("Approved canonical ProductCode and hours-per-unit definition from the Salesforce product catalog owner.")
         operations.append(_operation(
+            labels=known_labels,
             system="salesforce", tool=None, object_name="Product / Opportunity Product",
             record_ids=opportunity_ids, proposed_fields={"ProductCode": "<approved canonical code>"},
             status="unsupported_write_delegate",
@@ -376,6 +462,7 @@ def _path_operations(
         mode = "mcp_write"
         required_inputs.append("Accepted Quote ID and confirmation of the governed approved/synced Quote relationship field.")
         operations.append(_operation(
+            labels=known_labels,
             system="salesforce", tool="update_salesforce_opportunity", object_name="Opportunity",
             record_ids=opportunity_ids,
             proposed_fields={"Id": "<each listed Opportunity ID>", "approved or synced Quote field": "<accepted Quote ID>"},
@@ -385,6 +472,7 @@ def _path_operations(
         mode = "delegated"
         required_inputs.append("Accepted entitlement, canonical Product ID, quantity, pricing, and service dates.")
         operations.append(_operation(
+            labels=known_labels,
             system="salesforce", tool=None, object_name="OpportunityLineItem",
             record_ids=opportunity_ids, proposed_fields={"canonical Opportunity Product": "<accepted entitlement values>"},
             status="unsupported_write_delegate", preflight=sf_preflight,
@@ -396,6 +484,7 @@ def _path_operations(
         if missing_activity_ids:
             required_inputs.append("Correct activity name for each listed Rocketlane time entry.")
             operations.append(_operation(
+            labels=known_labels,
                 system="rocketlane", tool="update_time_entry", object_name="Time Entry",
                 record_ids=missing_activity_ids,
                 proposed_fields={"activityName": "<confirmed activity for each entry>"},
@@ -404,6 +493,7 @@ def _path_operations(
         if project_ids:
             required_inputs.append("Authoritative project start/due dates or lifecycle status where project metadata is incomplete.")
             operations.append(_operation(
+            labels=known_labels,
                 system="rocketlane", tool="update_project", object_name="Project",
                 record_ids=project_ids,
                 proposed_fields={"startDate / dueDate / status": "<only confirmed corrections>"},
@@ -411,6 +501,7 @@ def _path_operations(
             ))
         if time_entry_ids:
             operations.append(_operation(
+            labels=known_labels,
                 system="rocketlane", tool=None, object_name="Time Entry approval workflow",
                 record_ids=time_entry_ids,
                 proposed_fields={"approvalStatus": "<submit or approve according to policy>"},
@@ -421,6 +512,7 @@ def _path_operations(
     elif path_id == "time_quality.restore_project_observability.t2":
         mode = "delegated"
         operations.append(_operation(
+            labels=known_labels,
             system="rocketlane", tool=None, object_name="Project",
             record_ids=project_ids, proposed_fields={"authoritative service project": "<identify or create and link>"},
             status="unsupported_write_delegate", preflight=rl_preflight,
@@ -430,6 +522,7 @@ def _path_operations(
     elif path_id == "source_coverage.complete_verified_pull.t2":
         mode = "mcp_refresh"
         operations.append(_operation(
+            labels=known_labels,
             system="salesforce_and_rocketlane", tool=None, object_name="Verified source retrieval",
             record_ids=account_ids, proposed_fields={"coverage": "complete account-isolated pull through the report date"},
             status="read_and_publish", preflight=[
@@ -443,6 +536,7 @@ def _path_operations(
     else:
         mode = "delegated"
         operations.append(_operation(
+            labels=known_labels,
             system="source_system", tool=None, object_name="Authoritative evidence",
             record_ids=account_ids, proposed_fields={"evidence": "<owner-confirmed correction>"},
             status="unsupported_write_delegate",
@@ -613,6 +707,7 @@ def build_execution_workspace(
     accounts = _account_index(report)
     path_id = str(path["id"])
     records: List[Dict[str, Any]] = []
+    label_index: Dict[str, str] = {}
     for instance in workstream.get("instances", []):
         account_id = str(instance.get("account_id") or "")
         account = accounts.get(account_id, {"id": account_id, "name": instance.get("account_name")})
@@ -635,6 +730,7 @@ def build_execution_workspace(
         record_links = _record_links(
             account, salesforce_base_url=salesforce_base, rocketlane_base_url=rocketlane_base,
         )
+        label_index.update(_record_labels(account))
         records.append({
             "account_id": account_id,
             "account_name": _safe_text(account.get("name") or instance.get("account_name") or account_id, 180),
@@ -645,6 +741,10 @@ def build_execution_workspace(
             "opportunity_ids": opportunity_ids,
             "opportunity_links": [link for link in record_links if link.get("kind") == "opportunity"],
             "project_ids": project_ids,
+            "project_labels": {
+                _safe_text(project.get("id"), 240): _safe_text(project.get("name"), 180)
+                for project in projects if project.get("id") and project.get("name")
+            },
             "customer_ids": customer_ids,
             "time_entry_ids": pending_ids,
             "missing_activity_entry_ids": _unique(entry.get("id") for entry in entries if not _safe_text(entry.get("activity_name"))),
@@ -652,7 +752,7 @@ def build_execution_workspace(
             "owner_suggestions": _owner_suggestions(account, path_id),
             "links": record_links,
         })
-    operations, required_inputs, limitations, execution_mode = _path_operations(path_id, records)
+    operations, required_inputs, limitations, execution_mode = _path_operations(path_id, records, label_index)
     primary_owner = str(path.get("primary_owner") or workstream.get("primary_owner") or "")
     recipient_role = _recipient_role(path_id, primary_owner)
     recipient_suggestions = list(dict.fromkeys(
@@ -694,6 +794,7 @@ def build_execution_workspace(
         "confirmation_required": True,
         "source_write_performed": False,
         "records": records,
+        "record_labels": label_index,
         "operations": operations,
         "required_inputs": _unique(required_inputs),
         "limitations": _unique(limitations),

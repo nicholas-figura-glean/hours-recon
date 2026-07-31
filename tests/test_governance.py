@@ -1436,3 +1436,79 @@ class ExclusionQueueLifecycleTests(unittest.TestCase):
             )
             self.assertEqual(1, store.summary(**scope)["active_workstream_count"])
             self.assertEqual("open", store.list_workstreams(**scope)[0]["status"])
+
+
+class RecordLabelTests(unittest.TestCase):
+    """A bare Rocketlane project or Salesforce account ID tells an operator nothing."""
+
+    def _report(self):
+        return {
+            "meta": {"as_of": "2026-07-22"},
+            "metrics": {},
+            "accounts": [{
+                "id": "001PZ00000MqN8jYAF", "name": "Orthogonal Networks (DBA Jellyfish)",
+                "sold_hours": 20, "billed_hours": 3, "remaining_hours": 17, "at_risk_hours": 0,
+                "expired_unused_hours": 0, "future_entitlement_hours": 0, "overage_hours": 0,
+                "packages": [{"opportunity_id": "O1", "opportunity_name": "Jellyfish Growth Package"}],
+                "projects": [{
+                    "id": "972680", "name": "Jellyfish | Implementation",
+                    "customer_id": "539816", "customer_name": "Jellyfish",
+                    "status": "completed", "start_date": "2026-01-01", "due_date": "2026-12-31",
+                }],
+                "entries": [{
+                    "id": "30229909", "project_id": "972680", "date": "2026-02-20",
+                    "hours": 1.0, "user_name": "Awaneendra Tiwari", "billable": True,
+                    "approval_status": "APPROVED", "category": "Working Session",
+                }],
+                "governance": {"overall_tier": "T3", "policy_version": "evidence-v1", "dimensions": {}, "gaps": []},
+            }],
+        }
+
+    def _workspace(self, path_id):
+        report = self._report()
+        workstream = {
+            "fingerprint": "hrw2_" + "0" * 64,
+            "selected_path_id": path_id,
+            "paths": [{"id": path_id, "title": "Fix", "target_tier": "T1", "primary_owner": "AISM"}],
+            "instances": [{
+                "account_id": "001PZ00000MqN8jYAF",
+                "account_name": "Orthogonal Networks (DBA Jellyfish)",
+                "dimension": path_id.split(".")[0], "reason_code": "x",
+                "evidence": {"refs": [], "details": {}},
+            }],
+        }
+        return build_execution_workspace(workstream, report)
+
+    def test_a_project_operation_names_the_project_and_the_account_it_points_at(self):
+        workspace = self._workspace("project_linkage.salesforce_account_id.t1")
+        operation = workspace["operations"][0]
+        # The ID is still exactly what gets written.
+        self.assertEqual(["972680"], operation["record_ids"])
+        self.assertEqual("001PZ00000MqN8jYAF", operation["proposed_fields"]["externalReferenceId"])
+        # ...and the operator can now tell what either number means.
+        self.assertEqual("Jellyfish | Implementation", operation["record_labels"]["972680"])
+        self.assertEqual(
+            "Orthogonal Networks (DBA Jellyfish)",
+            operation["field_value_labels"]["externalReferenceId"],
+        )
+
+    def test_a_time_entry_is_labelled_by_date_person_and_hours(self):
+        workspace = self._workspace("time_quality.complete_required_metadata.t1")
+        labels = workspace["record_labels"]
+        self.assertEqual("Feb 20, 2026 · Awaneendra Tiwari · 1h", labels["30229909"])
+        self.assertEqual("Jellyfish (Rocketlane customer)", labels["539816"])
+        self.assertEqual("Jellyfish Growth Package", labels["O1"])
+
+    def test_a_label_never_replaces_or_reorders_the_written_identifiers(self):
+        for path_id in ("project_linkage.salesforce_account_id.t1", "time_quality.complete_required_metadata.t1"):
+            for operation in self._workspace(path_id)["operations"]:
+                self.assertTrue(all(isinstance(item, str) for item in operation["record_ids"]))
+                # Labels are a lookup keyed by ID, so they cannot desynchronise the list.
+                self.assertTrue(set(operation["record_labels"]).issubset(set(operation["record_ids"])))
+
+    def test_an_unknown_or_malformed_date_degrades_to_the_raw_value(self):
+        from hours_recon.remediation_execution import _entry_label, _short_date
+        self.assertEqual("not-a-date", _short_date("not-a-date"))
+        self.assertEqual("2026-13-01", _short_date("2026-13-01"))
+        self.assertEqual("", _entry_label({}))
+        self.assertEqual("Alex", _entry_label({"user_name": "Alex"}))

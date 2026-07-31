@@ -428,7 +428,18 @@
     .execution-operation.unsupported { border-left-color: var(--artifact-warning); }
     .op-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
     .op-head h3 { font-size: 13.5px; }
-    .op-target { color: var(--artifact-faint); font-size: 12px; font-family: var(--artifact-mono); overflow-wrap: anywhere; }
+    .op-target-empty { color: var(--artifact-faint); font-size: 12px; }
+    .op-targets { display: grid; gap: 5px; }
+    .op-target-count { color: var(--artifact-muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; font-weight: 640; }
+    .op-targets ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
+    .op-targets li { display: flex; align-items: baseline; gap: 8px; justify-content: space-between; font-size: 12.5px; padding: 3px 0; border-bottom: 1px solid var(--artifact-border-soft); }
+    .op-targets li:last-child { border-bottom: 0; }
+    .op-target-name { color: var(--artifact-text); overflow-wrap: anywhere; }
+    .op-target-name.unnamed { color: var(--artifact-faint); font-style: italic; }
+    .op-targets code { color: var(--artifact-faint); font-family: var(--artifact-mono); font-size: 11px; flex: 0 0 auto; }
+    .op-target-more { color: var(--artifact-muted); font-size: 12px; font-style: italic; }
+    .field-input { display: grid; gap: 3px; }
+    .field-resolved { color: var(--artifact-accent); font-size: 11.5px; font-weight: 620; }
     /* Pre-checks are audit detail, not an instruction: keep them one click away. */
     .op-precheck > summary { cursor: pointer; color: var(--artifact-muted); font-size: 12px; font-weight: 600; list-style: none; }
     .op-precheck > summary::-webkit-details-marker { display: none; }
@@ -1443,7 +1454,23 @@
 
     // A placeholder such as <confirmed contracted hours> is a prompt, not a value.
     const PLACEHOLDER = /^<[^>]+>$/;
-    function fieldEditorRow(operationIndex, name, value, fieldIndex) {
+    // Bulk cleanup lists always lead with the human label. The ID stays visible but
+    // subordinate: it is how you find the record in Rocketlane or Salesforce.
+    function renderOperationTargets(operation) {
+      const ids = operation.record_ids || [];
+      if (!ids.length) return '<p class="op-target-empty">Records are identified during the pre-checks.</p>';
+      const labels = operation.record_labels || {};
+      const shown = ids.slice(0, 6);
+      const rest = ids.length - shown.length;
+      const rows = shown.map(id => {
+        const label = labels[id];
+        return `<li>${label ? `<span class="op-target-name">${escapeHtml(label)}</span>` : '<span class="op-target-name unnamed">Unnamed record</span>'}<code>${escapeHtml(String(id))}</code></li>`;
+      }).join('');
+      const more = rest > 0 ? `<li class="op-target-more">and ${rest} more ${rest === 1 ? 'record' : 'records'}</li>` : '';
+      return `<div class="op-targets"><p class="op-target-count">${plural(ids.length, 'record')}</p><ul>${rows}${more}</ul></div>`;
+    }
+
+    function fieldEditorRow(operationIndex, name, value, fieldIndex, valueLabel) {
       const id = `srcfield-${operationIndex}-${fieldIndex}`;
       const label = `<label for="${id}"><span class="field-key">${escapeHtml(name)}</span>${typeof value === 'string' && PLACEHOLDER.test(value) ? '<span class="field-hint">You need to supply this</span>' : '<span class="field-hint">Pre-filled from evidence</span>'}</label>`;
       if (typeof value === 'boolean') {
@@ -1457,7 +1484,10 @@
       }
       const text = String(value ?? '');
       const isPlaceholder = PLACEHOLDER.test(text);
-      return `<div class="field-row">${label}<input id="${id}" type="text" data-field-name="${escapeHtml(name)}" data-field-type="string" value="${isPlaceholder ? '' : escapeHtml(text)}" placeholder="${escapeHtml(isPlaceholder ? text.slice(1, -1) : '')}"></div>`;
+      // A raw ID is the correct value to write but tells the reader nothing, so name
+      // what it points at. The input still carries the literal ID.
+      const resolved = !isPlaceholder && valueLabel ? `<span class="field-resolved">${escapeHtml(valueLabel)}</span>` : '';
+      return `<div class="field-row">${label}<div class="field-input"><input id="${id}" type="text" data-field-name="${escapeHtml(name)}" data-field-type="string" value="${isPlaceholder ? '' : escapeHtml(text)}" placeholder="${escapeHtml(isPlaceholder ? text.slice(1, -1) : '')}">${resolved}</div></div>`;
     }
 
     function collectProposedFields(editor) {
@@ -1505,12 +1535,12 @@
       const operations = (workspace.operations || []).map((operation, operationIndex) => {
         const writeReady = supportedWriteTools.has(operation.tool);
         const unsupported = !writeReady || String(operation.status || '').includes('unsupported');
-        const records = (operation.record_ids || []).join(', ') || 'Found during pre-checks';
+        const targets = renderOperationTargets(operation);
         const entries = Object.entries(operation.proposed_fields || {});
         const fieldEditor = writeReady
-          ? `<div class="field-table" data-source-operation-index="${operationIndex}">${entries.map(([name, value], fieldIndex) => fieldEditorRow(operationIndex, name, value, fieldIndex)).join('')}</div>`
+          ? `<div class="field-table" data-source-operation-index="${operationIndex}">${entries.map(([name, value], fieldIndex) => fieldEditorRow(operationIndex, name, value, fieldIndex, (operation.field_value_labels || {})[name])).join('')}</div>`
           : `<pre class="execution-fields">${escapeHtml(JSON.stringify(operation.proposed_fields || {}, null, 2))}</pre>`;
-        return `<article class="execution-card execution-operation ${unsupported ? 'unsupported' : ''}"><div class="op-head"><h3>${escapeHtml(titleCase(operation.system))} · ${escapeHtml(operation.object)}</h3><span class="pill ${writeReady ? 'mcp' : ''}">${writeReady ? 'Glean writes this' : 'You or the owner'}</span></div><p class="op-target">${escapeHtml(records)}</p>${fieldEditor}<details class="op-precheck"><summary>Pre-checks Glean runs first</summary>${executionList(operation.preflight || [])}</details>${operation.limitation ? `<p class="source-note"><strong>Limit:</strong> ${escapeHtml(operation.limitation)}</p>` : ''}</article>`;
+        return `<article class="execution-card execution-operation ${unsupported ? 'unsupported' : ''}"><div class="op-head"><h3>${escapeHtml(titleCase(operation.system))} · ${escapeHtml(operation.object)}</h3><span class="pill ${writeReady ? 'mcp' : ''}">${writeReady ? 'Glean writes this' : 'You or the owner'}</span></div>${targets}${fieldEditor}<details class="op-precheck"><summary>Pre-checks Glean runs first</summary>${executionList(operation.preflight || [])}</details>${operation.limitation ? `<p class="source-note"><strong>Limit:</strong> ${escapeHtml(operation.limitation)}</p>` : ''}</article>`;
       }).join('') || '<div class="execution-card">There is no concrete change to propose from the current evidence.</div>';
       const recordCards = (workspace.records || []).map(record => {
         const links = (record.links || []).map(link => `<li><a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.label)}</a></li>`).join('');
