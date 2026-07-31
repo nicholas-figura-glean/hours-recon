@@ -106,9 +106,16 @@ class DashboardMarkupTests(unittest.TestCase):
         self.assertIn("function applyRemediationAction(button)", html)
         self.assertIn("The weakest check sets the account status.", html)
         self.assertIn("Governed ${fmt(split.governed)}h · Provisional ${fmt(split.provisional)}h", html)
-        self.assertIn("Ways to fix this", html)
+        self.assertIn("Other ways to fix this", html)
         self.assertIn("Next steps", html)
-        self.assertIn("Select and open next steps", html)
+        self.assertIn("Use this instead", html)
+        # The chosen fix is one bar with one button; alternates collapse behind a
+        # disclosure, and no path renders its step list inline any more.
+        self.assertIn('<div class="fix-bar">', html)
+        self.assertIn('data-remediation-action="prepare_execution" type="button">Open next steps<', html)
+        self.assertNotIn('class="path-steps"', html)
+        self.assertNotIn('class="path-list"', html)
+        self.assertNotIn('class="planner-summary"', html)
         self.assertIn("data-remediation-action=\"prepare_execution\"", html)
         self.assertIn("data-remediation-action=\"select_path\"", html)
         self.assertIn("function renderExecutionWorkspace(workspace, workstream)", html)
