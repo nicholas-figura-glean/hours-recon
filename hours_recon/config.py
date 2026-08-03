@@ -6,7 +6,7 @@ import json
 import os
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -70,11 +70,29 @@ def binding_freshness(bindings: Mapping[str, Any], today: Optional[date] = None)
     required = (
         ("salesforce", "mcp_server"),
         ("salesforce", "account_aiom_field"),
+        ("salesforce", "quote_subscription_start_field"),
+        ("salesforce", "quote_subscription_end_field"),
         ("rocketlane", "mcp_server"),
+        ("rocketlane", "project_search_filter_key"),
     )
     for section, key in required:
         if not str((bindings.get(section) or {}).get(key) or "").strip():
             return {"fresh": False, "reason": f"bindings are missing {section}.{key}"}
+    rejected = _rejected_binding_fields(bindings)
+    if rejected:
+        # A pinned field the source rejected is wrong *now*, regardless of age.
+        # Time-based TTL alone once reported "fresh" while three pinned values
+        # were invalid, which let a bad pull look like a configuration hit.
+        return {
+            "fresh": False,
+            "age_days": age_days,
+            "rejected_fields": rejected,
+            "reason": (
+                "bindings pin field names the source rejected: "
+                + ", ".join(rejected)
+                + "; rediscover before reuse"
+            ),
+        }
     if age_days > ttl_days:
         return {
             "fresh": False,
@@ -88,6 +106,41 @@ def binding_freshness(bindings: Mapping[str, Any], today: Optional[date] = None)
         "expires_on": (verified_on + timedelta(days=ttl_days)).isoformat(),
         "reason": "pinned bindings are within TTL",
     }
+
+
+def _rejected_binding_fields(bindings: Mapping[str, Any]) -> List[str]:
+    """Return pinned field names known to be rejected by the live source.
+
+    ``binding_freshness`` is pure and does no network I/O, so it cannot probe
+    Salesforce itself. Instead the refresh agent records any ``INVALID_FIELD``
+    rejection under ``salesforce.rejected_fields``, and a binding carrying a
+    known-bad pin can never report fresh again until it is corrected. This is
+    what closes the false-green gap: previously a pin could be wrong yet inside
+    TTL, and nothing failed until the query itself errored mid-refresh.
+
+    Any field listed in ``known_invalid_fields`` that is still pinned as an
+    active value is also reported, which catches a regression that re-adds a
+    field the org does not have.
+    """
+    salesforce = bindings.get("salesforce") or {}
+    rejected: List[str] = []
+    for name in salesforce.get("rejected_fields") or []:
+        text = str(name or "").strip()
+        if text and text not in rejected:
+            rejected.append(text)
+    known_invalid = {
+        str(name or "").strip()
+        for name in (salesforce.get("known_invalid_fields") or [])
+        if str(name or "").strip()
+    }
+    if known_invalid:
+        for key, value in salesforce.items():
+            if not key.endswith("_field"):
+                continue
+            text = str(value or "").strip()
+            if text and text in known_invalid and text not in rejected:
+                rejected.append(text)
+    return rejected
 
 
 def settings() -> Dict[str, Any]:

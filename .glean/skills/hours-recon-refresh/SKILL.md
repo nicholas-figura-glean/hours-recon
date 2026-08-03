@@ -35,28 +35,53 @@ restart with the new date.
 In one parallel block:
 
 - Read `config/mcp_bindings.json`, `config/packages.json`, and `config/account_aliases.json`.
-- Call Salesforce `getUserInfo` and Rocketlane `get_my_profile`.
+- Verify Salesforce identity and org, and call Rocketlane `get_my_profile`.
 
 `config/mcp_bindings.json` pins the MCP server IDs, tool names, the Account AIOM
-field (`AIOM__c`), and the quote field API names. Reuse them. Check freshness
-with `hours_recon.config.binding_freshness`.
+field (`AIOM__c`), the quote field API names, and the quote subscription-window
+field names. Reuse them. Check freshness with `hours_recon.config.binding_freshness`,
+which now fails when a pinned field appears in `rejected_fields` or re-pins a
+`known_invalid_fields` entry, not only when the TTL lapses.
+
+The Salesforce connector exposes **no `getUserInfo` tool**. Verify identity with
+two cheap queries instead, issued in the same parallel block:
+
+```sql
+SELECT Id, Name, Email FROM User WHERE Email = '<requester email>' LIMIT 1
+SELECT Id, Name FROM Organization LIMIT 1
+```
+
+The returned org ID must equal the `organization_id` in the bindings and the
+Salesforce half of `scope_id`.
 
 **Only rediscover when** `binding_freshness` reports not fresh, the file is
 missing, a pinned field is rejected by the source, or the user asks for a forced
 rediscovery. Rediscovery means `glean_find_skills` for the Salesforce and
-Rocketlane skills, reading their schemas, and `getObjectSchema` on Account to
-confirm the AIOM field by API name, label, and whether it references `User`.
-Never guess a custom field. After a successful rediscovery, update
-`config/mcp_bindings.json` and set `verified_on` to today.
+Rocketlane skills, reading their schemas, and using `salesforce_context_selector`
+on Account to confirm the AIOM field by API name and label. Never guess a custom
+field. After a successful rediscovery, update `config/mcp_bindings.json` and set
+`verified_on` to today.
+
+`salesforce_context_selector` returns a **filtered** field list: it omits real
+fields, including `OpportunityLineItem.ServiceDate`. Never treat its output as
+proof that a field is absent. Confirm absence with a one-row probe query, or
+enumerate custom fields authoritatively with:
+
+```sql
+SELECT FIELDS(CUSTOM) FROM <Object> LIMIT 1
+```
+
+When a probe returns `INVALID_FIELD`, append the field name to
+`salesforce.rejected_fields` in the bindings so freshness fails closed.
 
 Skipping the Account describe is the point: it is several hundred fields, and
 pulling it into context slows every later turn in the run.
 
 **Scope verification is never skipped.** Corroborate `scope_id` against the live
-connector identity returned by `getUserInfo` (org ID) and `get_my_profile`
-(workspace). Pinned bindings remove discovery round trips, not verification. Set
-`meta.scope_verified: true` only after that corroboration; string presence in the
-bindings file is not verification.
+connector identity returned by the `User`/`Organization` queries (org ID) and
+`get_my_profile` (workspace). Pinned bindings remove discovery round trips, not
+verification. Set `meta.scope_verified: true` only after that corroboration; string
+presence in the bindings file is not verification.
 
 ### 1. Salesforce, batched — 2 turns
 
@@ -77,13 +102,18 @@ Do **not** loop over accounts. Three queries cover the whole portfolio.
           Approved_Quote__c, Ruby__PrimaryQuote__c,
           (SELECT Id, Quantity, UnitPrice, Product2Id, Product2.Name,
                   Product2.ProductCode, PricebookEntryId, PricebookEntry.UnitPrice,
-                  ServiceDate, EndDate
+                  ServiceDate
            FROM OpportunityLineItems)
    FROM Opportunity
    WHERE StageName = 'Closed Won' AND CloseDate <= <report_date>
      AND AccountId IN (<all account ids>)
    ORDER BY CloseDate ASC NULLS LAST
    ```
+
+   `OpportunityLineItem` in this org has **no end-date field**. Both `EndDate`
+   and `Service_End_Date__c` return `INVALID_FIELD`, and one bad field fails the
+   entire batched query, so line items carry `ServiceDate` only and the window
+   end is derived downstream by inference. Do not add `EndDate` back.
 
    `StageName` belongs in the `WHERE` clause only. Do not select it, or any
    other field the normalizer does not read; see the field list below.
@@ -94,15 +124,23 @@ Do **not** loop over accounts. Three queries cover the whole portfolio.
 
    ```sql
    SELECT Id, QuoteId, Quantity, UnitPrice, ListPrice, Product2Id, Product2.Name,
-          Product2.ProductCode, PricebookEntryId, ServiceDate, EndDate
+          Product2.ProductCode, PricebookEntryId, ServiceDate
    FROM QuoteLineItem WHERE QuoteId IN (<those quote ids>)
 
-   SELECT Id, Ruby__StartDate__c, Ruby__EndDate__c
+   SELECT Id, Ruby__SubscriptionStartDate__c, Ruby__SubscriptionEndDate__c
    FROM Quote WHERE Id IN (<those quote ids>)
    ```
 
    The quote window is only used so a quote line with no explicit dates can
    inherit its subscription period. Quote records are never emitted.
+
+   This matters more than it looks: real `QuoteLineItem.ServiceDate` values are
+   `null`, so the quote window is the **only** source of a service period for a
+   quote-fallback package. The field names are
+   `Ruby__SubscriptionStartDate__c` / `Ruby__SubscriptionEndDate__c`;
+   `Ruby__StartDate__c`, `Ruby__EndDate__c`, and `StartDate` do not exist on
+   `Quote`. Getting these wrong silently produces packages with no window and
+   understates expiration risk rather than raising an error.
 
 Queries 1 and 2 are dependent; 2 and 3 are dependent.
 
@@ -135,7 +173,11 @@ Rocketlane has no join language, so these stay separate calls — but they are
 independent, so batch them into single blocks.
 
 1. **One block:** search projects for every account name and every configured
-   alias, archived included. All searches go in one parallel block.
+   alias, archived included. All searches go in one parallel block. Use
+   `get_projects` with `params.filter.projectName` and
+   `params.filter.includeArchive = true`. The filter key is **`projectName`**; a
+   `name` key is ignored and returns the unfiltered project list, which looks
+   like a successful match but is not one.
 2. **One block:** retrieve every candidate project by ID with all fields.
 3. **One block:** retrieve billable time entries through `report_date` for every
    matched project, all contributors. Follow every page token.

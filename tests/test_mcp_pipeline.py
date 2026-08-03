@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import tempfile
 import unittest
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 from hours_recon.config import ROOT, binding_freshness, load_json, load_json_optional
@@ -416,8 +416,14 @@ class NormalizationTests(unittest.TestCase):
     def test_quote_lines_still_inherit_the_quote_service_window(self):
         raw = raw_pull()
         # Strip the line's own dates so inheritance is the only source.
+        # Field API names must match the org: this Salesforce instance exposes
+        # Ruby__SubscriptionStartDate__c / Ruby__SubscriptionEndDate__c. The
+        # previously used Ruby__StartDate__c / Ruby__EndDate__c do not exist and
+        # made this test pass against a shape the source rejects.
         raw["salesforce"]["quote_records"] = [{
-            "Id": "0Q0APPROVED", "Ruby__StartDate__c": "2026-01-01", "Ruby__EndDate__c": "2026-12-31",
+            "Id": "0Q0APPROVED",
+            "Ruby__SubscriptionStartDate__c": "2026-01-01",
+            "Ruby__SubscriptionEndDate__c": "2026-12-31",
         }]
         snapshot = build_snapshot(raw)
         fallback = next(
@@ -429,6 +435,44 @@ class NormalizationTests(unittest.TestCase):
         # And the opportunity window is derived from those line dates.
         self.assertEqual(fallback["service_start_date"], "2026-01-01")
         self.assertEqual(fallback["service_end_date"], "2026-12-31")
+
+    def test_legacy_quote_window_field_names_do_not_resolve(self):
+        """Guard the exact regression that shipped a window-less snapshot.
+
+        Live QuoteLineItems carry ServiceDate = null, so if the quote window
+        field names are wrong the fallback package silently ends up with no
+        service period at all instead of failing.
+        """
+        raw = raw_pull()
+        raw["salesforce"]["quote_records"] = [{
+            "Id": "0Q0APPROVED", "Ruby__StartDate__c": "2026-01-01", "Ruby__EndDate__c": "2026-12-31",
+        }]
+        snapshot = build_snapshot(raw)
+        fallback = next(
+            item for item in snapshot["salesforce"]["opportunities"]
+            if item["line_item_source"] == "approved_quote"
+        )
+        self.assertIsNone(fallback["line_items"][0]["service_end_date"])
+
+    def test_opportunity_line_item_end_date_field_is_not_requested(self):
+        """OpportunityLineItem has no end-date field in this org.
+
+        Selecting EndDate fails the entire batched opportunity query with
+        INVALID_FIELD, so the name must not reappear in the pinned bindings or
+        the skill's query template.
+        """
+        bindings = load_json_optional(ROOT / "config" / "mcp_bindings.json")
+        salesforce = bindings["salesforce"]
+        self.assertIsNone(salesforce["line_item_service_end_field"])
+        self.assertIn("EndDate", salesforce["known_invalid_fields"])
+        skill = (ROOT / ".glean" / "skills" / "hours-recon-refresh" / "SKILL.md").read_text()
+        self.assertNotIn("ServiceDate, EndDate", skill)
+        # The Quote window query must select the field names the org actually has.
+        self.assertIn(
+            "SELECT Id, Ruby__SubscriptionStartDate__c, Ruby__SubscriptionEndDate__c",
+            skill,
+        )
+        self.assertNotIn("SELECT Id, Ruby__StartDate__c", skill)
 
     def test_project_external_reference_is_promoted_to_account_id(self):
         snapshot = build_snapshot()
@@ -653,14 +697,67 @@ class BindingsTests(unittest.TestCase):
         base = {
             "schema_version": 1,
             "ttl_days": 7,
-            "salesforce": {"mcp_server": "a", "account_aiom_field": "AIOM__c"},
-            "rocketlane": {"mcp_server": "b"},
+            "salesforce": {
+                "mcp_server": "a",
+                "account_aiom_field": "AIOM__c",
+                "quote_subscription_start_field": "Ruby__SubscriptionStartDate__c",
+                "quote_subscription_end_field": "Ruby__SubscriptionEndDate__c",
+            },
+            "rocketlane": {"mcp_server": "b", "project_search_filter_key": "projectName"},
         }
         fresh = dict(base, verified_on=(today - timedelta(days=3)).isoformat())
         stale = dict(base, verified_on=(today - timedelta(days=30)).isoformat())
         assert binding_freshness(fresh, today)["fresh"] is True
         assert binding_freshness(stale, today)["fresh"] is False
         assert "TTL" in binding_freshness(stale, today)["reason"]
+
+    def test_rejected_field_defeats_ttl_freshness(self):
+        """A pinned field the source rejected is wrong now, not in seven days.
+
+        The original failure mode: verified_on was inside TTL and freshness
+        reported green while three pinned field names were invalid.
+        """
+        today = _today()
+        bindings = {
+            "schema_version": 1,
+            "ttl_days": 7,
+            "verified_on": today.isoformat(),
+            "salesforce": {
+                "mcp_server": "a",
+                "account_aiom_field": "AIOM__c",
+                "quote_subscription_start_field": "Ruby__SubscriptionStartDate__c",
+                "quote_subscription_end_field": "Ruby__SubscriptionEndDate__c",
+                "rejected_fields": ["Ruby__StartDate__c"],
+            },
+            "rocketlane": {"mcp_server": "b", "project_search_filter_key": "projectName"},
+        }
+        status = binding_freshness(bindings, today)
+        assert status["fresh"] is False
+        assert "Ruby__StartDate__c" in status["reason"]
+
+    def test_repinning_a_known_invalid_field_is_not_fresh(self):
+        today = _today()
+        bindings = {
+            "schema_version": 1,
+            "ttl_days": 7,
+            "verified_on": today.isoformat(),
+            "salesforce": {
+                "mcp_server": "a",
+                "account_aiom_field": "AIOM__c",
+                "quote_subscription_start_field": "Ruby__StartDate__c",
+                "quote_subscription_end_field": "Ruby__SubscriptionEndDate__c",
+                "known_invalid_fields": ["Ruby__StartDate__c"],
+            },
+            "rocketlane": {"mcp_server": "b", "project_search_filter_key": "projectName"},
+        }
+        status = binding_freshness(bindings, today)
+        assert status["fresh"] is False
+        assert "Ruby__StartDate__c" in status["rejected_fields"]
+
+    def test_active_bindings_file_is_fresh_and_has_no_rejected_pins(self):
+        bindings = load_json_optional(ROOT / "config" / "mcp_bindings.json")
+        status = binding_freshness(bindings, date.fromisoformat(bindings["verified_on"]))
+        assert status["fresh"] is True, status["reason"]
 
     def test_bindings_missing_required_keys_are_not_fresh(self):
         today = _today()

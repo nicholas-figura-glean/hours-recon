@@ -186,7 +186,11 @@ def _normalize_opportunity_line(raw: Mapping[str, Any]) -> Dict[str, Any]:
         "unit_price": _number(record.get("UnitPrice")),
         "list_price": _number(pricebook.get("UnitPrice") or record.get("ListPrice")),
         "service_start_date": _text(record.get("ServiceDate")),
-        "service_end_date": _text(record.get("EndDate") or record.get("Service_End_Date__c")),
+        # This org's OpportunityLineItem exposes no end-date field: both EndDate
+        # and Service_End_Date__c are rejected with INVALID_FIELD, so the window
+        # end is left empty here and derived downstream by inference. The lookup
+        # is kept tolerant for orgs that do expose a custom end date.
+        "service_end_date": _first_text(record, ("Service_End_Date__c",)),
         "quote_id": None,
     }
 
@@ -205,8 +209,8 @@ def _normalize_quote_line(raw: Mapping[str, Any], *, source: str) -> Dict[str, A
         "quantity": _number(record.get("Quantity")) if record.get("Quantity") is not None else 1,
         "unit_price": _number(record.get("UnitPrice")),
         "list_price": _number(record.get("ListPrice") or pricebook.get("UnitPrice")),
-        "service_start_date": _text(record.get("ServiceDate") or record.get("Service_Start_Date__c")),
-        "service_end_date": _text(record.get("EndDate") or record.get("Service_End_Date__c")),
+        "service_start_date": _first_text(record, ("ServiceDate", "Service_Start_Date__c")),
+        "service_end_date": _first_text(record, ("Service_End_Date__c",)),
         "quote_id": _identifier(record.get("QuoteId")),
     }
 
@@ -334,7 +338,7 @@ def normalize_opportunities(
     return opportunities
 
 
-def normalize_quotes(records: Any) -> List[Dict[str, Any]]:
+def normalize_quotes(records: Any, *, start_field: str = "", end_field: str = "") -> List[Dict[str, Any]]:
     """Normalize quotes for internal service-period inheritance only.
 
     Nothing downstream reads a quote record, so quotes are not emitted into the
@@ -343,6 +347,11 @@ def normalize_quotes(records: Any) -> List[Dict[str, Any]]:
     """
     quotes: List[Dict[str, Any]] = []
     seen: set = set()
+    # Field API names are binding-driven. This org uses
+    # Ruby__SubscriptionStartDate__c / Ruby__SubscriptionEndDate__c; the literals
+    # below are only a last-resort fallback for orgs that differ.
+    start_candidates = [f for f in (start_field, "Ruby__SubscriptionStartDate__c") if f]
+    end_candidates = [f for f in (end_field, "Ruby__SubscriptionEndDate__c") if f]
     for raw in _records(records):
         record = _strip_attributes(_mapping(raw))
         quote_id = _identifier(record.get("Id"))
@@ -351,11 +360,20 @@ def normalize_quotes(records: Any) -> List[Dict[str, Any]]:
         seen.add(quote_id)
         quotes.append({
             "id": quote_id,
-            "subscription_start_date": _text(record.get("Ruby__StartDate__c") or record.get("StartDate")),
-            "subscription_end_date": _text(record.get("Ruby__EndDate__c") or record.get("EndDate")),
+            "subscription_start_date": _first_text(record, start_candidates),
+            "subscription_end_date": _first_text(record, end_candidates),
         })
     quotes.sort(key=lambda item: str(item.get("id")))
     return quotes
+
+
+def _first_text(record: Mapping[str, Any], field_names: Sequence[str]) -> Optional[str]:
+    """Return the first non-empty value among candidate field API names."""
+    for field_name in field_names:
+        value = _text(record.get(field_name))
+        if value:
+            return value
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -673,7 +691,11 @@ def normalize_raw_pull(
 
     aiom_field = _text(raw_sf.get("aiom_field")) or _text(sf_binding.get("account_aiom_field")) or ""
     accounts = normalize_accounts(raw_sf.get("account_records") or [])
-    quotes = normalize_quotes(raw_sf.get("quote_records") or [])
+    quotes = normalize_quotes(
+        raw_sf.get("quote_records") or [],
+        start_field=_text(sf_binding.get("quote_subscription_start_field")) or "",
+        end_field=_text(sf_binding.get("quote_subscription_end_field")) or "",
+    )
     opportunities = normalize_opportunities(
         raw_sf.get("opportunity_records") or [],
         raw_sf.get("quote_line_records") or [],

@@ -10,16 +10,24 @@
     "rejected by the source, or when the user asks for a forced rediscovery."
   ],
   "ttl_days": 7,
-  "verified_on": "2026-07-31",
+  "verified_on": "2026-08-03",
   "scope_id": "salesforce:00D4S000000Ghf0UAC|rocketlane:glean.rocketlane.com",
   "salesforce": {
-    "mcp_server": "08595c5e35ed4a49a51089a713d8c111",
+    "mcp_server": "4691eed7084040a0b2337dff599045eb",
     "organization_id": "00D4S000000Ghf0UAC",
     "tools": {
-      "user_info": "getUserInfo",
-      "object_schema": "getObjectSchema",
-      "soql": "soqlQuery"
+      "soql": "salesforce_search_with_soql",
+      "object_schema": "salesforce_context_selector"
     },
+    "_tools_comment": [
+      "This connector exposes no getUserInfo equivalent. Verify identity with",
+      "'SELECT Id, Name, Email FROM User WHERE Email = <requester>' and the org with",
+      "'SELECT Id, Name FROM Organization LIMIT 1'.",
+      "salesforce_context_selector returns a FILTERED field list that omits real",
+      "fields (it hides OpportunityLineItem.ServiceDate), so never treat its output",
+      "as proof a field is absent. Confirm absence with a probe SOQL, or enumerate",
+      "custom fields with 'SELECT FIELDS(CUSTOM) FROM <Object> LIMIT 1'."
+    ],
     "account_aiom_field": "AIOM__c",
     "account_aiom_field_label": "AIOM",
     "opportunity_approved_quote_field": "Approved_Quote__c",
@@ -27,7 +35,37 @@
     "opportunity_service_start_field": null,
     "opportunity_service_end_field": null,
     "entitlement_disposition_field": null,
-    "account_schema_verified_on": "2026-07-31"
+    "line_item_service_start_field": "ServiceDate",
+    "line_item_service_end_field": null,
+    "_line_item_comment": [
+      "This org's OpportunityLineItem has NO end-date field. Both 'EndDate' and",
+      "'Service_End_Date__c' are rejected with INVALID_FIELD, so line items carry a",
+      "start date only and the service window end is derived by inference.",
+      "Do not add EndDate back to the line-item subquery; it fails the whole query."
+    ],
+    "quote_subscription_start_field": "Ruby__SubscriptionStartDate__c",
+    "quote_subscription_end_field": "Ruby__SubscriptionEndDate__c",
+    "known_invalid_fields": [
+      "EndDate",
+      "Service_End_Date__c",
+      "Ruby__StartDate__c",
+      "Ruby__EndDate__c",
+      "StartDate"
+    ],
+    "rejected_fields": [],
+    "_rejected_fields_comment": [
+      "Append any field API name the source rejects with INVALID_FIELD. A binding",
+      "listing a rejected field can never report fresh, even inside its TTL.",
+      "known_invalid_fields are names confirmed absent in this org on 2026-08-03;",
+      "re-pinning one of them to an active *_field binding fails freshness."
+    ],
+    "_quote_comment": [
+      "Verified 2026-08-03 via FIELDS(CUSTOM) on Quote. The previously pinned",
+      "'Ruby__StartDate__c' / 'Ruby__EndDate__c' do not exist on Quote in this org.",
+      "These windows matter: quote-fallback QuoteLineItems have ServiceDate = null,",
+      "so without them a quote-fallback package has no service period at all."
+    ],
+    "account_schema_verified_on": "2026-08-03"
   },
   "rocketlane": {
     "mcp_server": "6ff81327937a45b2b73de0c4638c7046",
@@ -36,6 +74,14 @@
       "profile": "get_my_profile",
       "projects": "get_projects",
       "time_entries": "get_time_entries"
-    }
+    },
+    "project_search_filter_key": "projectName",
+    "project_search_include_archive_key": "includeArchive",
+    "time_entry_project_filter_key": "projectId",
+    "_filter_comment": [
+      "get_projects name filtering uses filter.projectName. A 'name' key is ignored",
+      "and silently returns the unfiltered project list, which looks like a match.",
+      "Always pass filter.includeArchive = true so archived projects are searched."
+    ]
   }
 }
