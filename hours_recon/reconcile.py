@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple
 
+from .consumption import attach_consumption
 from .dates import monday_of, parse_date
 from .evidence import attach_governance
 from .inference import infer_packages
@@ -226,6 +227,9 @@ def reconcile(
         "exceptions": sorted(exceptions, key=lambda item: (item.get("type", ""), item.get("account_name") or item.get("rocketlane_customer") or "")),
     }
     attach_attention(report)
+    # Percentages are derived from the hours above, never used to compute them,
+    # so allocation and every existing metric stay byte-identical.
+    attach_consumption(report)
     return attach_governance(
         report,
         project_match_evidence=project_match_evidence,

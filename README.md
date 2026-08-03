@@ -202,6 +202,71 @@ For a governed Tier 2 cross-system mapping, configure stable Rocketlane customer
 
 A Rocketlane project carrying the exact Salesforce Account ID is Tier 1. A configured customer-ID crosswalk is Tier 2. Normalized names and aliases remain Tier 3 and launch remediation in observe-only mode.
 
+## Hours threshold notifications
+
+A weekly digest reports package entitlements that newly crossed 50%, 75%, 90%, or
+100% consumption. Default off:
+
+```dotenv
+HOURS_RECON_NOTIFY_MODE=off          # off | observe_only | active
+HOURS_RECON_NOTIFY_DRY_RUN=          # 1 renders bodies without queueing
+HOURS_RECON_NOTIFY_POLICY_PATH=config/notification_policy.json
+```
+
+### What is measured
+
+The unit is a **package**, not an account. An account holding one expired-unused
+package and one exhausted package sits at 50% of total sold hours while the
+entitlement the customer is actually drawing down is gone, so an account-level
+ratio would under-report exactly the accounts that need attention.
+`hours_recon/consumption.py` derives the percentages; it never participates in
+computing hours, so allocation and every existing metric are unchanged.
+
+### Notify-once semantics
+
+Each rung fires once per entitlement. `threshold_state` holds a monotonic
+high-water mark, so usage that falls and rises again does not re-notify, and a
+correction is logged as a regression rather than emailed. A changed entitlement
+(renewal or resize) is a new entitlement and re-arms the ladder. A package ID
+that rotates for an *unchanged* entitlement does not: `package["id"]` embeds the
+line-item ID, and line-item precedence can rotate it, so an unambiguous rotation
+carries the high-water mark forward instead of re-reporting reported hours.
+
+Detection never runs on incomplete or stale source data, and missing usage is
+never read as zero usage.
+
+### Detection and delivery are decoupled
+
+Because a weekly digest is delivered days after detection, `threshold_crossings`
+is a durable ledger: the crossing row is written *before* the high-water mark
+advances, in the same transaction. A failed digest therefore cannot lose a
+notification, and cancelling a digest returns its crossings to the ledger.
+
+```bash
+python3 scripts/hours_recon_email_outbox.py pending-crossings   # what would be reported
+python3 scripts/hours_recon_email_outbox.py assemble            # one digest per recipient
+python3 scripts/hours_recon_email_outbox.py list --status pending
+```
+
+Recipients are the Salesforce account owner plus the AIOM, each receiving a
+digest scoped to what they own, filtered by an allowlist enforced at assembly and
+again at claim time. The sender is the dashboard user's own mailbox.
+
+The dashboard queues; it never sends. Ask Glean Pi to **send pending Hours Recon
+digests** so the `hours-recon-email-send` skill delivers through the user's
+authenticated Gmail identity and records the returned message ID.
+
+### Enabling it safely
+
+The first evaluation of a portfolio already past several rungs would report every
+historical crossing at once. Seed the ladder first:
+
+```bash
+HOURS_RECON_NOTIFY_MODE=observe_only   # record state, queue nothing
+python3 scripts/hours_recon_email_outbox.py seed-baseline --confirmed
+HOURS_RECON_NOTIFY_MODE=active         # only new movement is reported
+```
+
 ## Governance and remediation planner
 
 The default integration mode is observe-only:

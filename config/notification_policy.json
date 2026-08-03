@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "ladder": [50, 75, 90, 100],
+  "epsilon_pp": 0.5,
+  "min_delta_hours": 0.25,
+  "digest_cadence": "weekly",
+  "roles": ["salesforce_account_owner", "aiom"],
+  "allowed_domains": ["glean.com"],
+  "account_overrides": {}
+}

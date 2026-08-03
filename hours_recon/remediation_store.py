@@ -15,8 +15,13 @@ from urllib.parse import urlsplit
 from .evidence import TIER_RANK
 from .remediation import METRIC_FIELDS, PRIORITY_RANK, build_workstreams, format_slack_followup
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 ACTIVE_WORKSTREAM_STATUSES = {"open", "acknowledged", "in_progress", "pending_validation", "snoozed"}
+
+# Rocketlane-independent notification vocabulary. Crossing rows are the durable
+# ledger; the outbox is only a delivery attempt over them.
+CROSSING_DELIVERY_STATES = {"pending", "queued", "sent", "cancelled"}
+EMAIL_OUTBOX_STATUSES = {"pending", "sending", "sent", "needs_review", "cancelled"}
 
 
 class QueueError(RuntimeError):
@@ -70,7 +75,7 @@ class RemediationStore:
         connection = self._connect()
         try:
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, 1, 2, 3, 4, SCHEMA_VERSION}:
+            if version not in {0, 1, 2, 3, 4, 5, SCHEMA_VERSION}:
                 raise QueueError(f"Unsupported remediation database schema version {version}.")
             if version == 1:
                 # The workstream planner intentionally starts clean: v1 cases had no
@@ -256,10 +261,10 @@ class RemediationStore:
                 "slack_message_sha256", "execution_plan_json", "execution_path_id",
                 "execution_prepared_at", "mcp_request_copied_at",
             ):
-                if version in {2, 4, SCHEMA_VERSION} and column not in workstream_columns:
+                if version in {2, 4, 5, SCHEMA_VERSION} and column not in workstream_columns:
                     connection.execute(f"ALTER TABLE workstreams ADD COLUMN {column} TEXT")
             instance_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(instances)").fetchall()}
-            if version in {2, 4, SCHEMA_VERSION} and "last_governed_tier" not in instance_columns:
+            if version in {2, 4, 5, SCHEMA_VERSION} and "last_governed_tier" not in instance_columns:
                 connection.execute("ALTER TABLE instances ADD COLUMN last_governed_tier TEXT")
             connection.executescript(
                 """
@@ -345,7 +350,111 @@ class RemediationStore:
                     updated_by TEXT NOT NULL,
                     PRIMARY KEY (scope_id, portfolio_id)
                 );
-                PRAGMA user_version = 5;
+                -- Threshold notification state. Three tables, deliberately separate:
+                --
+                --   threshold_state      monotonic high-water mark per package entitlement.
+                --                        Answers "has this rung ever been reported".
+                --   threshold_crossings  durable ledger of detected crossings. A weekly
+                --                        digest delivers days after detection, so the
+                --                        crossing must outlive the detection run; marking
+                --                        the high-water mark without this row would lose
+                --                        the notification if delivery later failed.
+                --   email_outbox         one delivery attempt per recipient per week.
+                --
+                -- Notification events use their own table because events.workstream_fingerprint
+                -- is NOT NULL and references workstreams; threshold crossings are not
+                -- workstream-scoped, so reusing that table would require a fake parent row.
+                CREATE TABLE IF NOT EXISTS threshold_state (
+                    scope_id TEXT NOT NULL,
+                    portfolio_id TEXT NOT NULL,
+                    account_id TEXT NOT NULL,
+                    package_id TEXT NOT NULL,
+                    entitlement_key TEXT NOT NULL,
+                    economic_key TEXT NOT NULL,
+                    high_water_threshold INTEGER NOT NULL DEFAULT 0,
+                    high_water_pct REAL NOT NULL DEFAULT 0,
+                    last_pct REAL,
+                    last_consumed_hours REAL,
+                    last_sold_hours REAL,
+                    regression_count INTEGER NOT NULL DEFAULT 0,
+                    last_retrieval_id TEXT,
+                    last_evaluated_at TEXT NOT NULL,
+                    PRIMARY KEY (scope_id, portfolio_id, account_id, package_id, entitlement_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_threshold_state_economic
+                    ON threshold_state(scope_id, portfolio_id, account_id, economic_key);
+                CREATE TABLE IF NOT EXISTS threshold_crossings (
+                    id TEXT PRIMARY KEY,
+                    scope_id TEXT NOT NULL,
+                    portfolio_id TEXT NOT NULL,
+                    account_id TEXT NOT NULL,
+                    account_name TEXT NOT NULL,
+                    account_owner_email TEXT,
+                    package_id TEXT NOT NULL,
+                    package_label TEXT NOT NULL,
+                    entitlement_key TEXT NOT NULL,
+                    threshold INTEGER NOT NULL,
+                    pct REAL NOT NULL,
+                    consumed_hours REAL NOT NULL,
+                    sold_hours REAL NOT NULL,
+                    remaining_hours REAL NOT NULL,
+                    expiration_date TEXT,
+                    days_to_expiration INTEGER,
+                    overage_hours REAL NOT NULL DEFAULT 0,
+                    unapproved_hours REAL NOT NULL DEFAULT 0,
+                    entitlement_changed INTEGER NOT NULL DEFAULT 0,
+                    skipped_rungs_json TEXT NOT NULL DEFAULT '[]',
+                    detected_at TEXT NOT NULL,
+                    detected_retrieval_id TEXT NOT NULL,
+                    delivery_state TEXT NOT NULL,
+                    outbox_id TEXT,
+                    version INTEGER NOT NULL DEFAULT 1
+                );
+                -- One rung per entitlement, ever. Enforced by the database rather
+                -- than by logic, so a re-detection can never duplicate a crossing.
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_crossing_unique
+                    ON threshold_crossings(scope_id, portfolio_id, account_id,
+                                           package_id, entitlement_key, threshold);
+                CREATE INDEX IF NOT EXISTS idx_crossing_delivery
+                    ON threshold_crossings(scope_id, portfolio_id, delivery_state, detected_at);
+                CREATE TABLE IF NOT EXISTS email_outbox (
+                    id TEXT PRIMARY KEY,
+                    scope_id TEXT NOT NULL,
+                    portfolio_id TEXT NOT NULL,
+                    recipient_group_key TEXT NOT NULL,
+                    recipients_json TEXT NOT NULL,
+                    digest_window_key TEXT NOT NULL,
+                    crossing_ids_json TEXT NOT NULL,
+                    crossing_count INTEGER NOT NULL,
+                    subject TEXT NOT NULL,
+                    body_text TEXT NOT NULL,
+                    body_sha256 TEXT NOT NULL,
+                    sender_email TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    queued_at TEXT NOT NULL,
+                    claimed_at TEXT,
+                    sent_at TEXT,
+                    provider_message_id TEXT,
+                    error TEXT,
+                    version INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_email_outbox_active_digest
+                    ON email_outbox(scope_id, portfolio_id, recipient_group_key, digest_window_key)
+                    WHERE status IN ('pending', 'sending', 'needs_review');
+                CREATE INDEX IF NOT EXISTS idx_email_outbox_status
+                    ON email_outbox(scope_id, portfolio_id, status, queued_at);
+                CREATE TABLE IF NOT EXISTS notification_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scope_id TEXT NOT NULL,
+                    portfolio_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_notification_events_scope
+                    ON notification_events(scope_id, portfolio_id, created_at);
+                PRAGMA user_version = 6;
                 """
             )
             connection.commit()
@@ -2241,3 +2350,528 @@ class RemediationStore:
         elif action == "record_mcp_request_copy":
             result["execution"] = "copied_not_executed"
         return result
+
+    # ------------------------------------------------------------------
+    # Threshold notifications
+    #
+    # Persistence only. Every decision about *whether* a rung has been crossed
+    # lives in hours_recon.notifications as a pure function; this section stores
+    # the outcome and enforces the once-ever guarantees at the database level.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _notification_event(
+        connection: sqlite3.Connection,
+        *,
+        scope_id: str,
+        portfolio_id: str,
+        event_type: str,
+        actor: str,
+        payload: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        connection.execute(
+            """INSERT INTO notification_events(scope_id, portfolio_id, event_type, actor, created_at, payload_json)
+               VALUES(?,?,?,?,?,?)""",
+            (scope_id, portfolio_id, event_type, actor, _utc_now(), _json(dict(payload or {}))),
+        )
+
+    def load_threshold_state(self, *, scope_id: str, portfolio_id: str) -> List[Dict[str, Any]]:
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                "SELECT * FROM threshold_state WHERE scope_id=? AND portfolio_id=?",
+                (scope_id, portfolio_id),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            connection.close()
+
+    def apply_notification_cycle(
+        self,
+        *,
+        scope_id: str,
+        portfolio_id: str,
+        retrieval_id: str,
+        observations: Sequence[Mapping[str, Any]],
+        crossings: Sequence[Mapping[str, Any]],
+        migrations: Sequence[Mapping[str, Any]] = (),
+        queue_crossings: bool = True,
+    ) -> Dict[str, Any]:
+        """Persist one evaluation atomically.
+
+        Ordering inside the transaction is load bearing. The crossing ledger row
+        is written *before* the high-water mark advances, and both happen in the
+        same transaction, so a crash leaves neither: the crossing is simply
+        re-detected on the next refresh. Advancing the mark first would strand
+        the notification permanently once delivery is deferred to a weekly digest.
+
+        ``queue_crossings`` is False in observe_only mode, which records the
+        high-water marks and the observation trail without creating deliverable
+        crossings. That is what makes the silent backfill possible.
+        """
+        if not retrieval_id:
+            raise QueueValidationError("A source retrieval ID is required.")
+        if not scope_id or not portfolio_id:
+            raise QueueValidationError("A scope and portfolio are required.")
+        now = _utc_now()
+        recorded: List[Dict[str, Any]] = []
+        suppressed: List[Dict[str, Any]] = []
+        migrated: List[Dict[str, Any]] = []
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            # 1. Carry high-water marks across a rotated package ID before any
+            #    rung is evaluated against them.
+            for migration in migrations:
+                moved = connection.execute(
+                    """UPDATE threshold_state
+                          SET package_id=?, entitlement_key=?, last_evaluated_at=?
+                        WHERE scope_id=? AND portfolio_id=? AND account_id=?
+                          AND package_id=? AND entitlement_key=?""",
+                    (
+                        str(migration["to_package_id"]), str(migration["to_entitlement_key"]), now,
+                        scope_id, portfolio_id, str(migration["account_id"]),
+                        str(migration["from_package_id"]), str(migration["from_entitlement_key"]),
+                    ),
+                ).rowcount
+                if moved:
+                    migrated.append(dict(migration))
+                    self._notification_event(
+                        connection, scope_id=scope_id, portfolio_id=portfolio_id,
+                        event_type="entitlement_key_migrated", actor="hours_recon",
+                        payload=dict(migration),
+                    )
+
+            # 2. Ledger rows first. The unique index is the once-ever guarantee.
+            for crossing in crossings:
+                crossing_id = "hnc1_" + sha256(
+                    "\n".join([
+                        scope_id, portfolio_id, str(crossing["account_id"]),
+                        str(crossing["package_id"]), str(crossing["entitlement_key"]),
+                        str(int(crossing["threshold"])),
+                    ]).encode("utf-8")
+                ).hexdigest()
+                if not queue_crossings:
+                    suppressed.append({"crossing": dict(crossing), "reason": "observe_only"})
+                    continue
+                try:
+                    connection.execute(
+                        """INSERT INTO threshold_crossings(
+                               id, scope_id, portfolio_id, account_id, account_name, account_owner_email,
+                               package_id, package_label, entitlement_key, threshold, pct,
+                               consumed_hours, sold_hours, remaining_hours, expiration_date,
+                               days_to_expiration, overage_hours, unapproved_hours, entitlement_changed,
+                               skipped_rungs_json, detected_at, detected_retrieval_id, delivery_state,
+                               outbox_id, version)
+                           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,1)""",
+                        (
+                            crossing_id, scope_id, portfolio_id, str(crossing["account_id"]),
+                            str(crossing["account_name"]), str(crossing.get("account_owner_email") or ""),
+                            str(crossing["package_id"]), str(crossing["package_label"]),
+                            str(crossing["entitlement_key"]), int(crossing["threshold"]),
+                            float(crossing["pct"]), float(crossing["consumed_hours"]),
+                            float(crossing["sold_hours"]), float(crossing["remaining_hours"]),
+                            crossing.get("expiration_date"), crossing.get("days_to_expiration"),
+                            float(crossing.get("overage_hours") or 0.0),
+                            float(crossing.get("unapproved_hours") or 0.0),
+                            1 if crossing.get("entitlement_changed") else 0,
+                            _json(list(crossing.get("skipped_rungs") or [])),
+                            now, retrieval_id, "pending",
+                        ),
+                    )
+                except sqlite3.IntegrityError:
+                    suppressed.append({"crossing": dict(crossing), "reason": "crossing_exists"})
+                    continue
+                recorded.append({"id": crossing_id, **dict(crossing)})
+                self._notification_event(
+                    connection, scope_id=scope_id, portfolio_id=portfolio_id,
+                    event_type="threshold_detected", actor="hours_recon",
+                    payload={"crossing_id": crossing_id, "account_id": crossing["account_id"],
+                             "package_id": crossing["package_id"], "threshold": crossing["threshold"],
+                             "pct": crossing["pct"], "retrieval_id": retrieval_id},
+                )
+
+            # 3. High-water marks and last-seen values, in the same transaction.
+            for observation in observations:
+                key = (
+                    scope_id, portfolio_id, str(observation["account_id"]),
+                    str(observation["package_id"]), str(observation["entitlement_key"]),
+                )
+                existing = connection.execute(
+                    """SELECT high_water_threshold, high_water_pct, regression_count
+                         FROM threshold_state
+                        WHERE scope_id=? AND portfolio_id=? AND account_id=?
+                          AND package_id=? AND entitlement_key=?""",
+                    key,
+                ).fetchone()
+                pct = observation.get("pct")
+                pct_value = float(pct) if pct is not None else None
+                reached = int(observation.get("reached_threshold") or 0)
+                if existing is None:
+                    connection.execute(
+                        """INSERT INTO threshold_state(
+                               scope_id, portfolio_id, account_id, package_id, entitlement_key,
+                               economic_key, high_water_threshold, high_water_pct, last_pct,
+                               last_consumed_hours, last_sold_hours, regression_count,
+                               last_retrieval_id, last_evaluated_at)
+                           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        key + (
+                            str(observation["economic_key"]), reached, pct_value or 0.0, pct_value,
+                            observation.get("consumed_hours"), observation.get("sold_hours"),
+                            1 if observation.get("regressed") else 0, retrieval_id, now,
+                        ),
+                    )
+                else:
+                    connection.execute(
+                        """UPDATE threshold_state
+                              SET economic_key=?,
+                                  high_water_threshold=MAX(high_water_threshold, ?),
+                                  high_water_pct=MAX(high_water_pct, ?),
+                                  last_pct=?, last_consumed_hours=?, last_sold_hours=?,
+                                  regression_count=regression_count + ?,
+                                  last_retrieval_id=?, last_evaluated_at=?
+                            WHERE scope_id=? AND portfolio_id=? AND account_id=?
+                              AND package_id=? AND entitlement_key=?""",
+                        (
+                            str(observation["economic_key"]), reached, pct_value or 0.0,
+                            pct_value, observation.get("consumed_hours"), observation.get("sold_hours"),
+                            1 if observation.get("regressed") else 0, retrieval_id, now,
+                        ) + key,
+                    )
+                if observation.get("regressed"):
+                    self._notification_event(
+                        connection, scope_id=scope_id, portfolio_id=portfolio_id,
+                        event_type="usage_regressed", actor="hours_recon",
+                        payload={"account_id": observation["account_id"],
+                                 "package_id": observation["package_id"],
+                                 "pct": pct_value, "retrieval_id": retrieval_id},
+                    )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return {
+            "recorded": recorded,
+            "suppressed": suppressed,
+            "migrated": migrated,
+            "retrieval_id": retrieval_id,
+        }
+
+    def list_threshold_crossings(
+        self,
+        *,
+        scope_id: str,
+        portfolio_id: str,
+        delivery_state: Optional[str] = None,
+        account_ids: Optional[Iterable[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        if delivery_state and delivery_state not in CROSSING_DELIVERY_STATES:
+            raise QueueValidationError("Select a valid crossing delivery state.")
+        connection = self._connect()
+        try:
+            query = "SELECT * FROM threshold_crossings WHERE scope_id=? AND portfolio_id=?"
+            values: List[Any] = [scope_id, portfolio_id]
+            if delivery_state:
+                query += " AND delivery_state=?"
+                values.append(delivery_state)
+            if account_ids is not None:
+                owned = sorted({str(value) for value in account_ids})
+                if not owned:
+                    query += " AND 1=0"
+                else:
+                    query += " AND account_id IN (" + ",".join("?" for _ in owned) + ")"
+                    values.extend(owned)
+            query += " ORDER BY account_name, package_label, threshold"
+            rows = connection.execute(query, values).fetchall()
+            return [self._serialize_crossing(row) for row in rows]
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _serialize_crossing(row: sqlite3.Row) -> Dict[str, Any]:
+        item = dict(row)
+        item["entitlement_changed"] = bool(item.get("entitlement_changed"))
+        item["skipped_rungs"] = _loads(item.pop("skipped_rungs_json", "[]"), [])
+        return item
+
+    @staticmethod
+    def _serialize_email(row: sqlite3.Row) -> Dict[str, Any]:
+        item = dict(row)
+        item["recipients"] = _loads(item.pop("recipients_json", "[]"), [])
+        item["crossing_ids"] = _loads(item.pop("crossing_ids_json", "[]"), [])
+        return item
+
+    def queue_email_digest(
+        self,
+        *,
+        scope_id: str,
+        portfolio_id: str,
+        recipient_group_key: str,
+        recipients: Sequence[str],
+        digest_window_key: str,
+        crossing_ids: Sequence[str],
+        subject: str,
+        body_text: str,
+        sender_email: str,
+    ) -> Dict[str, Any]:
+        addresses = [str(value).strip().lower() for value in recipients if str(value).strip()]
+        if not addresses:
+            raise QueueValidationError("A digest needs at least one recipient.")
+        ids = [str(value) for value in crossing_ids if str(value)]
+        if not ids:
+            raise QueueValidationError("A digest needs at least one crossing.")
+        body = str(body_text or "")
+        if not body.strip():
+            raise QueueValidationError("A digest needs a rendered body.")
+        if not str(sender_email or "").strip():
+            raise QueueValidationError("A digest needs a sender identity.")
+        body_digest = sha256(body.encode("utf-8")).hexdigest()
+        outbox_id = "hne1_" + sha256(
+            "\n".join([scope_id, portfolio_id, recipient_group_key, digest_window_key, body_digest]).encode("utf-8")
+        ).hexdigest()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute(
+                    """INSERT INTO email_outbox(
+                           id, scope_id, portfolio_id, recipient_group_key, recipients_json,
+                           digest_window_key, crossing_ids_json, crossing_count, subject,
+                           body_text, body_sha256, sender_email, status, queued_at, version)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,1)""",
+                    (
+                        outbox_id, scope_id, portfolio_id, recipient_group_key, _json(addresses),
+                        digest_window_key, _json(ids), len(ids), str(subject),
+                        body, body_digest, str(sender_email).strip().lower(), _utc_now(),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                connection.rollback()
+                raise QueueConflict(
+                    "A digest for this recipient and week is already awaiting delivery."
+                ) from exc
+            placeholders = ",".join("?" for _ in ids)
+            # A crossing leaves the pending ledger as soon as *any* digest carries
+            # it. The same crossing is normally routed to two recipients (the
+            # account owner and the AIOM), and both digests list it, but only the
+            # first claims it here. That is what stops the next assembly from
+            # reporting it again, and it means outbox_id records the first digest
+            # that carried the crossing rather than every one that mentions it.
+            connection.execute(
+                f"""UPDATE threshold_crossings
+                       SET delivery_state='queued', outbox_id=?, version=version+1
+                     WHERE scope_id=? AND portfolio_id=? AND delivery_state='pending'
+                       AND id IN ({placeholders})""",
+                [outbox_id, scope_id, portfolio_id] + ids,
+            )
+            self._notification_event(
+                connection, scope_id=scope_id, portfolio_id=portfolio_id,
+                event_type="digest_queued", actor="hours_recon",
+                payload={"outbox_id": outbox_id, "recipients": addresses,
+                         "window": digest_window_key, "crossing_count": len(ids)},
+            )
+            connection.commit()
+            row = connection.execute("SELECT * FROM email_outbox WHERE id=?", (outbox_id,)).fetchone()
+            return self._serialize_email(row)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def list_email_outbox(
+        self, *, scope_id: str, portfolio_id: str, status: Optional[str] = "pending",
+    ) -> List[Dict[str, Any]]:
+        if status and status not in EMAIL_OUTBOX_STATUSES:
+            raise QueueValidationError("Select a valid email outbox status.")
+        connection = self._connect()
+        try:
+            query = "SELECT * FROM email_outbox WHERE scope_id=? AND portfolio_id=?"
+            values: List[Any] = [scope_id, portfolio_id]
+            if status:
+                query += " AND status=?"
+                values.append(status)
+            query += " ORDER BY queued_at, id"
+            return [self._serialize_email(row) for row in connection.execute(query, values).fetchall()]
+        finally:
+            connection.close()
+
+    def _email_transition(
+        self,
+        outbox_id: str,
+        *,
+        scope_id: str,
+        portfolio_id: str,
+        expected_version: int,
+        allowed_from: Set[str],
+        assignments: str,
+        values: Sequence[Any],
+        event_type: str,
+        event_payload: Mapping[str, Any],
+        conflict_message: str,
+    ) -> Dict[str, Any]:
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM email_outbox WHERE id=? AND scope_id=? AND portfolio_id=?",
+                (outbox_id, scope_id, portfolio_id),
+            ).fetchone()
+            if not row:
+                raise QueueValidationError("Unknown email outbox item.")
+            if int(row["version"]) != int(expected_version):
+                raise QueueConflict(conflict_message)
+            if str(row["status"]) not in allowed_from:
+                raise QueueValidationError(f"Cannot {event_type.replace('digest_', '')} a {row['status']} digest.")
+            connection.execute(
+                f"UPDATE email_outbox SET {assignments}, version=version+1 WHERE id=?",
+                list(values) + [outbox_id],
+            )
+            self._notification_event(
+                connection, scope_id=scope_id, portfolio_id=portfolio_id,
+                event_type=event_type, actor="glean_pi",
+                payload={"outbox_id": outbox_id, **dict(event_payload)},
+            )
+            connection.commit()
+            updated = connection.execute("SELECT * FROM email_outbox WHERE id=?", (outbox_id,)).fetchone()
+            return self._serialize_email(updated)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def claim_email_outbox(
+        self, outbox_id: str, *, scope_id: str, portfolio_id: str, expected_version: int,
+    ) -> Dict[str, Any]:
+        return self._email_transition(
+            outbox_id, scope_id=scope_id, portfolio_id=portfolio_id, expected_version=expected_version,
+            allowed_from={"pending"}, assignments="status='sending', claimed_at=?", values=[_utc_now()],
+            event_type="digest_claimed", event_payload={"delivery": "sending_not_confirmed"},
+            conflict_message="The digest changed; list pending digests again.",
+        )
+
+    def complete_email_outbox(
+        self, outbox_id: str, *, scope_id: str, portfolio_id: str, expected_version: int,
+        provider_message_id: str,
+    ) -> Dict[str, Any]:
+        message_id = str(provider_message_id or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9._@<>+=/-]{4,512}", message_id):
+            raise QueueValidationError("A real provider message ID is required to record delivery.")
+        result = self._email_transition(
+            outbox_id, scope_id=scope_id, portfolio_id=portfolio_id, expected_version=expected_version,
+            allowed_from={"sending", "needs_review"},
+            assignments="status='sent', sent_at=?, provider_message_id=?, error=NULL",
+            values=[_utc_now(), message_id],
+            event_type="digest_sent", event_payload={"provider_message_id": message_id},
+            conflict_message="The digest changed; do not record delivery twice.",
+        )
+        connection = self._connect()
+        try:
+            ids = [str(value) for value in result.get("crossing_ids") or []]
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                connection.execute(
+                    f"""UPDATE threshold_crossings SET delivery_state='sent', version=version+1
+                         WHERE scope_id=? AND portfolio_id=? AND outbox_id=? AND id IN ({placeholders})""",
+                    [scope_id, portfolio_id, outbox_id] + ids,
+                )
+                connection.commit()
+        finally:
+            connection.close()
+        return result
+
+    def mark_email_outbox_uncertain(
+        self, outbox_id: str, *, scope_id: str, portfolio_id: str, expected_version: int, error: str,
+    ) -> Dict[str, Any]:
+        detail = str(error or "").strip()[:500] or "Delivery result was uncertain."
+        return self._email_transition(
+            outbox_id, scope_id=scope_id, portfolio_id=portfolio_id, expected_version=expected_version,
+            allowed_from={"sending"}, assignments="status='needs_review', error=?", values=[detail],
+            event_type="digest_uncertain", event_payload={"error": detail},
+            conflict_message="The digest changed; review it before retrying.",
+        )
+
+    def retry_email_outbox(
+        self, outbox_id: str, *, scope_id: str, portfolio_id: str, expected_version: int,
+        confirmed_not_delivered: bool,
+    ) -> Dict[str, Any]:
+        if not confirmed_not_delivered:
+            raise QueueValidationError(
+                "Confirm the digest was not delivered before retrying; otherwise recipients receive it twice."
+            )
+        return self._email_transition(
+            outbox_id, scope_id=scope_id, portfolio_id=portfolio_id, expected_version=expected_version,
+            allowed_from={"needs_review"}, assignments="status='pending', claimed_at=NULL, error=NULL", values=[],
+            event_type="digest_retry_armed", event_payload={"confirmed_not_delivered": True},
+            conflict_message="The digest changed; list it again before retrying.",
+        )
+
+    def cancel_email_outbox(
+        self, outbox_id: str, *, scope_id: str, portfolio_id: str, expected_version: int,
+    ) -> Dict[str, Any]:
+        result = self._email_transition(
+            outbox_id, scope_id=scope_id, portfolio_id=portfolio_id, expected_version=expected_version,
+            allowed_from={"pending", "needs_review"},
+            assignments="status='cancelled', error=NULL", values=[],
+            event_type="digest_cancelled", event_payload={},
+            conflict_message="The digest changed; list it again before cancelling.",
+        )
+        # Cancelling a delivery attempt returns its crossings to the pending
+        # ledger so the next digest still reports them. The crossing is the
+        # durable fact; the email was only an attempt to deliver it.
+        connection = self._connect()
+        try:
+            connection.execute(
+                """UPDATE threshold_crossings SET delivery_state='pending', outbox_id=NULL, version=version+1
+                     WHERE scope_id=? AND portfolio_id=? AND outbox_id=? AND delivery_state='queued'""",
+                (scope_id, portfolio_id, outbox_id),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        return result
+
+    def notification_events(
+        self, *, scope_id: str, portfolio_id: str, limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                """SELECT * FROM notification_events WHERE scope_id=? AND portfolio_id=?
+                   ORDER BY id DESC LIMIT ?""",
+                (scope_id, portfolio_id, max(1, min(int(limit), 1000))),
+            ).fetchall()
+            return [{**dict(row), "payload": _loads(row["payload_json"], {})} for row in rows]
+        finally:
+            connection.close()
+
+    def cancel_pending_crossings(self, *, scope_id: str, portfolio_id: str, reason: str) -> int:
+        """Retire crossings that are still awaiting delivery.
+
+        Used by the silent backfill so seeding a baseline cannot leave historical
+        crossings queued for the first real digest.
+        """
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            cancelled = connection.execute(
+                """UPDATE threshold_crossings SET delivery_state='cancelled', version=version+1
+                     WHERE scope_id=? AND portfolio_id=? AND delivery_state='pending'""",
+                (scope_id, portfolio_id),
+            ).rowcount
+            if cancelled:
+                self._notification_event(
+                    connection, scope_id=scope_id, portfolio_id=portfolio_id,
+                    event_type="crossings_cancelled", actor="hours_recon",
+                    payload={"count": cancelled, "reason": str(reason)},
+                )
+            connection.commit()
+            return int(cancelled or 0)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()

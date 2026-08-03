@@ -83,6 +83,19 @@ class HoursReconHandler(BaseHTTPRequestHandler):
             except QueueError as exc:
                 self._json(503, {"error": str(exc)})
             return
+        if path == "/api/notifications/outbox":
+            if not secrets.compare_digest(self.headers.get("X-Hours-Recon-Action-Token", ""), self.service.action_token):
+                self._json(403, {"error": "Invalid remediation action token."})
+                return
+            query = parse_qs(urlparse(self.path).query)
+            status = str((query.get("status") or ["pending"])[0])
+            try:
+                self._json(200, {"outbox": self.service.list_notification_outbox(status)})
+            except QueueValidationError as exc:
+                self._json(400, {"error": str(exc)})
+            except QueueError as exc:
+                self._json(503, {"error": str(exc)})
+            return
         if path == "/api/remediation/workstreams":
             query = parse_qs(urlparse(self.path).query)
             allowed = {key: values[0] for key, values in query.items() if key in {"status", "route", "priority", "account_id"} and values}
@@ -225,6 +238,58 @@ class HoursReconHandler(BaseHTTPRequestHandler):
                 self._json(409, {"error": str(exc)})
             except (QueueValidationError, ValueError, TypeError, KeyError) as exc:
                 self._json(400, {"error": str(exc) or "Invalid remediation outbox request."})
+            except QueueError as exc:
+                self._json(503, {"error": str(exc)})
+            return
+        notify_match = re.fullmatch(
+            r"/api/notifications/outbox/(hne1_[a-f0-9]{64})/(claim|sent|uncertain|retry|cancel)", path
+        )
+        notify_admin_match = re.fullmatch(r"/api/notifications/(assemble|seed-baseline)", path)
+        if notify_match or notify_admin_match:
+            if not secrets.compare_digest(self.headers.get("X-Hours-Recon-Action-Token", ""), self.service.action_token):
+                self._json(403, {"error": "Invalid remediation action token."})
+                return
+            try:
+                if notify_admin_match:
+                    if notify_admin_match.group(1) == "assemble":
+                        result = self.service.assemble_notification_digest()
+                    else:
+                        body = self._read_json_body(4096)
+                        if body.get("confirmed") is not True:
+                            raise QueueValidationError(
+                                "Seeding the baseline suppresses every currently breached rung; confirm explicitly."
+                            )
+                        result = self.service.seed_notification_baseline()
+                else:
+                    outbox_id, operation = notify_match.groups()
+                    body = self._read_json_body(4096)
+                    expected_version = int(body.get("expected_version"))
+                    if operation == "claim":
+                        result = self.service.claim_notification_digest(outbox_id, expected_version=expected_version)
+                    elif operation == "sent":
+                        result = self.service.complete_notification_digest(
+                            outbox_id, expected_version=expected_version,
+                            provider_message_id=str(body.get("provider_message_id") or ""),
+                        )
+                    elif operation == "uncertain":
+                        result = self.service.mark_notification_digest_uncertain(
+                            outbox_id, expected_version=expected_version,
+                            error=str(body.get("error") or ""),
+                        )
+                    elif operation == "retry":
+                        result = self.service.retry_notification_digest(
+                            outbox_id, expected_version=expected_version,
+                            confirmed_not_delivered=body.get("confirmed_not_delivered") is True,
+                        )
+                    else:
+                        result = self.service.cancel_notification_digest(
+                            outbox_id, expected_version=expected_version,
+                        )
+                self._json(200, result)
+            except QueueConflict as exc:
+                self._json(409, {"error": str(exc)})
+            except (QueueValidationError, ValueError, TypeError, KeyError) as exc:
+                self._json(400, {"error": str(exc) or "Invalid notification request."})
             except QueueError as exc:
                 self._json(503, {"error": str(exc)})
             return

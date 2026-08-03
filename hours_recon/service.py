@@ -19,9 +19,20 @@ from .evidence import attach_governance
 from .freshness import describe_freshness
 from .matching import match_projects
 from .mcp_snapshot import McpSnapshotError, load_mcp_snapshot
+from .consumption import attach_consumption
+from .notifications import (
+    assert_allowlisted,
+    detect as detect_thresholds,
+    digest_window_key,
+    group_for_digest,
+    load_policy,
+    render_digest,
+    render_subject,
+    source_note_from_meta,
+)
 from .reconcile import attach_attention, reconcile
 from .remediation_execution import build_execution_workspace
-from .remediation_store import QueueError, QueueValidationError, RemediationStore
+from .remediation_store import QueueConflict, QueueError, QueueValidationError, RemediationStore
 from .rocketlane import RocketlaneClient
 from .salesforce import SalesforceClient
 from .storage import read_cache, write_cache
@@ -38,6 +49,7 @@ class ReconciliationService:
         self.last_refresh_attempt = None
         self.remediation_store: Optional[RemediationStore] = None
         self.remediation_error: Optional[str] = None
+        self.notification_error: Optional[str] = None
         self.action_token = secrets.token_urlsafe(32)
         configured_mode = self.settings["mode"]
         remediation_mode = self.settings.get("remediation_mode", "off")
@@ -130,10 +142,12 @@ class ReconciliationService:
         # Derived presentation fields are recomputed on read so a report cached
         # by an earlier build never renders an empty hero or attention list.
         attach_attention(result)
+        attach_consumption(result)
         result.setdefault("meta", {})["freshness"] = describe_freshness(
             result.get("meta", {}), report_date=business_today(self.settings["timezone"]),
         )
         self._attach_remediation(result)
+        result["notifications"] = self.notification_summary(result)
         result["layout"] = self.layout_preference()
         return result
 
@@ -488,6 +502,77 @@ class ReconciliationService:
                 "revalidation_performed": False,
                 "reason": "queue_unavailable",
                 "error": self.remediation_error,
+            }
+        self._evaluate_thresholds(result, coverage_complete=coverage_complete)
+
+    def _evaluate_thresholds(self, result: Dict[str, Any], *, coverage_complete: bool) -> None:
+        """Detect newly crossed usage thresholds and record them.
+
+        Runs inside the same gate as source observation: verified scope, complete
+        coverage, current data. Detection is recorded even in observe_only mode,
+        where crossings are logged but never become deliverable, which is what
+        lets the ladder be seeded silently before the first real digest.
+        """
+        meta = result.setdefault("meta", {})
+        mode = str(self.settings.get("notify_mode", "off")).lower()
+        if mode == "off":
+            meta["notification_observation"] = {"mode": "off", "evaluated": False, "reason": "disabled"}
+            return
+        if not self.remediation_store:
+            meta["notification_observation"] = {"mode": mode, "evaluated": False, "reason": "store_unavailable"}
+            return
+        try:
+            policy = load_policy(self.settings.get("notification_policy"))
+            freshness = describe_freshness(meta, report_date=business_today(self.settings["timezone"]))
+            scope_id = self._active_scope_id(result)
+            portfolio_id = self._active_portfolio_id(result)
+            state_rows = self.remediation_store.load_threshold_state(
+                scope_id=scope_id, portfolio_id=portfolio_id,
+            )
+            evaluation = detect_thresholds(
+                result, state_rows, policy=policy,
+                coverage_complete=coverage_complete, freshness=freshness,
+            )
+            if evaluation["skipped"]:
+                meta["notification_observation"] = {
+                    "mode": mode, "evaluated": False, "reason": evaluation["reason"],
+                }
+                return
+            retrieval_id = str(
+                meta.get("mcp_retrieval_id") or meta.get("source_retrieval_id") or ""
+            ).strip()
+            if not retrieval_id:
+                meta["notification_observation"] = {
+                    "mode": mode, "evaluated": False, "reason": "missing_retrieval_id",
+                }
+                return
+            applied = self.remediation_store.apply_notification_cycle(
+                scope_id=scope_id, portfolio_id=portfolio_id, retrieval_id=retrieval_id,
+                observations=evaluation["observations"], crossings=evaluation["crossings"],
+                migrations=evaluation["migrations"], queue_crossings=mode == "active",
+            )
+            pending = self.remediation_store.list_threshold_crossings(
+                scope_id=scope_id, portfolio_id=portfolio_id, delivery_state="pending",
+            )
+            meta["notification_observation"] = {
+                "mode": mode,
+                "evaluated": True,
+                "packages_evaluated": len(evaluation["observations"]),
+                "crossings_detected": len(evaluation["crossings"]),
+                "crossings_recorded": len(applied["recorded"]),
+                "crossings_suppressed": len(applied["suppressed"]),
+                "entitlements_migrated": len(applied["migrated"]),
+                "pending_delivery": len(pending),
+                "diagnostics": evaluation["diagnostics"][:20],
+                "digest_window": digest_window_key(business_today(self.settings["timezone"])),
+            }
+        except Exception as exc:
+            # A notification failure must never take down the dashboard, matching
+            # how remediation queue failures degrade.
+            self.notification_error = f"{type(exc).__name__}: {exc}"
+            meta["notification_observation"] = {
+                "mode": mode, "evaluated": False, "reason": "evaluation_failed",
+                "error": self.notification_error,
             }
 
     def list_remediation_workstreams(self, filters: Optional[Mapping[str, str]] = None) -> List[Dict[str, Any]]:
@@ -945,3 +1030,230 @@ class ReconciliationService:
             return self.data
         finally:
             self.lock.release()
+
+    # ------------------------------------------------------------------
+    # Threshold notification digests
+    # ------------------------------------------------------------------
+
+    def _notification_delivery_status(self) -> Dict[str, Any]:
+        return {
+            "mode": "glean_gmail_mcp_outbox",
+            "available": self.remediation_store is not None,
+            "notify_mode": str(self.settings.get("notify_mode", "off")).lower(),
+            "sender": self.settings.get("mcp_requester_email") or "the dashboard user",
+            "requires_pi_command": True,
+            "command": "send pending Hours Recon digests",
+            "cadence": "weekly",
+            "dry_run": bool(self.settings.get("notify_dry_run")),
+        }
+
+    def notification_summary(self, result: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+        """Digest state for the dashboard: what is pending, queued, and sent."""
+        source = result if result is not None else self._data
+        delivery = self._notification_delivery_status()
+        if not self.remediation_store:
+            return {"available": False, "delivery": delivery, "pending_crossings": [], "outbox": []}
+        try:
+            scope_id = self._active_scope_id(source)
+            portfolio_id = self._active_portfolio_id(source)
+            owned = self._owned_account_ids(source)
+            pending = self.remediation_store.list_threshold_crossings(
+                scope_id=scope_id, portfolio_id=portfolio_id, delivery_state="pending", account_ids=owned,
+            )
+            outbox = self.remediation_store.list_email_outbox(
+                scope_id=scope_id, portfolio_id=portfolio_id, status=None,
+            )
+            visible = [
+                {key: item.get(key) for key in (
+                    "id", "recipient_group_key", "recipients", "digest_window_key", "crossing_count",
+                    "subject", "status", "queued_at", "claimed_at", "sent_at",
+                    "provider_message_id", "error", "version", "sender_email",
+                )}
+                for item in outbox
+            ]
+            return {
+                "available": True,
+                "delivery": delivery,
+                "action_token": self.action_token,
+                "digest_window": digest_window_key(business_today(self.settings["timezone"])),
+                "pending_crossings": pending,
+                "outbox": visible,
+                "error": self.notification_error,
+            }
+        except Exception as exc:
+            self.notification_error = f"{type(exc).__name__}: {exc}"
+            return {"available": False, "delivery": delivery, "pending_crossings": [], "outbox": [],
+                    "error": self.notification_error}
+
+    def assemble_notification_digest(self) -> Dict[str, Any]:
+        """Group every pending crossing into one digest per recipient.
+
+        Idempotent per week: the outbox partial unique index rejects a second
+        active digest for the same recipient group and week, so re-running this
+        is safe. An empty ledger produces nothing rather than an empty email.
+        """
+        if not self.remediation_store:
+            raise QueueError("The notification store is unavailable.")
+        mode = str(self.settings.get("notify_mode", "off")).lower()
+        if mode != "active":
+            raise QueueValidationError(
+                f"Digest assembly requires HOURS_RECON_NOTIFY_MODE=active (currently {mode})."
+            )
+        policy = load_policy(self.settings.get("notification_policy"))
+        sender = str(self.settings.get("mcp_requester_email") or "").strip().lower()
+        if not sender:
+            raise QueueValidationError(
+                "HOURS_RECON_MCP_REQUESTER_EMAIL must be set; it is the digest sender identity."
+            )
+        scope_id = self._active_scope_id()
+        portfolio_id = self._active_portfolio_id()
+        report_date = business_today(self.settings["timezone"])
+        window = digest_window_key(report_date)
+        pending = self.remediation_store.list_threshold_crossings(
+            scope_id=scope_id, portfolio_id=portfolio_id, delivery_state="pending",
+            account_ids=self._owned_account_ids(),
+        )
+        if not pending:
+            return {"window": window, "queued": [], "skipped": [], "reason": "no_pending_crossings"}
+
+        meta = (self._data or {}).get("meta", {}) if isinstance(self._data, Mapping) else {}
+        note = source_note_from_meta(meta)
+        queued: List[Dict[str, Any]] = []
+        skipped: List[Dict[str, Any]] = []
+        for group in group_for_digest(pending, policy=policy, aiom_email=sender):
+            if group["group_key"] == "__unroutable__" or not group["recipients"]:
+                skipped.append({"group_key": group["group_key"], "reason": "no_allowlisted_recipient",
+                                "crossing_count": len(group["crossings"])})
+                continue
+            try:
+                assert_allowlisted(group["recipients"], policy)
+            except ValueError as exc:
+                skipped.append({"group_key": group["group_key"], "reason": str(exc)})
+                continue
+            subject = render_subject(group["crossings"], window)
+            body = render_digest(group["crossings"], window_key=window, source_note=note)
+            if self.settings.get("notify_dry_run"):
+                skipped.append({"group_key": group["group_key"], "reason": "dry_run",
+                                "recipients": group["recipients"], "subject": subject,
+                                "body_preview": body})
+                continue
+            try:
+                row = self.remediation_store.queue_email_digest(
+                    scope_id=scope_id, portfolio_id=portfolio_id,
+                    recipient_group_key=group["group_key"], recipients=group["recipients"],
+                    digest_window_key=window,
+                    crossing_ids=[str(item["id"]) for item in group["crossings"]],
+                    subject=subject, body_text=body, sender_email=sender,
+                )
+            except QueueConflict as exc:
+                skipped.append({"group_key": group["group_key"], "reason": str(exc)})
+                continue
+            queued.append({key: row.get(key) for key in (
+                "id", "recipient_group_key", "recipients", "digest_window_key",
+                "crossing_count", "subject", "status", "version",
+            )})
+        return {"window": window, "queued": queued, "skipped": skipped,
+                "delivery": "queued_not_sent" if queued else "nothing_queued"}
+
+    def seed_notification_baseline(self) -> Dict[str, Any]:
+        """Silent backfill: record current usage as already reported.
+
+        Without this, enabling ``active`` on a portfolio that is already past
+        several rungs would deliver a digest full of historical crossings. This
+        advances every high-water mark to current usage and cancels any crossing
+        still awaiting delivery, so only genuinely new movement is reported.
+        """
+        if not self.remediation_store:
+            raise QueueError("The notification store is unavailable.")
+        source = self._data
+        if not isinstance(source, Mapping) or not source.get("accounts"):
+            raise QueueValidationError("Load a report before seeding the notification baseline.")
+        policy = load_policy(self.settings.get("notification_policy"))
+        scope_id = self._active_scope_id()
+        portfolio_id = self._active_portfolio_id()
+        report = copy.deepcopy(dict(source))
+        attach_consumption(report)
+        meta = report.get("meta", {})
+        retrieval_id = str(meta.get("mcp_retrieval_id") or meta.get("source_retrieval_id") or "").strip()
+        if not retrieval_id:
+            raise QueueValidationError("The loaded report has no retrieval ID to attribute the baseline to.")
+        evaluation = detect_thresholds(
+            report, self.remediation_store.load_threshold_state(scope_id=scope_id, portfolio_id=portfolio_id),
+            policy=policy, coverage_complete=True, freshness=None,
+        )
+        # Every rung currently reached is recorded as the high-water mark, and no
+        # crossing rows are created, so nothing becomes deliverable.
+        observations = []
+        for observation in evaluation["observations"]:
+            reached = 0
+            for rung in policy["ladder"]:
+                if observation["pct"] is not None and float(observation["pct"]) >= rung:
+                    reached = rung
+            observations.append({**observation, "reached_threshold": reached, "regressed": False})
+        applied = self.remediation_store.apply_notification_cycle(
+            scope_id=scope_id, portfolio_id=portfolio_id, retrieval_id=f"baseline:{retrieval_id}",
+            observations=observations, crossings=[], migrations=evaluation["migrations"],
+            queue_crossings=False,
+        )
+        cancelled = self.remediation_store.cancel_pending_crossings(
+            scope_id=scope_id, portfolio_id=portfolio_id, reason="seeded_baseline",
+        )
+        return {
+            "seeded_packages": len(observations),
+            "seeded_thresholds": {str(item["package_id"]): item["reached_threshold"] for item in observations},
+            "cancelled_pending_crossings": cancelled,
+            "migrated": len(applied["migrated"]),
+        }
+
+    def list_notification_outbox(self, status: Optional[str] = "pending") -> List[Dict[str, Any]]:
+        if not self.remediation_store:
+            raise QueueError("The notification store is unavailable.")
+        return self.remediation_store.list_email_outbox(
+            scope_id=self._active_scope_id(), portfolio_id=self._active_portfolio_id(), status=status,
+        )
+
+    def claim_notification_digest(self, outbox_id: str, *, expected_version: int) -> Dict[str, Any]:
+        if not self.remediation_store:
+            raise QueueError("The notification store is unavailable.")
+        policy = load_policy(self.settings.get("notification_policy"))
+        row = self.remediation_store.claim_email_outbox(
+            outbox_id, scope_id=self._active_scope_id(), portfolio_id=self._active_portfolio_id(),
+            expected_version=expected_version,
+        )
+        # Re-check the allowlist at claim time: policy may have changed between
+        # queueing and delivery, and this is the last gate before an external send.
+        assert_allowlisted(row.get("recipients") or [], policy)
+        row["expected_sender"] = str(self.settings.get("mcp_requester_email") or "").strip().lower()
+        return row
+
+    def complete_notification_digest(self, outbox_id: str, *, expected_version: int, provider_message_id: str) -> Dict[str, Any]:
+        if not self.remediation_store:
+            raise QueueError("The notification store is unavailable.")
+        return self.remediation_store.complete_email_outbox(
+            outbox_id, scope_id=self._active_scope_id(), portfolio_id=self._active_portfolio_id(),
+            expected_version=expected_version, provider_message_id=provider_message_id,
+        )
+
+    def mark_notification_digest_uncertain(self, outbox_id: str, *, expected_version: int, error: str) -> Dict[str, Any]:
+        if not self.remediation_store:
+            raise QueueError("The notification store is unavailable.")
+        return self.remediation_store.mark_email_outbox_uncertain(
+            outbox_id, scope_id=self._active_scope_id(), portfolio_id=self._active_portfolio_id(),
+            expected_version=expected_version, error=error,
+        )
+
+    def retry_notification_digest(self, outbox_id: str, *, expected_version: int, confirmed_not_delivered: bool) -> Dict[str, Any]:
+        if not self.remediation_store:
+            raise QueueError("The notification store is unavailable.")
+        return self.remediation_store.retry_email_outbox(
+            outbox_id, scope_id=self._active_scope_id(), portfolio_id=self._active_portfolio_id(),
+            expected_version=expected_version, confirmed_not_delivered=confirmed_not_delivered,
+        )
+
+    def cancel_notification_digest(self, outbox_id: str, *, expected_version: int) -> Dict[str, Any]:
+        if not self.remediation_store:
+            raise QueueError("The notification store is unavailable.")
+        return self.remediation_store.cancel_email_outbox(
+            outbox_id, scope_id=self._active_scope_id(), portfolio_id=self._active_portfolio_id(),
+            expected_version=expected_version,
+        )

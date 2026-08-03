@@ -645,6 +645,22 @@
       </div>
     </details>
 
+    <details class="disclosure section" id="hoursNotifications" data-slot="notifications" data-layout-group="sections">
+      <summary>
+        <div class="disclosure-title">
+          <strong>Hours notifications</strong>
+          <span id="notificationsSummary">Weekly threshold digests</span>
+        </div>
+        <span class="pill" id="notificationsCount">Off</span>
+      </summary>
+      <div class="disclosure-body">
+        <p class="source-note" id="notificationsDelivery"></p>
+        <div class="exception-list" id="notificationsPending"></div>
+        <div class="slack-queue" id="notificationsOutbox"></div>
+        <div class="empty" id="notificationsEmpty" hidden></div>
+      </div>
+    </details>
+
     <footer class="footer">
       <p id="footerRefreshed"></p>
       <details class="method">
@@ -841,6 +857,7 @@
       renderRiskBars();
       renderWeekly(metrics, freshness);
       renderRemediation();
+      renderNotifications();
       applyLayout();
       renderExceptions();
       if (state.selectedId) renderDetail(state.selectedId);
@@ -1250,6 +1267,69 @@
       if (atRisk > 0 && soonest !== null) return `${fmt(atRisk)}h expiring in ${soonest} day${soonest === 1 ? '' : 's'}`;
       if (atRisk > 0) return `${fmt(atRisk)}h at risk`;
       return 'No hours at stake yet';
+    }
+
+    function renderNotifications() {
+      const notifications = state.data.notifications || {};
+      const delivery = notifications.delivery || {};
+      const mode = String(delivery.notify_mode || 'off');
+      const pending = notifications.pending_crossings || [];
+      const outbox = notifications.outbox || [];
+      const activeOutbox = outbox.filter(item => ['pending', 'sending', 'needs_review'].includes(item.status));
+
+      const modeLabel = { off: 'Off', observe_only: 'Watching', active: 'On' }[mode] || mode;
+      $('#notificationsCount').textContent = mode === 'off'
+        ? 'Off'
+        : (activeOutbox.length ? `${fmt(activeOutbox.length)} to send` : (pending.length ? `${fmt(pending.length)} pending` : modeLabel));
+      $('#notificationsSummary').textContent = mode === 'off'
+        ? 'Weekly threshold digests are turned off'
+        : `${modeLabel} · ${plural(pending.length, 'crossing')} awaiting a digest · ${plural(activeOutbox.length, 'digest')} queued`;
+
+      const deliveryNote = $('#notificationsDelivery');
+      if (!notifications.available) {
+        deliveryNote.textContent = notifications.error
+          ? `Notifications unavailable: ${notifications.error}`
+          : 'Notifications are unavailable. Set HOURS_RECON_NOTIFY_MODE and run in MCP mode.';
+      } else {
+        deliveryNote.textContent = `Sent from ${delivery.sender || 'the dashboard user'} on a weekly cadence, week of ${notifications.digest_window || '—'}. `
+          + 'The dashboard queues digests and never sends them; ask Glean Pi to "send pending Hours Recon digests".'
+          + (delivery.dry_run ? ' Dry run is on, so nothing will be queued.' : '');
+      }
+
+      const pendingHost = $('#notificationsPending');
+      if (!pending.length) {
+        pendingHost.replaceChildren();
+      } else {
+        pendingHost.innerHTML = `<table class="data-table"><thead><tr><th>Account</th><th>Package</th><th>Crossed</th><th class="number">Used</th><th class="number">Sold</th><th>Expires</th></tr></thead><tbody>`
+          + pending.map(item => `<tr><td>${escapeHtml(item.account_name)}</td><td>${escapeHtml(item.package_label)}</td>`
+            + `<td>${fmt(item.threshold)}%<span class="account-meta">at ${fmt(item.pct)}%</span></td>`
+            + `<td class="number">${fmt(item.consumed_hours)}h</td><td class="number">${fmt(item.sold_hours)}h</td>`
+            + `<td>${fmtSmartDate(item.expiration_date)}</td></tr>`).join('')
+          + '</tbody></table>';
+      }
+
+      const outboxHost = $('#notificationsOutbox');
+      if (!outbox.length) {
+        outboxHost.replaceChildren();
+      } else {
+        outboxHost.innerHTML = outbox.map(item => {
+          const state_ = String(item.status || '');
+          const label = state_ === 'sent' ? 'Sent' : state_ === 'needs_review' ? 'Needs review' : state_ === 'cancelled' ? 'Cancelled' : state_ === 'sending' ? 'Claimed, not confirmed' : 'Queued, not sent';
+          return `<article class="slack-queue-item"><div><strong>${escapeHtml(item.subject || '')}</strong>`
+            + `<span class="account-meta">${escapeHtml((item.recipients || []).join(', '))} · week of ${escapeHtml(item.digest_window_key || '')} · ${plural(Number(item.crossing_count || 0), 'crossing')}</span>`
+            + `${item.error ? `<span class="account-meta">${escapeHtml(item.error)}</span>` : ''}</div>`
+            + `<span class="pill">${escapeHtml(label)}</span></article>`;
+        }).join('');
+      }
+
+      const empty = $('#notificationsEmpty');
+      const nothing = notifications.available && !pending.length && !outbox.length;
+      empty.hidden = !nothing;
+      if (nothing) {
+        empty.innerHTML = mode === 'off'
+          ? '<strong>Notifications are off.</strong>Set HOURS_RECON_NOTIFY_MODE=observe_only to start tracking thresholds without sending anything.'
+          : '<strong>Nothing to report.</strong>No package has newly crossed a threshold since the last digest.';
+      }
     }
 
     function renderRemediation() {
