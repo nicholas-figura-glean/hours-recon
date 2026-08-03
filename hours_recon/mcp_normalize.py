@@ -590,6 +590,7 @@ def derive_coverage(
     time_pagination_audit: Sequence[Mapping[str, Any]],
     account_aliases: Mapping[str, Any],
     through_date_current: bool,
+    entries: Sequence[Mapping[str, Any]] = (),
 ) -> Dict[str, Any]:
     """Derive coverage booleans from wire evidence rather than agent assertion."""
     sf_labels = {str(entry.get("label") or ""): entry for entry in salesforce_pagination}
@@ -626,17 +627,31 @@ def derive_coverage(
         and all(_pagination_terminal(entry) for entry in time_pagination_audit)
     )
 
+    # Rocketlane's time-entry *search* response carries no approval field, and
+    # includeAllFields is ignored for search, so a naive pull silently produces
+    # approval_status=None on every entry and understates governance risk. The
+    # approval state has to be recovered with the approvalStatus filter
+    # partition. Treating it as a coverage dimension makes that omission fail
+    # closed at publication instead of shipping an UNKNOWN-only snapshot.
+    missing_approval = sorted(
+        str(entry.get("id"))
+        for entry in entries
+        if not str(entry.get("approval_status") or "").strip()
+    )
+
     coverage = {
         "accounts": bool(accounts_covered),
         "opportunities": bool(opportunities_covered),
         "projects": bool(projects_covered),
         "time_entries": bool(time_entries_covered),
         "pagination_complete": bool(pagination_complete),
+        "approval_status": not missing_approval,
     }
     coverage["complete"] = bool(all(coverage.values()) and through_date_current)
     coverage["through_date_current"] = bool(through_date_current)
     coverage["unsearched_account_queries"] = sorted(expected - searched)
     coverage["unaudited_project_ids"] = sorted(retrieved_projects - audited_projects)
+    coverage["entries_missing_approval_status"] = missing_approval
     return coverage
 
 
@@ -724,6 +739,7 @@ def normalize_raw_pull(
         time_pagination_audit=time_pagination_audit,
         account_aliases=account_aliases,
         through_date_current=True,
+        entries=entries,
     )
 
     approval_counts: Dict[str, int] = {}

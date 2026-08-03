@@ -17,7 +17,7 @@ and the number of tokens you write out. Optimize both.
 - **Delegate.** Field mapping, audits, coverage, and validation are Python. You
   copy payloads; you do not transform, sum, or re-derive them.
 
-Target: **8-10 turns**. If you find yourself on turn 20, you have reverted to a
+Target: **9-11 turns**. If you find yourself on turn 20, you have reverted to a
 per-account loop — stop and batch.
 
 ## Workflow
@@ -167,7 +167,7 @@ Record what the wire reported for each query in `salesforce.pagination` as
 true; if you follow a page, set `"followed_next_page": true`. Coverage is derived
 from these envelopes, so copy them honestly.
 
-### 2. Rocketlane, in parallel — 2-3 turns
+### 2. Rocketlane, in parallel — 3-4 turns
 
 Rocketlane has no join language, so these stay separate calls — but they are
 independent, so batch them into single blocks.
@@ -181,9 +181,11 @@ independent, so batch them into single blocks.
 2. **One block:** retrieve every candidate project by ID with all fields.
 3. **One block:** retrieve billable time entries through `report_date` for every
    matched project, all contributors. Follow every page token.
+4. **One block:** recover approval status with the filter partition described
+   below. The search payload does not contain it.
 
 Preserve `externalReferenceId`, customer IDs, project owner name and email,
-lifecycle dates, status, archived state, approval status, activity, category,
+lifecycle dates, status, archived state, activity, category,
 and contributor identity. Request only the custom fields that are read:
 **Account Name**, **OppID**, and **Salesforce Account ID**; skip a
 fetch-all-fields flag, which returns a large blob that nothing consumes.
@@ -191,6 +193,44 @@ fetch-all-fields flag, which returns a large blob that nothing consumes.
 custom field into `salesforce_account_id`. Project-name inference remains a Tier 4
 fallback and must not be silently accepted. `normalize_time_entries` deduplicates
 by time-entry ID, so overlapping pages are safe to include.
+
+**Approval status is not in the time-entry search response.** The list payload
+carries no approval field whatsoever, and `includeAllFields` is documented as
+ignored for search. A pull that just reads the search results therefore produces
+`approval_status_counts: {"UNKNOWN": n}`, which silently understates governance
+risk rather than failing. Recover it with a **filter partition**: for each matched
+project, reissue the same billable/through-date search once per `approvalStatus`
+value and tag every returned entry with that value.
+
+```text
+per project, four searches, all in one parallel block:
+  approvalStatus = APPROVED
+  approvalStatus = SUBMITTED
+  approvalStatus = REJECTED
+  approvalStatus = NOT_SUBMITTED
+```
+
+Issue all four rather than inferring the last as a remainder. The four partition
+counts must sum to that project's entry count, which turns the backfill into a
+checked reconciliation instead of an assumption. Keep the same `billable` and
+`date` bounds as the main pull or the partitions will not reconcile.
+
+Write the recovered value onto each raw record as **`approvalStatus`** — that is
+the key `normalize_time_entries` reads — and record
+`rocketlane.approval_status_audit` as `{"project_id", "approval_status", "count"}`
+plus `meta.approval_status_source`.
+
+A single-entry lookup (`timeEntryId` with `includeAllFields: true`) also returns
+the value, but under the key **`status`**, not `approvalStatus`, and it costs one
+call per entry. Use it only to spot-check the partition, never to backfill a whole
+project.
+
+This is enforced, not advisory: `derive_coverage` emits a
+`coverage.approval_status` flag, so any entry lacking an approval status forces
+`coverage.complete = false` and `publish_mcp_snapshot` refuses the pull, and
+`validate_refresh` fails `approval_status_present_for_every_entry` and
+`approval_status_values_are_known`. Never satisfy those checks with a placeholder
+or assumed status; fetch the real value.
 
 Record `rocketlane.project_search_audit` as `{"query", "count", "has_more",
 "total_record_count", "followed_next_page"}` and `rocketlane.time_pagination_audit`
@@ -223,17 +263,23 @@ Line items may travel as a flat `salesforce.line_item_records` block keyed by
 lists of objects and SOQL `{"records": [...]}` envelopes are also accepted;
 all shapes produce an identical snapshot.
 
+The `approvalStatus` column above is populated from the step 2 filter partition.
+It never arrives from the time-entry search response, so do not expect to copy it
+straight off the wire.
+
 Raw pull skeleton:
 
 ```json
 {
   "meta": {"report_date", "retrieval_id", "scope", "scope_id", "scope_verified",
            "salesforce_org_id", "salesforce_mcp_server", "rocketlane_mcp_server",
-           "bindings_source": "pinned"|"rediscovered", "identity_evidence": {}},
+           "bindings_source": "pinned"|"rediscovered", "approval_status_source",
+           "identity_evidence": {}},
   "salesforce": {"requester", "aiom_field", "account_records", "opportunity_records",
                  "line_item_records", "quote_line_records", "quote_records", "pagination"},
   "rocketlane": {"requester", "project_records", "time_entry_records",
-                 "project_search_audit", "time_pagination_audit"}
+                 "project_search_audit", "time_pagination_audit",
+                 "approval_status_audit"}
 }
 ```
 
@@ -295,8 +341,9 @@ print(format_findings(validate_refresh(
 
 This covers schema, requester binding, through-date currency, scope
 verification, per-account audit coverage, in-scope opportunities, one line-item
-source per opportunity, no duplicated line items or time entries, source counts,
-pagination completeness, and coverage flags. Fix every `FAIL` before publishing.
+source per opportunity, no duplicated line items or time entries, an approval
+status present and recognized on every entry, source counts, pagination
+completeness, and coverage flags. Fix every `FAIL` before publishing.
 
 ### 5. Publish and import — 1 turn
 

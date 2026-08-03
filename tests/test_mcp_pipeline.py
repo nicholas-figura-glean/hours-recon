@@ -578,6 +578,40 @@ class CoverageTests(unittest.TestCase):
             assert target.exists()
             assert oct(target.stat().st_mode)[-3:] == "600"
 
+    # Rocketlane's time-entry search response omits approval status entirely, so
+    # the only way a pull gets it is the approvalStatus filter partition. These
+    # tests pin that omission to a loud failure rather than an UNKNOWN snapshot.
+    def test_missing_approval_status_blocks_coverage(self):
+        raw = raw_pull()
+        for entry in raw["rocketlane"]["time_entry_records"]:
+            entry.pop("approvalStatus", None)
+        snapshot = build_snapshot(raw)
+        assert snapshot["meta"]["coverage"]["approval_status"] is False
+        assert snapshot["meta"]["coverage"]["complete"] is False
+        assert snapshot["meta"]["coverage"]["entries_missing_approval_status"]
+        assert snapshot["meta"]["approval_status_counts"] == {"UNKNOWN": len(snapshot["rocketlane"]["entries"])}
+
+    def test_missing_approval_status_cannot_be_published(self):
+        with tempfile.TemporaryDirectory() as _tmp:
+            raw = raw_pull()
+            for entry in raw["rocketlane"]["time_entry_records"]:
+                entry.pop("approvalStatus", None)
+            with self.assertRaisesRegex(McpSnapshotError, "incomplete source coverage"):
+                publish_mcp_snapshot(
+                    Path(_tmp) / "snapshot.json",
+                    build_snapshot(raw),
+                    expected_requester_email=REQUESTER,
+                    expected_scope_id=SCOPE_ID,
+                    timezone_name=TIMEZONE,
+                )
+
+    def test_one_entry_missing_approval_status_is_surfaced(self):
+        raw = raw_pull()
+        raw["rocketlane"]["time_entry_records"][0].pop("approvalStatus", None)
+        snapshot = build_snapshot(raw)
+        assert snapshot["meta"]["coverage"]["approval_status"] is False
+        assert snapshot["meta"]["coverage"]["entries_missing_approval_status"] == ["5001"]
+
 
 class ValidationTests(unittest.TestCase):
     def test_normalized_pull_passes_every_check_end_to_end(self):
@@ -618,6 +652,25 @@ class ValidationTests(unittest.TestCase):
         snapshot = build_snapshot()
         snapshot["meta"]["source_counts"]["time_entries"] = 99
         assert "source_counts_match_payload" in _failed_checks(_validated(snapshot))
+
+    def test_validator_catches_missing_approval_status(self):
+        snapshot = build_snapshot()
+        snapshot["rocketlane"]["entries"][0]["approval_status"] = ""
+        assert "approval_status_present_for_every_entry" in _failed_checks(_validated(snapshot))
+
+    def test_validator_catches_unrecognized_approval_status(self):
+        snapshot = build_snapshot()
+        snapshot["rocketlane"]["entries"][0]["approval_status"] = "PROBABLY_FINE"
+        assert "approval_status_values_are_known" in _failed_checks(_validated(snapshot))
+
+    def test_validator_accepts_the_full_rocketlane_approval_enum(self):
+        for status in ("APPROVED", "SUBMITTED", "REJECTED", "NOT_SUBMITTED"):
+            snapshot = build_snapshot()
+            for entry in snapshot["rocketlane"]["entries"]:
+                entry["approval_status"] = status
+            failures = _failed_checks(_validated(snapshot))
+            assert "approval_status_values_are_known" not in failures
+            assert "approval_status_present_for_every_entry" not in failures
 
     def test_validator_catches_wrong_requester_and_scope(self):
         snapshot = build_snapshot()

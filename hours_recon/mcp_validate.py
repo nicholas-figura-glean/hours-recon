@@ -22,6 +22,12 @@ from .matching import match_projects
 
 TOLERANCE = Decimal("0.02")
 
+# Rocketlane's approvalStatus enum, plus the variant hours_recon.evidence treats
+# as equivalent to approved.
+KNOWN_APPROVAL_STATUSES = frozenset({
+    "NOT_SUBMITTED", "SUBMITTED", "APPROVED", "REJECTED", "APPROVED_WITH_CHANGES",
+})
+
 
 def _finding(check: str, ok: bool, detail: str = "") -> Dict[str, Any]:
     return {"check": check, "ok": bool(ok), "detail": detail}
@@ -153,6 +159,34 @@ def validate_snapshot(
         "no_duplicate_time_entries",
         len(entry_ids) == len(set(entry_ids)),
         f"{len(entry_ids)} entries, {len(set(entry_ids))} unique",
+    ))
+
+    # Approval state is absent from Rocketlane's time-entry search payload, so a
+    # refresh that skips the approvalStatus filter partition looks successful
+    # while reporting every entry as UNKNOWN. Fail loudly instead.
+    missing_approval = sorted(
+        str(item.get("id"))
+        for item in entries
+        if not str(item.get("approval_status") or "").strip()
+    )
+    findings.append(_finding(
+        "approval_status_present_for_every_entry",
+        not missing_approval,
+        f"{len(missing_approval)} entries missing approval status, e.g. {missing_approval[:5]}"
+        if missing_approval
+        else f"all {len(entries)} entries carry an approval status",
+    ))
+
+    unknown_approval = sorted({
+        str(item.get("approval_status")).strip().upper()
+        for item in entries
+        if str(item.get("approval_status") or "").strip()
+        and str(item.get("approval_status")).strip().upper() not in KNOWN_APPROVAL_STATUSES
+    })
+    findings.append(_finding(
+        "approval_status_values_are_known",
+        not unknown_approval,
+        f"unrecognized={unknown_approval}" if unknown_approval else "all approval statuses are recognized",
     ))
 
     project_ids = {str(item.get("id")) for item in projects}
