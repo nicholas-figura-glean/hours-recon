@@ -2875,3 +2875,43 @@ class RemediationStore:
             raise
         finally:
             connection.close()
+
+    def record_baseline_seeded(
+        self,
+        *,
+        scope_id: str,
+        portfolio_id: str,
+        retrieval_id: str,
+        seeded_thresholds: Mapping[str, Any],
+        cancelled_crossings: int,
+    ) -> None:
+        """Audit the silent backfill that suppressed already-breached rungs.
+
+        Seeding writes high-water marks without creating a crossing, so without
+        this row a later reader finds a package pinned at 50% with no crossing
+        and no explanation, and cannot tell a deliberate baseline apart from a
+        notification that was silently lost. This is the only record that the
+        suppression was intentional.
+        """
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            self._notification_event(
+                connection, scope_id=scope_id, portfolio_id=portfolio_id,
+                event_type="baseline_seeded", actor="hours_recon",
+                payload={
+                    "retrieval_id": str(retrieval_id),
+                    "package_count": len(seeded_thresholds),
+                    "seeded_thresholds": {str(key): value for key, value in seeded_thresholds.items()},
+                    "suppressed_rungs": sorted(
+                        {int(value) for value in seeded_thresholds.values() if value},
+                    ),
+                    "cancelled_pending_crossings": int(cancelled_crossings),
+                },
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()

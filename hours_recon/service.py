@@ -1198,9 +1198,14 @@ class ReconciliationService:
         cancelled = self.remediation_store.cancel_pending_crossings(
             scope_id=scope_id, portfolio_id=portfolio_id, reason="seeded_baseline",
         )
+        seeded = {str(item["package_id"]): item["reached_threshold"] for item in observations}
+        self.remediation_store.record_baseline_seeded(
+            scope_id=scope_id, portfolio_id=portfolio_id, retrieval_id=retrieval_id,
+            seeded_thresholds=seeded, cancelled_crossings=cancelled,
+        )
         return {
             "seeded_packages": len(observations),
-            "seeded_thresholds": {str(item["package_id"]): item["reached_threshold"] for item in observations},
+            "seeded_thresholds": seeded,
             "cancelled_pending_crossings": cancelled,
             "migrated": len(applied["migrated"]),
         }

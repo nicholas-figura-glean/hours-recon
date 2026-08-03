@@ -518,6 +518,18 @@ class StoreTests(unittest.TestCase):
             scope_id=SCOPE, portfolio_id=PORTFOLIO, reason="seeded_baseline"))
         self.assertEqual([], self._pending())
 
+    def test_baseline_seeding_is_audited(self):
+        self.store.record_baseline_seeded(
+            scope_id=SCOPE, portfolio_id=PORTFOLIO, retrieval_id="retr-1",
+            seeded_thresholds={"006A:1": 50, "006A:2": 0}, cancelled_crossings=3)
+        events = [item for item in self.store.notification_events(
+            scope_id=SCOPE, portfolio_id=PORTFOLIO) if item["event_type"] == "baseline_seeded"]
+        self.assertEqual(1, len(events))
+        payload = events[0]["payload"]
+        self.assertEqual(2, payload["package_count"])
+        self.assertEqual([50], payload["suppressed_rungs"])
+        self.assertEqual(3, payload["cancelled_pending_crossings"])
+
     def test_events_record_the_audit_trail(self):
         self._queue_digest()
         types = [item["event_type"] for item
