@@ -8,7 +8,13 @@ from decimal import Decimal
 from pathlib import Path
 
 from hours_recon.inference import infer_packages, infer_text
-from hours_recon.matching import match_projects, normalize_name
+from hours_recon.matching import (
+    account_search_queries,
+    leading_name_token,
+    match_projects,
+    match_projects_with_evidence,
+    normalize_name,
+)
 from hours_recon.reconcile import package_risk, reconcile
 
 PACKAGE_CONFIG = {
@@ -230,6 +236,110 @@ class MatchingTests(unittest.TestCase):
         mapping, exceptions = match_projects(accounts, [project], {"aliases": {}})
         self.assertEqual({}, mapping)
         self.assertEqual("explicit_account_out_of_scope", exceptions[0]["type"])
+
+
+class IdentifierJoinTests(unittest.TestCase):
+    """Identifier joins must beat name matching so aliases stay a fallback."""
+
+    accounts = [{"id": "0014S0000049NRuQAM", "name": "Aderant North America, Inc."}]
+    opportunities = [{"id": "006PZ00000N4Jd7YAF", "account_id": "0014S0000049NRuQAM"}]
+
+    def test_opportunity_id_matches_without_alias_or_name_overlap(self):
+        # The Rocketlane customer is "Aderant" while Salesforce holds the legal
+        # name, so no name tier can join these. The OppID can.
+        project = {
+            "id": "1036896",
+            "name": "Aderant | Standard Package",
+            "customer_name": "Aderant",
+            "account_name": "Aderant",
+            "opportunity_id": "006PZ00000N4Jd7YAF",
+        }
+        mapping, exceptions, evidence = match_projects_with_evidence(
+            self.accounts, [project], {"aliases": {}}, opportunities=self.opportunities
+        )
+        self.assertEqual({"1036896": "0014S0000049NRuQAM"}, mapping)
+        self.assertEqual([], exceptions)
+        self.assertEqual("salesforce_opportunity_id", evidence["1036896"]["basis"])
+
+    def test_opportunity_id_wins_over_a_configured_alias(self):
+        project = {
+            "id": "1036896",
+            "customer_name": "Aderant",
+            "opportunity_id": "006PZ00000N4Jd7YAF",
+        }
+        aliases = {"aliases": {"Aderant North America, Inc.": ["Aderant"]}}
+        _, _, evidence = match_projects_with_evidence(
+            self.accounts, [project], aliases, opportunities=self.opportunities
+        )
+        self.assertEqual("salesforce_opportunity_id", evidence["1036896"]["basis"])
+
+    def test_account_shaped_value_in_opportunity_field_is_not_joined_as_opportunity(self):
+        # Five Below's Rocketlane "OppID" actually holds an Account ID, so the
+        # field label alone is not trustworthy; only 006-shaped IDs are joined.
+        project = {"id": "P1", "customer_name": "Nothing Alike", "opportunity_id": "0014S000007YbwVQAS"}
+        mapping, exceptions, _ = match_projects_with_evidence(
+            self.accounts, [project], {"aliases": {}}, opportunities=self.opportunities
+        )
+        self.assertEqual({}, mapping)
+        self.assertEqual("unmatched_project", exceptions[0]["type"])
+
+    def test_out_of_scope_opportunity_id_falls_through_instead_of_blocking(self):
+        # The in-scope set is Closed Won through the report date, so a project may
+        # legitimately point at an opportunity outside it. Name tiers still apply.
+        project = {
+            "id": "P1",
+            "customer_name": "Aderant North America, Inc.",
+            "opportunity_id": "006PZ00000ZZZZZZZZZ",
+        }
+        mapping, exceptions, evidence = match_projects_with_evidence(
+            self.accounts, [project], {"aliases": {}}, opportunities=self.opportunities
+        )
+        self.assertEqual({"P1": "0014S0000049NRuQAM"}, mapping)
+        self.assertEqual([], exceptions)
+        self.assertEqual("normalized_customer_name", evidence["P1"]["basis"])
+
+    def test_ambiguous_opportunity_id_is_not_joined(self):
+        opportunities = [
+            {"id": "006PZ00000N4Jd7YAF", "account_id": "0014S0000049NRuQAM"},
+            {"id": "006PZ00000N4Jd7YAF", "account_id": "001OTHERACCOUNT99"},
+        ]
+        accounts = self.accounts + [{"id": "001OTHERACCOUNT99", "name": "Other"}]
+        project = {"id": "P1", "customer_name": "Nothing Alike", "opportunity_id": "006PZ00000N4Jd7YAF"}
+        mapping, exceptions, _ = match_projects_with_evidence(
+            accounts, [project], {"aliases": {}}, opportunities=opportunities
+        )
+        self.assertEqual({}, mapping)
+        self.assertEqual("unmatched_project", exceptions[0]["type"])
+
+    def test_governed_account_name_field_matches_without_alias(self):
+        # No OppID here: the governed "Account Name" custom field carries the
+        # exact Salesforce name even though the customer record is short.
+        project = {
+            "id": "P1",
+            "name": "Aderant | Standard Package",
+            "customer_name": "Aderant",
+            "account_name": "Aderant North America, Inc.",
+        }
+        mapping, exceptions, evidence = match_projects_with_evidence(
+            self.accounts, [project], {"aliases": {}}
+        )
+        self.assertEqual({"P1": "0014S0000049NRuQAM"}, mapping)
+        self.assertEqual([], exceptions)
+        self.assertEqual("governed_account_name_field", evidence["P1"]["basis"])
+
+    def test_search_queries_escalate_to_the_leading_token(self):
+        self.assertEqual("aderant", leading_name_token("Aderant North America, Inc."))
+        self.assertEqual(
+            ["Aderant North America, Inc.", "aderant"],
+            account_search_queries("Aderant North America, Inc."),
+        )
+        # A single-token legal name needs no escalation query.
+        self.assertEqual(["Vanta, Inc"], account_search_queries("Vanta, Inc"))
+        # A genuine rebrand still requires a configured alias.
+        self.assertEqual(
+            ["Orthogonal Networks (DBA Jellyfish)", "Jellyfish", "orthogonal"],
+            account_search_queries("Orthogonal Networks (DBA Jellyfish)", ["Jellyfish"]),
+        )
 
 
 class ReconciliationTests(unittest.TestCase):

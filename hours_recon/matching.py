@@ -6,9 +6,21 @@ import json
 import re
 import unicodedata
 from difflib import SequenceMatcher
-from typing import Any, Dict, Iterable, List, Mapping, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 LEGAL_SUFFIXES = {"inc", "incorporated", "llc", "ltd", "limited", "corp", "corporation", "co", "company"}
+
+# Salesforce key prefixes. Rocketlane custom fields are populated by humans and by
+# integrations, so a field labelled "OppID" cannot be trusted to hold an
+# Opportunity ID; validate the shape before using it as a join key.
+ACCOUNT_ID_PREFIX = "001"
+OPPORTUNITY_ID_PREFIX = "006"
+
+
+def looks_like_salesforce_id(value: Any, prefix: str) -> bool:
+    """True when value is a 15/18 character Salesforce ID with the given prefix."""
+    text = str(value or "").strip()
+    return len(text) in {15, 18} and text.startswith(prefix) and text.isalnum()
 
 
 def normalize_name(value: str) -> str:
@@ -21,8 +33,60 @@ def normalize_name(value: str) -> str:
     return " ".join(tokens)
 
 
+def leading_name_token(value: str) -> str:
+    """First significant token of a normalized account name.
+
+    Rocketlane names projects `<short name> | <package>` while Salesforce stores
+    the legal entity name, and the Rocketlane project filter is a substring
+    match. "Aderant North America, Inc." therefore never matches
+    "Aderant | Standard Package", but its leading token does. Used as an
+    escalation query when an account's own name finds nothing.
+    """
+    tokens = normalize_name(value).split()
+    return tokens[0] if tokens else ""
+
+
+def account_search_queries(name: str, aliases: Iterable[str] = ()) -> List[str]:
+    """Ordered, de-duplicated Rocketlane project searches for one account.
+
+    The account name and every configured alias are always searched. The leading
+    token is the documented escalation when those return nothing; coverage
+    requires it before an account with no project can be called covered.
+    """
+    queries: List[str] = []
+    for candidate in [name, *aliases, leading_name_token(name)]:
+        text = str(candidate or "").strip()
+        if text and all(normalize_name(text) != normalize_name(existing) for existing in queries):
+            queries.append(text)
+    return queries
+
+
 def _configured_aliases(aliases: Mapping[str, Any]) -> Mapping[str, Any]:
     return aliases.get("aliases", aliases)
+
+
+def _opportunity_crosswalk(opportunities: Iterable[Mapping[str, Any]], account_ids: set) -> Dict[str, str]:
+    """Map in-scope Opportunity ID -> Account ID.
+
+    Rocketlane projects provisioned from Salesforce carry the originating
+    Opportunity ID, which is an exact identifier for the account that owns it.
+    Joining on it removes name matching entirely for those projects.
+    """
+    crosswalk: Dict[str, str] = {}
+    conflicting: set = set()
+    for opportunity in opportunities:
+        opportunity_id = str(opportunity.get("id") or "").strip()
+        account_id = str(opportunity.get("account_id") or "").strip()
+        if not opportunity_id or account_id not in account_ids:
+            continue
+        existing = crosswalk.get(opportunity_id)
+        if existing and existing != account_id:
+            conflicting.add(opportunity_id)
+            continue
+        crosswalk[opportunity_id] = account_id
+    for opportunity_id in conflicting:
+        crosswalk.pop(opportunity_id, None)
+    return crosswalk
 
 
 def build_account_index(accounts: Iterable[Mapping[str, Any]], aliases: Mapping[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
@@ -86,12 +150,26 @@ def match_projects_with_evidence(
     accounts: Iterable[Mapping[str, Any]],
     projects: Iterable[Mapping[str, Any]],
     aliases: Mapping[str, Any],
+    opportunities: Iterable[Mapping[str, Any]] = (),
 ) -> Tuple[Dict[str, str], List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
-    """Match projects and retain the exact basis used for governance scoring."""
+    """Match projects and retain the exact basis used for governance scoring.
+
+    Tier order, strongest first. Identifier joins are attempted before any name
+    comparison so that name normalization and configured aliases are a fallback
+    for records that carry no cross-system identifier, never the primary join:
+
+    1. ``salesforce_account_id``      - Account ID stored on the Rocketlane record
+    2. ``salesforce_opportunity_id``  - in-scope Opportunity ID resolved to its account
+    3. ``rocketlane_customer_id_crosswalk`` - governed customer-ID mapping
+    4. ``governed_account_name_field``      - Rocketlane "Account Name" custom field
+    5. ``normalized_customer_name`` / ``configured_alias``
+    6. ``project_name_fallback``
+    """
     account_list = [dict(account) for account in accounts]
     account_by_id = {str(item.get("id")): item for item in account_list}
     index = _build_provenance_index(account_list, aliases)
     customer_crosswalk, customer_crosswalk_collisions = _customer_id_crosswalk(account_list, aliases)
+    opportunity_crosswalk = _opportunity_crosswalk(opportunities, set(account_by_id))
     project_to_account: Dict[str, str] = {}
     match_evidence: Dict[str, Dict[str, Any]] = {}
     exceptions: List[Dict[str, Any]] = []
@@ -153,6 +231,25 @@ def match_projects_with_evidence(
                 })
             continue
 
+        # Tier 2: the Opportunity ID Rocketlane stores for the project. Only a
+        # correctly shaped Opportunity ID is trusted, and only when it resolves
+        # to an in-scope opportunity. An unresolved value falls through to the
+        # remaining tiers rather than blocking: the in-scope opportunity set is
+        # restricted to Closed Won on or before the report date, so a project
+        # may legitimately reference an opportunity outside that window.
+        opportunity_id = str(project.get("opportunity_id") or "").strip()
+        if looks_like_salesforce_id(opportunity_id, OPPORTUNITY_ID_PREFIX):
+            crosswalk_account_id = opportunity_crosswalk.get(opportunity_id)
+            if crosswalk_account_id:
+                project_to_account[project_id] = crosswalk_account_id
+                match_evidence[project_id] = {
+                    "basis": "salesforce_opportunity_id",
+                    "account_id": crosswalk_account_id,
+                    "project_id": project_id,
+                    "matched_value": opportunity_id,
+                }
+                continue
+
         customer_id = str(project.get("customer_id") or "")
         if customer_id in customer_crosswalk_collisions:
             exceptions.append({
@@ -177,34 +274,53 @@ def match_projects_with_evidence(
             continue
 
         customer_name = str(project.get("customer_name") or "")
-        match_value = customer_name or str(project.get("name") or "")
+        governed_account_name = str(project.get("account_name") or "")
+        # Rocketlane's "Account Name" custom field carries the exact Salesforce
+        # account name, so it matches without an alias. normalize_projects falls
+        # back to the customer name when the field is absent, so only treat it as
+        # governed evidence when it differs from the customer name.
+        candidates: List[Tuple[str, Optional[str]]] = []
+        if governed_account_name and normalize_name(governed_account_name) != normalize_name(customer_name):
+            candidates.append((governed_account_name, "governed_account_name_field"))
+        if customer_name:
+            candidates.append((customer_name, None))
+        if not candidates:
+            candidates.append((str(project.get("name") or ""), "project_name_fallback"))
+
+        matched = False
+        collided = False
+        match_value = candidates[0][0]
+        for value, basis_override in candidates:
+            key = normalize_name(value)
+            matches = index.get(key, [])
+            unique_accounts = {str(item["account"].get("id")): item for item in matches}
+            if len(unique_accounts) == 1:
+                match = next(iter(unique_accounts.values()))
+                account_id = str(match["account"]["id"])
+                project_to_account[project_id] = account_id
+                match_evidence[project_id] = {
+                    "basis": basis_override or str(match["basis"]),
+                    "account_id": account_id,
+                    "project_id": project_id,
+                    "matched_value": value,
+                }
+                matched = True
+                break
+            if len(unique_accounts) > 1:
+                exceptions.append({
+                    "type": "account_collision",
+                    "project_id": project_id,
+                    "project_name": project.get("name"),
+                    "rocketlane_customer": value,
+                    "message": "Multiple Salesforce accounts normalize to the same name; add an explicit cross-system ID or governed customer-ID mapping.",
+                    "candidates": sorted(str(item["account"].get("name")) for item in unique_accounts.values()),
+                })
+                collided = True
+                break
+            match_value = value
+        if matched or collided:
+            continue
         key = normalize_name(match_value)
-        matches = index.get(key, [])
-        unique_accounts = {str(item["account"].get("id")): item for item in matches}
-        if len(unique_accounts) == 1:
-            match = next(iter(unique_accounts.values()))
-            account_id = str(match["account"]["id"])
-            basis = str(match["basis"])
-            if not customer_name:
-                basis = "project_name_fallback"
-            project_to_account[project_id] = account_id
-            match_evidence[project_id] = {
-                "basis": basis,
-                "account_id": account_id,
-                "project_id": project_id,
-                "matched_value": match_value,
-            }
-            continue
-        if len(unique_accounts) > 1:
-            exceptions.append({
-                "type": "account_collision",
-                "project_id": project_id,
-                "project_name": project.get("name"),
-                "rocketlane_customer": match_value,
-                "message": "Multiple Salesforce accounts normalize to the same name; add an explicit cross-system ID or governed customer-ID mapping.",
-                "candidates": sorted(str(item["account"].get("name")) for item in unique_accounts.values()),
-            })
-            continue
         suggestions = sorted(
             (
                 (SequenceMatcher(None, key, candidate).ratio(), index[candidate][0]["account"])
@@ -218,7 +334,7 @@ def match_projects_with_evidence(
             "project_id": project_id,
             "project_name": project.get("name"),
             "rocketlane_customer": match_value,
-            "message": "No exact normalized name, configured alias, Salesforce Account ID, or governed customer-ID crosswalk matched.",
+            "message": "No Salesforce Account ID, in-scope Opportunity ID, governed customer-ID crosswalk, governed account-name field, exact normalized name, or configured alias matched.",
             "suggested_account": best[1].get("name") if best[0] >= 0.55 else None,
             "suggestion_score": round(best[0], 3),
         })
@@ -229,6 +345,7 @@ def match_projects(
     accounts: Iterable[Mapping[str, Any]],
     projects: Iterable[Mapping[str, Any]],
     aliases: Mapping[str, Any],
+    opportunities: Iterable[Mapping[str, Any]] = (),
 ) -> Tuple[Dict[str, str], List[Dict[str, Any]]]:
-    mapping, exceptions, _ = match_projects_with_evidence(accounts, projects, aliases)
+    mapping, exceptions, _ = match_projects_with_evidence(accounts, projects, aliases, opportunities=opportunities)
     return mapping, exceptions

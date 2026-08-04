@@ -296,7 +296,7 @@ def validate_report(
         as_of = date.fromisoformat(as_of_text)
     except ValueError:
         as_of = None
-    project_map, _ = match_projects(accounts, projects, account_aliases)
+    project_map, _ = match_projects(accounts, projects, account_aliases, opportunities=opportunities)
     expected_billed = Decimal("0")
     counted = 0
     for entry in entries:
@@ -329,6 +329,27 @@ def validate_report(
         "every_project_matched_or_surfaced",
         matched_count + unmatched_count >= len(projects),
         f"projects={len(projects)} matched={matched_count} surfaced={unmatched_count}",
+    ))
+
+    # An entitled account with no project silently reports zero billed hours, so
+    # the report must surface it rather than let it read as unused capacity.
+    entitled_without_project = [
+        str(item.get("name"))
+        for item in report.get("accounts") or []
+        if float(item.get("sold_hours") or 0) > 0
+        and int(item.get("project_count") or 0) == 0
+        and str(item.get("entitlement_disposition") or "").strip().lower()
+        not in {"none", "not_expected", "not_applicable", "ended"}
+    ]
+    surfaced_without_project = {
+        str(item.get("account_name")) for item in exceptions if item.get("type") == "account_without_project"
+    }
+    unsurfaced_without_project = sorted(set(entitled_without_project) - surfaced_without_project)
+    findings.append(_finding(
+        "entitled_accounts_have_projects_or_are_surfaced",
+        not unsurfaced_without_project,
+        f"unsurfaced={unsurfaced_without_project[:5]}" if unsurfaced_without_project
+        else f"{len(entitled_without_project)} entitled accounts without a project, all surfaced",
     ))
 
     pre_entitlement_accounts = [

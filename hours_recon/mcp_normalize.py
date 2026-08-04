@@ -22,7 +22,8 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from .dates import business_today
-from .matching import normalize_name
+from .inference import infer_packages
+from .matching import leading_name_token, match_projects_with_evidence, normalize_name
 
 SCHEMA_VERSION = 1
 
@@ -566,8 +567,18 @@ def _pagination_terminal(entry: Mapping[str, Any]) -> bool:
 def expected_project_queries(
     accounts: Sequence[Mapping[str, Any]],
     account_aliases: Mapping[str, Any],
+    accounts_without_projects: Sequence[str] = (),
 ) -> List[str]:
+    """Rocketlane searches an honest refresh must have issued.
+
+    Every account name and configured alias is always required. For an account
+    that ended up with no matched project, the broader leading-token search is
+    required too: Rocketlane filters project names by substring, so a legal name
+    like "Aderant North America, Inc." cannot match "Aderant | Standard Package"
+    and a single zero-result search is not evidence that no project exists.
+    """
     configured = account_aliases.get("aliases", account_aliases)
+    escalate = {str(value) for value in accounts_without_projects}
     queries: List[str] = []
     for account in accounts:
         name = _text(account.get("name"))
@@ -577,6 +588,10 @@ def expected_project_queries(
             alias_text = _text(alias)
             if alias_text:
                 queries.append(alias_text)
+        if str(account.get("id")) in escalate and name:
+            token = leading_name_token(name)
+            if token:
+                queries.append(token)
     return queries
 
 
@@ -591,6 +606,7 @@ def derive_coverage(
     account_aliases: Mapping[str, Any],
     through_date_current: bool,
     entries: Sequence[Mapping[str, Any]] = (),
+    package_config: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Derive coverage booleans from wire evidence rather than agent assertion."""
     sf_labels = {str(entry.get("label") or ""): entry for entry in salesforce_pagination}
@@ -606,13 +622,59 @@ def derive_coverage(
         == {str(item.get("account_id")) for item in opportunities} | {str(item["id"]) for item in accounts}
     )
 
+    # Which accounts actually ended up with a project decides both how hard the
+    # search evidence has to be and whether an entitled account is silently
+    # reporting zero billed hours.
+    project_map, _, _ = match_projects_with_evidence(
+        accounts, projects, account_aliases, opportunities=opportunities
+    )
+    matched_account_ids = set(project_map.values())
+    accounts_without_projects = [
+        str(account.get("id")) for account in accounts if str(account.get("id")) not in matched_account_ids
+    ]
+    # Only escalate discovery for accounts that could actually hold hours. An
+    # account with no in-scope opportunity needs no project, so demanding a
+    # broader search for it would be noise rather than evidence.
+    accounts_with_opportunities = {str(item.get("account_id")) for item in opportunities}
+    escalate_search = [
+        account_id for account_id in accounts_without_projects if account_id in accounts_with_opportunities
+    ]
+
     searched = {normalize_name(str(entry.get("query") or "")) for entry in project_search_audit}
-    expected = {normalize_name(value) for value in expected_project_queries(accounts, account_aliases)}
+    expected = {
+        normalize_name(value)
+        for value in expected_project_queries(accounts, account_aliases, escalate_search)
+    }
     projects_covered = (
         bool(project_search_audit)
         and expected.issubset(searched)
         and all(_pagination_terminal(entry) for entry in project_search_audit)
     )
+
+    # An account holding sold hours with no matched project is a retrieval or
+    # linkage gap, not a zero. Publishing it silently understates billed hours,
+    # so coverage fails closed unless an explicit disposition exempts it.
+    accounts_missing_projects: List[Dict[str, Any]] = []
+    if package_config is not None:
+        exempt = {"none", "not_expected", "not_applicable", "ended"}
+        for account in accounts:
+            account_id = str(account.get("id"))
+            if account_id not in accounts_without_projects:
+                continue
+            sold = 0.0
+            dispositions = set()
+            for opportunity in opportunities:
+                if str(opportunity.get("account_id")) != account_id:
+                    continue
+                dispositions.add(str(opportunity.get("entitlement_disposition") or "").strip().lower())
+                packages, _unresolved = infer_packages(opportunity, package_config)
+                sold += sum(float(item.get("sold_hours") or 0) for item in packages)
+            if sold > 0 and not (dispositions & exempt):
+                accounts_missing_projects.append({
+                    "account_id": account_id,
+                    "account_name": _text(account.get("name")),
+                    "sold_hours": round(sold, 2),
+                })
 
     audited_projects = {str(entry.get("project_id")) for entry in time_pagination_audit}
     retrieved_projects = {str(item["id"]) for item in projects}
@@ -646,12 +708,16 @@ def derive_coverage(
         "time_entries": bool(time_entries_covered),
         "pagination_complete": bool(pagination_complete),
         "approval_status": not missing_approval,
+        "entitled_accounts_have_projects": not accounts_missing_projects,
     }
     coverage["complete"] = bool(all(coverage.values()) and through_date_current)
     coverage["through_date_current"] = bool(through_date_current)
     coverage["unsearched_account_queries"] = sorted(expected - searched)
     coverage["unaudited_project_ids"] = sorted(retrieved_projects - audited_projects)
     coverage["entries_missing_approval_status"] = missing_approval
+    coverage["accounts_missing_projects"] = sorted(
+        accounts_missing_projects, key=lambda item: str(item.get("account_name") or "")
+    )
     return coverage
 
 
@@ -667,11 +733,15 @@ def normalize_raw_pull(
     timezone_name: str,
     bindings: Optional[Mapping[str, Any]] = None,
     today: Optional[date] = None,
+    package_config: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build a publishable schema-v1 snapshot from raw MCP payloads.
 
     ``raw`` carries payloads as the connectors returned them plus the pagination
     envelopes the caller observed. Everything downstream of that is derived here.
+
+    Pass ``package_config`` to enable the fail-closed check for accounts that
+    hold sold hours but matched no Rocketlane project.
     """
     if not isinstance(raw, Mapping):
         raise RawPullError("The raw pull must be a mapping.")
@@ -740,6 +810,7 @@ def normalize_raw_pull(
         account_aliases=account_aliases,
         through_date_current=True,
         entries=entries,
+        package_config=package_config,
     )
 
     approval_counts: Dict[str, int] = {}

@@ -100,7 +100,9 @@ def reconcile(
     future_entry_count = len(dated_entries) - len(entries)
     undated_entry_count = len(billable_entries) - len(dated_entries)
 
-    project_map, match_exceptions, project_match_evidence = match_projects_with_evidence(accounts, projects, account_aliases)
+    project_map, match_exceptions, project_match_evidence = match_projects_with_evidence(
+        accounts, projects, account_aliases, opportunities=opportunities
+    )
     exceptions: List[Dict[str, Any]] = list(match_exceptions)
     if future_entry_count:
         exceptions.append({
@@ -202,6 +204,23 @@ def reconcile(
         account["project_count"] = len(account["projects"])
         account["entry_count"] = len(account_entries)
         account["risk"] = _account_risk(account)
+        # An entitled account with no Rocketlane project reports zero billed
+        # hours, which is indistinguishable from genuinely unused hours unless it
+        # is surfaced. Only an explicit disposition makes the absence expected.
+        exempt = {"none", "not_expected", "not_applicable", "ended"}
+        disposition = str(account.get("entitlement_disposition") or "").strip().lower()
+        if not account["projects"] and float(account.get("sold_hours", 0) or 0) > 0 and disposition not in exempt:
+            exceptions.append({
+                "type": "account_without_project",
+                "account_id": account["id"],
+                "account_name": account["name"],
+                "sold_hours": account.get("sold_hours", 0),
+                "message": (
+                    f"{account['name']} holds {account.get('sold_hours', 0)} sold hours but matched no Rocketlane "
+                    "project, so billed hours cannot be reconciled. Broaden the project search, add a cross-system "
+                    "identifier, or record an explicit no-entitlement disposition."
+                ),
+            })
 
     ordered_accounts = sorted(account_results.values(), key=lambda item: (RISK_ORDER.get(item["risk"], 99), item["name"].lower()))
     metrics = _portfolio_metrics(ordered_accounts)
@@ -210,6 +229,7 @@ def reconcile(
         "invalid_project_id", "project_id_collision",
     })
     metrics["unresolved_packages"] = sum(1 for item in exceptions if item.get("type") == "unresolved_package")
+    metrics["accounts_missing_projects"] = sum(1 for item in exceptions if item.get("type") == "account_without_project")
 
     report = {
         "meta": {

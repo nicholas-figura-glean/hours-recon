@@ -337,6 +337,33 @@ class EvidencePolicyTests(unittest.TestCase):
         _, _, evidence = match_projects_with_evidence(accounts, [project], {"aliases": {}})
         self.assertEqual("salesforce_account_id", evidence["P1"]["basis"])
 
+    def test_opportunity_id_linkage_scores_t1(self):
+        account = minimal_account()
+        account["projects"] = [{"id": "P1", "customer_id": "C1", "name": "Acme | Standard Package"}]
+        fields = ("sold_hours", "billed_hours", "remaining_hours", "at_risk_hours", "expired_unused_hours", "future_entitlement_hours", "overage_hours")
+        report = {
+            "meta": {},
+            "metrics": {field: account.get(field, 0) for field in fields},
+            "accounts": [account],
+        }
+        attach_governance(report, project_match_evidence={"P1": {"basis": "salesforce_opportunity_id"}})
+        linkage = report["accounts"][0]["governance"]["dimensions"]["project_linkage"]
+        self.assertEqual("T1", linkage["tier"])
+        self.assertEqual("salesforce_opportunity_id", linkage["reason_code"])
+
+    def test_governed_account_name_field_linkage_stays_t3(self):
+        account = minimal_account()
+        account["projects"] = [{"id": "P1", "customer_id": "C1", "name": "Acme | Standard Package"}]
+        fields = ("sold_hours", "billed_hours", "remaining_hours", "at_risk_hours", "expired_unused_hours", "future_entitlement_hours", "overage_hours")
+        report = {
+            "meta": {},
+            "metrics": {field: account.get(field, 0) for field in fields},
+            "accounts": [account],
+        }
+        attach_governance(report, project_match_evidence={"P1": {"basis": "governed_account_name_field"}})
+        linkage = report["accounts"][0]["governance"]["dimensions"]["project_linkage"]
+        self.assertEqual("T3", linkage["tier"])
+
 
 class RemediationPlannerTests(unittest.TestCase):
     def test_detailed_dimensions_offer_valid_t2_and_t1_paths(self):

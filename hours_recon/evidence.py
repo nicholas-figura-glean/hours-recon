@@ -280,14 +280,19 @@ def _project_linkage_dimension(
                 "T1", basis, "Rocketlane stores the matching Salesforce Account ID.",
                 "Keep the cross-system identifier synchronized.", refs=refs,
             ))
+        elif basis == "salesforce_opportunity_id":
+            classifications.append(_dimension(
+                "T1", basis, "Rocketlane stores the Salesforce Opportunity ID, which resolves to exactly one in-scope account.",
+                "Keep the Opportunity ID populated on Rocketlane projects provisioned from Salesforce.", refs=refs,
+            ))
         elif basis == "rocketlane_customer_id_crosswalk":
             classifications.append(_dimension(
                 "T2", basis, "A governed Rocketlane customer-ID crosswalk links the project to Salesforce.",
                 "Maintain the one-to-one crosswalk and its review history.", refs=refs,
             ))
-        elif basis in {"normalized_customer_name", "configured_alias"}:
+        elif basis in {"normalized_customer_name", "configured_alias", "governed_account_name_field"}:
             classifications.append(_dimension(
-                "T3", basis, "Rocketlane is linked through a normalized customer name or configured alias.",
+                "T3", basis, "Rocketlane is linked through a normalized customer name, governed account-name field, or configured alias.",
                 "Store the Salesforce Account ID on the Rocketlane customer/project or establish a governed customer-ID crosswalk.", refs=refs,
             ))
         else:

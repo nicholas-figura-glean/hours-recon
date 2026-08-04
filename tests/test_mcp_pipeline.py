@@ -222,6 +222,28 @@ def build_snapshot(raw=None):
     )
 
 
+def _pull_without_cprime_project() -> dict:
+    """The Cprime account keeps its entitlement but loses its Rocketlane project.
+
+    This is the Aderant failure mode: the project exists in Rocketlane under a
+    name the account-name search cannot reach, so the pull retrieves nothing for
+    an account that holds sold hours.
+    """
+    raw = raw_pull()
+    rocketlane = raw["rocketlane"]
+    rocketlane["project_records"] = [
+        item for item in rocketlane["project_records"] if item["projectId"] != 964197
+    ]
+    rocketlane["time_entry_records"] = [
+        item for item in rocketlane["time_entry_records"]
+        if str(item.get("project", {}).get("projectId")) != "964197"
+    ]
+    rocketlane["time_pagination_audit"] = [
+        item for item in rocketlane["time_pagination_audit"] if str(item["project_id"]) != "964197"
+    ]
+    return raw
+
+
 def _columnar_raw() -> dict:
     """The same pull expressed in the compact columnar form."""
     raw = raw_pull()
@@ -548,6 +570,79 @@ class CoverageTests(unittest.TestCase):
         snapshot = build_snapshot(raw)
         assert snapshot["meta"]["coverage"]["time_entries"] is False
         assert snapshot["meta"]["coverage"]["unaudited_project_ids"] == ["970816"]
+
+    def test_entitled_account_without_a_project_fails_closed(self):
+        """A zero-result project search must not read as "no hours billed"."""
+        raw = _pull_without_cprime_project()
+        snapshot = normalize_raw_pull(
+            raw,
+            account_aliases=ALIASES,
+            timezone_name=TIMEZONE,
+            bindings=load_json_optional(ROOT / "config" / "mcp_bindings.json"),
+            package_config=PACKAGES,
+        )
+        coverage = snapshot["meta"]["coverage"]
+        assert coverage["entitled_accounts_have_projects"] is False
+        assert coverage["complete"] is False
+        assert [item["account_name"] for item in coverage["accounts_missing_projects"]] == ["Cprime Test"]
+        assert coverage["accounts_missing_projects"][0]["sold_hours"] == 100.0
+
+    def test_account_with_no_project_requires_the_broader_search(self):
+        raw = _pull_without_cprime_project()
+        coverage = build_snapshot(raw)["meta"]["coverage"]
+        # "Cprime Test" was searched, but with no project found the leading-token
+        # search is required before the absence counts as evidence.
+        assert coverage["projects"] is False
+        assert "cprime" in coverage["unsearched_account_queries"]
+
+        raw["rocketlane"]["project_search_audit"].append(
+            {"query": "Cprime", "count": 0, "has_more": False}
+        )
+        assert build_snapshot(raw)["meta"]["coverage"]["projects"] is True
+
+    def test_account_without_entitlement_is_not_escalated(self):
+        # "Zero Opp Co" has no in-scope opportunity, so it needs no project and
+        # no broader search.
+        coverage = build_snapshot()["meta"]["coverage"]
+        assert coverage["unsearched_account_queries"] == []
+        assert coverage["entitled_accounts_have_projects"] is True
+        assert coverage["complete"] is True
+
+    def test_entitlement_gap_check_is_opt_in(self):
+        # Without package config the normalizer cannot know sold hours, so the
+        # flag stays true rather than guessing.
+        coverage = build_snapshot(_pull_without_cprime_project())["meta"]["coverage"]
+        assert coverage["entitled_accounts_have_projects"] is True
+        assert coverage["accounts_missing_projects"] == []
+
+    def test_report_surfaces_entitled_account_without_project(self):
+        snapshot = build_snapshot(_pull_without_cprime_project())
+        report = reconcile(
+            snapshot["salesforce"],
+            snapshot["rocketlane"],
+            package_config=PACKAGES,
+            account_aliases=ALIASES,
+            as_of=_today(),
+            mode="mcp",
+            source_coverage=snapshot["meta"]["coverage"],
+        )
+        surfaced = [item for item in report["exceptions"] if item["type"] == "account_without_project"]
+        assert [item["account_name"] for item in surfaced] == ["Cprime Test"]
+        assert report["metrics"]["accounts_missing_projects"] == 1
+        findings = validate_refresh(
+            snapshot,
+            report,
+            package_config=PACKAGES,
+            account_aliases=ALIASES,
+            expected_requester_email=REQUESTER,
+            expected_scope_id=SCOPE_ID,
+            timezone_name=TIMEZONE,
+        )
+        check = next(
+            item for item in findings["findings"]
+            if item["check"] == "entitled_accounts_have_projects_or_are_surfaced"
+        )
+        assert check["ok"] is True
 
     def test_incomplete_coverage_cannot_be_published(self):
         with tempfile.TemporaryDirectory() as _tmp:

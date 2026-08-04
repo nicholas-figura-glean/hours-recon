@@ -178,6 +178,19 @@ independent, so batch them into single blocks.
    `params.filter.includeArchive = true`. The filter key is **`projectName`**; a
    `name` key is ignored and returns the unfiltered project list, which looks
    like a successful match but is not one.
+
+   **`projectName` is a substring filter, so a legal entity name usually finds
+   nothing.** Rocketlane names projects `<short name> | <package>`, so
+   `"Aderant North America, Inc."` cannot match `"Aderant | Standard Package"`.
+   When an account's own name and aliases return zero projects, **escalate to the
+   leading token** of the normalized name (`Aderant`) in the next block.
+   `hours_recon.matching.account_search_queries` returns exactly the ordered
+   query list for an account, and `derive_coverage` requires that escalation for
+   any account that has in-scope opportunities but no matched project, so a
+   single zero-result search can no longer pass as "no project exists".
+
+   Aliases are for genuine rebrands and DBA names (`Jellyfish`), not for
+   compensating for legal suffixes.
 2. **One block:** retrieve every candidate project by ID with all fields.
 3. **One block:** retrieve billable time entries through `report_date` for every
    matched project, all contributors. Follow every page token.
@@ -189,6 +202,18 @@ lifecycle dates, status, archived state, activity, category,
 and contributor identity. Request only the custom fields that are read:
 **Account Name**, **OppID**, and **Salesforce Account ID**; skip a
 fetch-all-fields flag, which returns a large blob that nothing consumes.
+
+Those three fields are the join keys, and they matter more than the names.
+`match_projects_with_evidence` resolves linkage strongest-first:
+`salesforce_account_id` (T1) → **`salesforce_opportunity_id`** (T1, the `OppID`
+field resolved against the in-scope opportunity set) → governed customer-ID
+crosswalk (T2) → governed `Account Name` field (T3) → normalized customer name
+or configured alias (T3) → project-name fallback (T4). Pass the opportunities
+into the matcher so the ID join is available; name matching is a fallback for
+records with no identifier, never the primary path. Only `006`-shaped values are
+treated as Opportunity IDs, because the `OppID` field sometimes holds an Account
+ID.
+
 `normalize_projects` promotes an Account-shaped `externalReferenceId` or governed
 custom field into `salesforce_account_id`. Project-name inference remains a Tier 4
 fallback and must not be silently accepted. `normalize_time_entries` deduplicates
@@ -297,12 +322,20 @@ snapshot = normalize_raw_pull(
     account_aliases=s["account_aliases"],
     timezone_name=s["timezone"],
     bindings=s["mcp_bindings"],
+    package_config=s["packages"],
 )
 json.dump(snapshot, open("var/candidate_snapshot.json", "w"))
 print(json.dumps(snapshot["meta"]["coverage"], indent=1))
 print(json.dumps(snapshot["meta"]["source_counts"], indent=1))
 '
 ```
+
+Always pass `package_config`. It enables the fail-closed check for accounts that
+hold sold hours but matched no project: `coverage.entitled_accounts_have_projects`
+goes false, `coverage.accounts_missing_projects` names them, and
+`publish_mcp_snapshot` refuses the pull. Without it the normalizer cannot know
+sold hours and the gap publishes silently as zero billed hours, which is exactly
+how an entire account's billable time went missing once.
 
 `normalize_raw_pull` derives `meta.coverage`, `source_counts`,
 `approval_status_counts`, `account_retrieval_audit`, and `created_at`. Coverage
@@ -343,7 +376,9 @@ This covers schema, requester binding, through-date currency, scope
 verification, per-account audit coverage, in-scope opportunities, one line-item
 source per opportunity, no duplicated line items or time entries, an approval
 status present and recognized on every entry, source counts, pagination
-completeness, and coverage flags. Fix every `FAIL` before publishing.
+completeness, and coverage flags. With a report it also checks that every
+entitled account either has a project or is surfaced as an
+`account_without_project` exception. Fix every `FAIL` before publishing.
 
 ### 5. Publish and import — 1 turn
 

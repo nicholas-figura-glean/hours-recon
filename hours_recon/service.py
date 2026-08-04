@@ -997,7 +997,12 @@ class ReconciliationService:
                 # Rocketlane workspace, so match first and only pull time entries
                 # for in-scope projects. reconcile() re-derives the same
                 # deterministic map from identical inputs, so no drift results.
-                project_map, _ = match_projects(salesforce_data["accounts"], projects, self.settings["account_aliases"])
+                project_map, _ = match_projects(
+                    salesforce_data["accounts"],
+                    projects,
+                    self.settings["account_aliases"],
+                    opportunities=salesforce_data.get("opportunities", []),
+                )
                 entries = rocketlane_client.fetch_time_entries(project_map.keys())
                 result = reconcile(
                     salesforce_data,
